@@ -1,0 +1,24 @@
+# Code owners for EmergentMatter/actions
+#
+# This repo is pinned by every Python repo in the org, and its workflows run
+# inside those repos with write access. Changes here are changes to everyone's
+# CI, so they are owned rather than open.
+#
+# Owners can merge without a separate approval; everyone else needs one of them
+# to approve. See .github/RELEASING.md for the `v1` tag rules, which are the
+# other half of this: owning the files matters little if anyone can move the
+# tag that decides which version of them runs.
+
+# Everything, by default.
+*                       @telafifi @evanmj @ecarrig
+
+# The parts that execute in other people's repositories.
+/.github/workflows/     @telafifi @evanmj @ecarrig
+/scripts/               @telafifi @evanmj @ecarrig
+
+# What consuming repos copy in at onboarding time. A change here does not
+# reach repos already onboarded, so it is easy to under-estimate.
+/templates/             @telafifi @evanmj @ecarrig
+
+# The behavioural contract every consuming repo depends on.
+/CONTRACT.md            @telafifi @evanmj @ecarrig
