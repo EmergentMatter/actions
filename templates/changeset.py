@@ -37,14 +37,21 @@ def prompt_level_interactive() -> str:
     old_settings = termios.tcgetattr(fd)
 
     def render() -> None:
-        print("Bump level (↑↓ then Enter)")
+        # Raw mode turns off ONLCR, so "\n" is a bare line feed and leaves the
+        # cursor in the current column. Every line must end "\r\n" or the list
+        # walks diagonally across the screen on each redraw.
+        lines = ["Bump level (↑↓ then Enter)"]
         for i, (level, desc) in enumerate(LEVELS):
             marker = "❯" if i == selected else " "
-            print(f"  {marker} {level:<8} {desc}")
+            lines.append(f"  {marker} {level:<8} {desc}")
+        sys.stdout.write("".join(f"{line}\r\n" for line in lines))
+        sys.stdout.flush()
 
     def clear(n: int) -> None:
+        sys.stdout.write("\r")
         for _ in range(n):
             sys.stdout.write("\x1b[1A\x1b[2K")
+        sys.stdout.flush()
 
     try:
         tty.setraw(fd)
@@ -66,9 +73,7 @@ def prompt_level_interactive() -> str:
                 raise KeyboardInterrupt
             else:
                 continue
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
             clear(len(LEVELS) + 1)
-            tty.setraw(fd)
             render()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
