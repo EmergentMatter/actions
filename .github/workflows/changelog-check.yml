@@ -21,6 +21,16 @@ name: Changelog check
 on:
   workflow_call:
     inputs:
+      actions-ref:
+        description: >-
+          Ref of EmergentMatter/actions to load scripts/ from. MUST match the
+          @ref this workflow is pinned to in your stub. There is no context
+          field giving a reusable workflow its own ref (github.job_workflow_sha
+          resolves to empty -- verified, not assumed), and an empty checkout ref
+          silently means "the default branch", so this is passed explicitly
+          rather than derived.
+        type: string
+        default: v1
       notes-dir:
         description: Directory containing pending changelog note fragments.
         type: string
@@ -125,35 +135,36 @@ jobs:
           fi
           printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
 
-      - name: Resolve the shared-workflow commit
-        # github.job_workflow_sha is the commit of the reusable workflow file
-        # running this job. Assert it loudly rather than passing it straight to
-        # checkout: an unset context expression evaluates to an EMPTY STRING,
-        # and checkout treats an empty ref as "the default branch". That is the
-        # dangerous case -- it works fine today (main is what we want) while
-        # silently ignoring whatever the consumer pinned, so a repo on @v1
-        # would quietly run main. An earlier version of this derived the ref
-        # from github.workflow_ref, which is the CALLER's ref, and hit exactly
-        # that failure. Found by the em-release-control-test rehearsal.
+      - name: Validate the shared-workflow ref
+        # An empty checkout ref silently means "the default branch", so an
+        # unresolvable ref does not fail -- it quietly runs main while the
+        # consumer believes it pinned @v1. Fail loudly instead.
+        #
+        # Two derivations were tried and both resolve to empty or wrong:
+        # github.workflow_ref is the CALLER's ref (asked our repo for the
+        # consumer's refs/pull/N/merge), and github.job_workflow_sha is empty
+        # in practice. Both were caught by the em-release-control-test
+        # rehearsal, the second only because this assertion existed. Hence the
+        # explicit actions-ref input.
         if: steps.exempt.outputs.is-exempt == 'false'
         id: shared
         env:
-          SHA: ${{ github.job_workflow_sha }}
+          REF: ${{ inputs.actions-ref }}
         run: |
           set -euo pipefail
-          if [[ ! "${SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Could not resolve the EmergentMatter/actions commit for this run."
-            echo "github.job_workflow_sha was '${SHA:-<empty>}', expected a 40-char SHA."
+          if [[ -z "${REF:-}" ]]; then
+            echo "::error::actions-ref is empty. An empty checkout ref silently means"
+            echo "the default branch, which would ignore the @ref you pinned."
             exit 1
           fi
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout EmergentMatter/actions scripts
         if: steps.exempt.outputs.is-exempt == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EmergentMatter/actions
-          ref: ${{ steps.shared.outputs.sha }}
+          ref: ${{ steps.shared.outputs.ref }}
           path: ${{ runner.temp }}/em-actions
 
       - name: Set up Python

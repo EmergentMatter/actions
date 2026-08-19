@@ -6,6 +6,11 @@ on:
 jobs:
   changelog:
     uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1
+    with:
+      # MUST match the @ref above. A reusable workflow cannot discover its own
+      # ref, and an empty checkout ref silently means "the default branch" --
+      # so this is passed explicitly rather than derived. Change both together.
+      actions-ref: v1
     permissions:
       contents: read
       pull-requests: read

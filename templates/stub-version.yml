@@ -15,6 +15,9 @@ jobs:
   version:
     needs: ci
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      # MUST match the @ref above -- see stub-changelog-check.yml for why.
+      actions-ref: v1
     permissions: { contents: write, pull-requests: write }
     # NO `secrets: inherit` here, deliberately. None of the three shared
     # workflows reads `secrets.*` — they use only the auto-injected
