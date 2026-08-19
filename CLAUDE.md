@@ -106,6 +106,45 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   movable `v1` tag your org's secrets would make that tag equivalent to
   secret access everywhere it's pinned; see `docs/onboarding.md` for the
   full explanation aimed at onboarders.
+- **A `permissions:` ceiling on `workflow_call` is checked at parse
+  time, before any `if:` runs -- getting this wrong doesn't degrade, it
+  breaks the whole workflow.** Two real incidents from this one rule
+  during rehearsal: `version.yml`'s publish job briefly declared
+  `permissions: {id-token: write}` on itself, which broke **every**
+  run of `version.yml` for **every** onboarded repo, publish on or off,
+  with `startup_failure` and no message via the API -- fixed by removing
+  that job-level `permissions:` entirely so the job now inherits
+  whatever the *consumer's own stub* grants. Separately, `environment:`
+  (required on that job even when `publish` is `false`, since GitHub
+  validates it at the same parse step) used to default to an empty
+  string, which is invalid there too and broke every run the same way --
+  fixed by shipping a non-empty default (`release`). See the publish
+  job's own comment in `.github/workflows/version.yml` for the full
+  account; `docs/onboarding.md`'s "Publishing to a package index"
+  section is written to give this the prominence it earned.
+- **Every stub with an `actions-ref` input must set it to match the
+  `@ref` it's pinned to** (`version.yml` and `changelog-check.yml`'s
+  stubs; `build-release.yml`'s doesn't take this input, since it never
+  checks out this repo's `scripts/`). There is no context field that
+  lets a reusable workflow discover its own ref -- `github.workflow_ref`
+  resolves to the *caller's* ref and `github.job_workflow_sha` does not
+  exist, both confirmed live. An unresolvable ref is refused rather than
+  silently falling back to this repo's default branch.
+- **A shared composite action for the build/release steps was tried and
+  withdrawn -- but not because it was proven broken.** It was removed
+  while chasing the `startup_failure` above, whose real cause was the
+  publish-job permissions issue, not the composite action. Don't restate
+  "a local `./` action can't work in a reusable workflow" as settled fact
+  in any doc -- it was never isolated as the actual problem. What's
+  genuinely awkward is that `uses:` can't take a templated ref, so a
+  composite action couldn't follow the same `@ref` this workflow is
+  pinned at without a hardcoded ref, and a `./`-relative path's
+  resolution for a reusable workflow called cross-repo was never tested
+  in isolation. The build/release steps are therefore duplicated between
+  `version.yml` and `build-release.yml` on purpose (four steps, verified
+  working end to end) -- keep the two copies in step when either changes,
+  and only revisit sharing them with an isolated test of the `./`
+  resolution question specifically.
 
 ## Naming Conventions
 
@@ -115,13 +154,28 @@ mostly doesn't come up outside scalar CLI args.
 
 ## Known Issues
 
-None yet — repo is new.
+- `CONTRACT.md`'s "Consumer stub (this exact shape)" example does not
+  show the `with: { actions-ref: v1 }` block that the real
+  `templates/stub-version.yml` carries -- a reader who copies CONTRACT.md's
+  example literally gets a stub that's missing a required input.
+- `CONTRACT.md`'s workflow-inputs table lists `actions-ref` as an input
+  of `build-release.yml`; the actual `.github/workflows/build-release.yml`
+  declares no such input (it never checks out this repo's `scripts/`, so
+  it doesn't need one), and `templates/stub-build-release.yml` doesn't
+  pass one. One of the two is wrong; reconcile before anyone builds a
+  build-release stub from the table instead of the real template.
+
+Both found during the 2026-08-19 documentation sweep by reading the
+actual files rather than trusting CONTRACT.md's prose -- flagged to
+CONTRACT.md's owner rather than fixed here, since this file doesn't own
+that spec.
 
 ## Current Work
 
-v1 is built and verified locally but has not yet been proven end to end on
-GitHub, and there is deliberately **no `v1` tag yet** — nothing can onboard
-against an unproven release loop. The first real exercise of the full cycle
-is running against a disposable repo. No production repo consumes this yet;
-`emergent-matter-materials` is the intended first pilot, then
-`emergent-matter-sdm-core`.
+`v1` is tagged, verified end to end against a real rehearsal repo
+(`em-release-control-test`), and ready to onboard production repos.
+`v1.0.0` and `v1.0.1` have both shipped through the full cycle: PR →
+note check → release PR → (close/reopen to force checks under branch
+protection) → approve → merge → tag → build → GitHub Release. No
+production repo consumes this yet; `emergent-matter-materials` is the
+intended first pilot, then `emergent-matter-sdm-core`.

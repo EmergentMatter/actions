@@ -9,7 +9,7 @@
 # a fourth type — compute_bump.py only recognizes major/minor/patch and
 # exits 1 on anything else.
 [tool.towncrier]
-directory = "changelog.d"          # where `uv run changeset` writes notes
+directory = "changelog.d"          # where `uv run scripts/changeset.py` writes notes
 filename = "CHANGELOG.md"
 # Insert this marker into CHANGELOG.md once, above your existing history.
 # towncrier writes new release sections directly below it and never touches

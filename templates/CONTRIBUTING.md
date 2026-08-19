@@ -94,3 +94,9 @@ This is a known GitHub Actions limitation (not specific to this repo — see
 notes](https://github.com/peter-evans/create-pull-request/blob/main/docs/concepts-guidelines.md#triggering-further-workflow-runs)
 on why PRs opened via `GITHUB_TOKEN` don't trigger further runs), and
 close-then-reopen is the accepted workaround, not a bug to chase further.
+
+If this repo has branch protection on (it should), the release PR also
+needs an approving review before it can merge, same as any other PR --
+close/reopen only fixes the checks, not the review requirement. See
+`EmergentMatter/actions`'s `docs/onboarding.md` for the full maintainer-
+facing walkthrough of releasing under protection.

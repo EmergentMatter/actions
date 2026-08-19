@@ -10,6 +10,11 @@ If you haven't read the top-level concept yet, read the [README](../README.md)
 first — this doc assumes you know what a changelog note is and what the
 release PR does.
 
+`v1` is live: `v1.0.0` and `v1.0.1` are tagged, immutable, and `v1`
+points at the latest of them. The walkthrough below has been run end to
+end against a real rehearsal repo, not just read through -- pin `@v1`
+with confidence, not as a placeholder for something unproven.
+
 ## Before you start
 
 You need a repo that already has its own CI workflow at
@@ -85,11 +90,25 @@ jobs:
   version:
     needs: ci
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1          # MUST match the @ref above -- see below
     permissions: { contents: write, pull-requests: write }
                               # deliberately NO secrets: inherit
 ```
 
-Pin `@v1`, never a branch — see CONTRACT.md's non-negotiables.
+Pin `@v1`, never a branch — see CONTRACT.md's non-negotiables. **Every stub
+that has an `actions-ref` input must set it to the same value** (both
+`version.yml` and `changelog-check.yml`'s stubs take this input;
+`build-release.yml`'s does not need it, since that workflow never checks
+out this repo's `scripts/`). There is no context field that lets a
+reusable workflow discover its own ref -- `github.workflow_ref` resolves
+to the *caller's* ref, not this repo's, and `github.job_workflow_sha`
+does not exist, both confirmed live rather than assumed. An unresolvable
+ref is refused outright rather than silently defaulting to this repo's
+`main`, which is how an earlier version of this exact stub quietly ran
+unpinned code while believing it had pinned `@v1`. If you ever change the
+`@v1` at the end of a `uses:` line, change the matching `actions-ref:`
+in the same edit.
 
 Notice `secrets: inherit` sits on the `ci:` job, not on `version:`, and
 it's conditional even there:
@@ -112,34 +131,69 @@ it's conditional even there:
   it — so don't add it back as boilerplate, even though it looks like
   it's "missing" next to the `ci:` job above it.
 
-## Publishing to a package index (optional)
+## Publishing to a package index (optional, but read this before flipping it on)
 
 Off by default -- most repos stop at "GitHub Release with a wheel and
-sdist attached" and never touch this. If you want `version.yml` to also
-publish to a package index over OIDC trusted publishing, three things
-change together, not separately:
+sdist attached" and never touch this. If you do want `version.yml` to
+also publish to a package index over OIDC trusted publishing, get this
+right the first time: the mechanism behind it has already caused a
+system-wide outage once, during the rehearsal, and the fix is why the
+steps below are exactly this shape and no other.
+
+**The rule underneath everything here:** `permissions:` on a
+`workflow_call` is a **ceiling for every job inside the called
+workflow**, not a per-job grant -- and it is checked when the workflow is
+**parsed**, before any `if:` condition is ever evaluated. Two separate,
+real incidents came from this one rule:
+
+- The reusable `version.yml` briefly declared `permissions: {id-token:
+  write}` directly on its own publish job, reasoning that the job needs
+  it to publish. **That broke every single run of `version.yml`, for
+  every onboarded repo, whether or not that repo published anything** --
+  because the job's own permission request exceeded what most callers'
+  stubs had granted, and a ceiling violation fails the whole workflow to
+  even start, not just the one job. It surfaced as `startup_failure`
+  with no further message available anywhere via the API. The fix:
+  the publish job now declares **no `permissions:` of its own** and
+  instead inherits whatever the *consumer's own stub* granted -- so a
+  repo that never asked for `id-token: write` never runs into this at
+  all, and a repo that did gets exactly what it granted itself.
+- Separately, `environment:` -- required on the publish job even when
+  `publish` is `false`, because GitHub validates it at the same
+  parse-time step -- used to default to an empty string. An empty
+  environment name is invalid at parse time too, so it broke every run
+  the same way, for every repo, publishing or not. The fix: the shared
+  workflow now ships a non-empty default (`release`).
+
+Both are fixed on this repo's side today. What's left is on your side:
+**a repo enabling `publish: true` without also granting `id-token: write`
+on its own stub doesn't get a clean error -- it gets a job that runs, an
+OIDC token that comes back empty, and a publish step that fails.** Get it
+right the first time:
 
 1. **Add `id-token: write` to the `version:` job's `permissions:`
-   block.** `permissions:` on a `workflow_call` is a **ceiling for every
-   job inside the called workflow, not a per-job grant** -- setting it
-   inside the shared workflow itself wouldn't be enough. Skip this and
-   OIDC silently yields an empty token, and publishing fails in a way
-   that looks like a PyPI problem, not a permissions one.
-2. **Pass `publish: true` and `environment: <name>`** in the `version:`
-   job's `with:` block. `environment` names a [GitHub
+   block on your own stub.** This is the only place it can come from now
+   -- the shared workflow deliberately doesn't grant it to itself.
+2. **Pass `publish: true`.** Leave `environment:` unset to use the
+   shipped default (`release`), or pass your own name if you already
+   have a different [GitHub
    Environment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
-   you create in the repo's own settings -- it's what scopes the OIDC
-   token.
-3. **Attach that Environment's PyPI trusted publisher**, in PyPI's
-   project settings, pointing at this repo, this workflow, and this
-   environment name.
+   you want to use.
+3. **Create that GitHub Environment in your repo's own settings** (named
+   `release` unless you overrode it in step 2), **and attach its PyPI
+   trusted publisher** in PyPI's project settings, pointing at this
+   repo, this workflow, and this environment name.
 
 ```yaml
   version:
     needs: ci
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      publish: true
+      # environment: release   -- only needed if you want a name other
+      #                            than the shipped default
     permissions: { contents: write, pull-requests: write, id-token: write }
-    with: { publish: true, environment: pypi }
 ```
 
 It's off by default on purpose: an unused elevated permission
@@ -355,6 +409,75 @@ your own CI before drafting anything). It's local runs and hand-ordered
 scripts where the stale-metadata trap actually bites. If your own repo has
 a test that asserts against installed metadata rather than the source
 tree, the same ordering applies to you, not just to this example.
+
+## Setting up branch protection
+
+The five files and the label only *offer* the gate; a repo without
+branch protection can still merge a PR with a failing (or missing)
+check, or push straight to `main` and skip every check entirely. Turn on
+protection for `main` (repo Settings → Branches) with:
+
+- **Require these status checks to pass before merging**, using **these
+  four contexts, verbatim**:
+
+  ```
+  lint
+  test
+  build
+  changelog / Require a changelog note
+  ```
+
+- **Require at least one approving review** before merging.
+- **Do not allow direct pushes to `main`** (no bypassing via a force
+  push or an un-reviewed merge).
+
+**Get the four context names from a pull request run, not a push-to-main
+run -- they are not the same strings.** `lint`, `test`, and `build` come
+from `ci.yml`, which (per `templates/ci.yml`) triggers directly on
+`pull_request` as well as via `workflow_call` -- on a PR it runs
+standalone, so GitHub shows its three job names bare. `changelog / Require
+a changelog note` is `changelog-check.yml`'s stub: the bare job id in
+your stub (`changelog`) followed by a ` / ` and the *reusable workflow's*
+job `name:` field, not its job id. But on a push to `main`, `ci.yml`
+runs a different way -- wrapped inside `version.yml`'s own `ci:` job via
+`uses: ./.github/workflows/ci.yml` -- and GitHub shows that run's checks
+prefixed: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
+**never appear on a pull request run** and so can never satisfy a
+required check there. Anyone who copies check names off a push run
+instead of a PR run ends up with four required contexts that no PR can
+ever produce, and `main` is blocked from merging anything, permanently,
+until someone notices and fixes the list. (Verified on the rehearsal
+repo's actual branch protection config -- the four contexts above are
+copied from it exactly.)
+
+The exact four names above assume `templates/ci.yml` copied in as-is
+(job ids `lint` / `test` / `build`). If your repo already had its own
+CI with different job names before onboarding, use *those* names
+instead -- same bare-vs-prefixed rule, different strings.
+
+## Releasing under branch protection
+
+`templates/CONTRIBUTING.md` says merging the release PR is the release,
+and that's still true in spirit -- but under branch protection it takes
+three manual actions, not one click, and it's worth knowing that going
+in rather than discovering it mid-release:
+
+1. **Close the release PR, then immediately reopen it.** It was opened by
+   `GITHUB_TOKEN`, which doesn't trigger further workflow runs on its own
+   PR -- see `templates/CONTRIBUTING.md`'s section on this. Its checks
+   show as not-run until you do this.
+2. **Get it approved** (or merge it yourself if you're listed as a
+   code owner for this repo, in which case CODEOWNERS review rules let
+   you merge without waiting on someone else).
+3. **Merge.** This is the moment that actually ships: it pushes the
+   release tag, and in the same `version.yml` run, builds and publishes
+   it.
+
+Verified end to end on the rehearsal repo: a PR without a changelog note
+was refused with *"the base branch policy prohibits the merge"* until
+the `skip-changelog` label was applied; `v1.0.1` was tagged and released
+with a wheel and sdist attached to the GitHub Release; and
+`changelog.d/` was back down to just `.gitkeep` immediately afterward.
 
 ## After onboarding
 
