@@ -25,8 +25,7 @@ name: Version
 # second time, pinned to job.workflow_sha (the exact commit SHA of THIS
 # reusable workflow file — see the checkout step below for why, not
 # github.workflow_ref, which resolves to the CALLER's ref), into
-# $RUNNER_TEMP/em-actions (outside the consumer's working tree, so it is
-# never swept into the release PR), and invoke the scripts against the consumer's
+# .em-actions/, and invoke the scripts from there against the consumer's
 # checked-out pyproject.toml / changelog.d/.
 
 on:
@@ -117,7 +116,7 @@ jobs:
         with:
           repository: EmergentMatter/actions
           ref: ${{ steps.shared.outputs.ref }}
-          path: ${{ runner.temp }}/em-actions
+          path: .em-actions
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -190,7 +189,7 @@ jobs:
         if: steps.detect.outputs.is-release-commit == 'false'
         id: bump
         run: |
-          python3 "${RUNNER_TEMP}/em-actions/scripts/compute_bump.py" \
+          python3 ".em-actions/scripts/compute_bump.py" \
             --notes-dir "${{ inputs.notes-dir }}" \
             --format github
 
@@ -217,7 +216,7 @@ jobs:
           steps.detect.outputs.is-release-commit == 'false' &&
           steps.bump.outputs.level != 'none'
         run: |
-          python3 "${RUNNER_TEMP}/em-actions/scripts/sync_version.py" --version "${{ steps.bump.outputs.next }}"
+          python3 ".em-actions/scripts/sync_version.py" --version "${{ steps.bump.outputs.next }}"
 
       - name: Build CHANGELOG.md and consume notes
         # A7: towncrier writes the changelog and deletes the fragments it
@@ -228,6 +227,19 @@ jobs:
           steps.bump.outputs.level != 'none'
         run: |
           uvx towncrier build --yes --version "${{ steps.bump.outputs.next }}"
+
+      - name: Remove the shared checkout before staging the PR
+        # actions/checkout refuses a path outside the workspace, so .em-actions
+        # necessarily lands inside the consumer's tree -- where create-pull-request
+        # would otherwise sweep it into the release PR as a gitlink. Observed
+        # live in the rehearsal: the first release PR carried a stray
+        # '.em-actions -> Subproject commit ...' entry. R3 says that PR contains
+        # the version bumps, the changelog, the consumed notes and the lockfile,
+        # and nothing else.
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        run: rm -rf .em-actions
 
       - name: Open or update the release PR
         if: >-

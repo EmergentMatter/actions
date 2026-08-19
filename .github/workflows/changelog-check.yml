@@ -165,7 +165,7 @@ jobs:
         with:
           repository: EmergentMatter/actions
           ref: ${{ steps.shared.outputs.ref }}
-          path: ${{ runner.temp }}/em-actions
+          path: .em-actions
 
       - name: Set up Python
         if: steps.exempt.outputs.is-exempt == 'false'
@@ -177,7 +177,7 @@ jobs:
         if: steps.exempt.outputs.is-exempt == 'false'
         run: |
           set -euo pipefail
-          python3 "${RUNNER_TEMP}/em-actions/scripts/compute_bump.py" \
+          python3 ".em-actions/scripts/compute_bump.py" \
             --notes-dir "${{ inputs.notes-dir }}" \
             --format json
 
