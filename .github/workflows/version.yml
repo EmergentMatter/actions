@@ -22,9 +22,11 @@ name: Version
 # scripts/compute_bump.py and scripts/sync_version.py live in THIS repo,
 # not the consumer's — a called reusable workflow only checks out the
 # CALLER's code by default, so we check out EmergentMatter/actions a
-# second time, pinned to this workflow's own ref (github.workflow_ref),
-# into .em-actions/, and invoke the scripts from there against the
-# consumer's checked-out pyproject.toml / changelog.d/.
+# second time, pinned to job.workflow_sha (the exact commit SHA of THIS
+# reusable workflow file — see the checkout step below for why, not
+# github.workflow_ref, which resolves to the CALLER's ref), into
+# .em-actions/, and invoke the scripts from there against the consumer's
+# checked-out pyproject.toml / changelog.d/.
 
 on:
   workflow_call:
@@ -76,15 +78,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Resolve this workflow's own ref
-        id: actions-ref
-        run: echo "ref=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout EmergentMatter/actions scripts
+        # job.workflow_sha is the commit SHA of the reusable workflow file
+        # that defines *this* job — exact, immune to the caller's ref.
+        # A prior version derived the ref from github.workflow_ref instead;
+        # that context resolves to the CALLING workflow's own ref
+        # (refs/heads/main, refs/pull/N/merge, ...), not this reusable
+        # workflow's — so it checked out whatever ref of
+        # EmergentMatter/actions happened to share a name with the
+        # caller's current ref, silently defeating the @v1 pin (a repo on
+        # `main` got actions@main, not actions@v1). Found via the
+        # em-release-control-test end-to-end rehearsal.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EmergentMatter/actions
-          ref: ${{ steps.actions-ref.outputs.ref }}
+          ref: ${{ job.workflow_sha }}
           path: .em-actions
 
       - name: Set up Python

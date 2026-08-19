@@ -1,7 +1,7 @@
 # Onboarding a repo
 
-Onboarding a repo into release control is **four files and a config
-block**. This walks through all of them, using
+Onboarding a repo into release control is **four files, a config block,
+and a label**. This walks through all of them, using
 [`emergent-matter-materials`](https://github.com/EmergentMatter/emergent-matter-materials)
 as the worked example — it's the hard case, because it has **three**
 version strings that have to move in lockstep, not one.
@@ -90,6 +90,37 @@ release workflow every place your version string lives besides
 That second section — `version_files` — is the part every repo gets
 slightly wrong the first time, so the rest of this doc is the worked
 example.
+
+## The label
+
+The changelog check's escape hatch -- the `skip-changelog` label -- has
+one setup requirement of its own that's easy to miss: **GitHub doesn't
+auto-create labels.** `gh pr edit --add-label skip-changelog` (or the
+same thing clicked in the GitHub UI) fails with `'skip-changelog' not
+found` until the label actually exists in the repo. Create it once,
+during onboarding, before anyone needs it:
+
+```bash
+gh label create skip-changelog \
+  --description "This PR ships nothing user-visible; no changelog note required" \
+  --color ededed
+```
+
+Use the label for work that genuinely ships nothing user-visible -- CI
+tuning, a comment fix, a test-only change. It's the counterpart to the
+rule `templates/CONTRIBUTING.md` already states: if a change isn't worth
+a version, it isn't worth a note either.
+
+**Why this isn't automated instead:** `changelog-check.yml` could create
+the label itself the first time it's missing, but labels are the issues
+API, and that would mean granting the workflow `issues: write`. That's
+the workflow that triggers on `pull_request` -- the one that can run
+against a fork PR in a public repo, and the one this system deliberately
+keeps narrowly scoped (see `CLAUDE.md`'s "no stub grants secrets to a
+shared workflow" -- the same reasoning applies to permissions generally,
+not just secrets). Expanding its permissions to save one `gh label
+create` call is a bad trade. Document the setup step; don't automate
+around it.
 
 ## `changelog.d/`: nothing but notes and `.gitkeep`
 

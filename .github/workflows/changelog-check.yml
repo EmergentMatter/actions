@@ -125,20 +125,22 @@ jobs:
           fi
           printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
 
-      - name: Resolve this workflow's own ref
-        # github.workflow_ref, read from inside a called reusable workflow,
-        # resolves to THIS workflow's own path@ref (e.g. v1), not the
-        # caller's — that's what lets us check out matching scripts/.
-        if: steps.exempt.outputs.is-exempt == 'false'
-        id: actions-ref
-        run: echo "ref=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_OUTPUT"
-
       - name: Checkout EmergentMatter/actions scripts
+        # job.workflow_sha is the commit SHA of the reusable workflow file
+        # that defines *this* job — exact, and immune to whatever ref the
+        # caller happens to be on. An earlier version of this derived the
+        # ref from github.workflow_ref instead, which is documented as "the
+        # ref path to the workflow" but actually resolves to the CALLING
+        # workflow's own ref (refs/heads/main, refs/pull/N/merge, ...), not
+        # this reusable workflow's — so it silently checked out whatever
+        # ref of EmergentMatter/actions happened to share a name with the
+        # caller's current ref, defeating the @v1 pin entirely. Found via
+        # the em-release-control-test end-to-end rehearsal.
         if: steps.exempt.outputs.is-exempt == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EmergentMatter/actions
-          ref: ${{ steps.actions-ref.outputs.ref }}
+          ref: ${{ job.workflow_sha }}
           path: .em-actions
 
       - name: Set up Python
