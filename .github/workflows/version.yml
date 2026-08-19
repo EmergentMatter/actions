@@ -386,3 +386,34 @@ jobs:
           # changelog-check.yml's skip-label input, or E6 breaks silently
           # for a repo that overrides one and not the other.
           labels: ${{ inputs.skip-label }}
+
+  publish:
+    name: Publish to package index
+    needs: version
+    if: needs.version.outputs.is-release-commit == 'true' && inputs.publish
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # NO `permissions:` block here, and that is load-bearing.
+    #
+    # A caller's `permissions:` on a `workflow_call` is a CEILING for every job
+    # in the called workflow. Declaring `id-token: write` here therefore does
+    # not merely fail to take effect when the caller hasn't granted it -- it
+    # fails the ENTIRE workflow at parse time with startup_failure, on every
+    # run, for every repo, including ones with publishing switched off and this
+    # job skipped. Observed live: every run failed until this block was removed.
+    #
+    # So the permission has to come from the consumer's stub instead. A repo
+    # enabling `publish: true` adds `id-token: write` to the `permissions:` on
+    # its version.yml stub; this job then inherits it. A repo not publishing
+    # grants nothing extra and this job never runs.
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
