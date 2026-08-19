@@ -125,23 +125,36 @@ jobs:
           fi
           printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
 
+      - name: Resolve the shared-workflow commit
+        # github.job_workflow_sha is the commit of the reusable workflow file
+        # running this job. Assert it loudly rather than passing it straight to
+        # checkout: an unset context expression evaluates to an EMPTY STRING,
+        # and checkout treats an empty ref as "the default branch". That is the
+        # dangerous case -- it works fine today (main is what we want) while
+        # silently ignoring whatever the consumer pinned, so a repo on @v1
+        # would quietly run main. An earlier version of this derived the ref
+        # from github.workflow_ref, which is the CALLER's ref, and hit exactly
+        # that failure. Found by the em-release-control-test rehearsal.
+        if: steps.exempt.outputs.is-exempt == 'false'
+        id: shared
+        env:
+          SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the EmergentMatter/actions commit for this run."
+            echo "github.job_workflow_sha was '${SHA:-<empty>}', expected a 40-char SHA."
+            exit 1
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout EmergentMatter/actions scripts
-        # job.workflow_sha is the commit SHA of the reusable workflow file
-        # that defines *this* job — exact, and immune to whatever ref the
-        # caller happens to be on. An earlier version of this derived the
-        # ref from github.workflow_ref instead, which is documented as "the
-        # ref path to the workflow" but actually resolves to the CALLING
-        # workflow's own ref (refs/heads/main, refs/pull/N/merge, ...), not
-        # this reusable workflow's — so it silently checked out whatever
-        # ref of EmergentMatter/actions happened to share a name with the
-        # caller's current ref, defeating the @v1 pin entirely. Found via
-        # the em-release-control-test end-to-end rehearsal.
         if: steps.exempt.outputs.is-exempt == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: EmergentMatter/actions
-          ref: ${{ job.workflow_sha }}
-          path: .em-actions
+          ref: ${{ steps.shared.outputs.sha }}
+          path: ${{ runner.temp }}/em-actions
 
       - name: Set up Python
         if: steps.exempt.outputs.is-exempt == 'false'
@@ -153,7 +166,7 @@ jobs:
         if: steps.exempt.outputs.is-exempt == 'false'
         run: |
           set -euo pipefail
-          python3 .em-actions/scripts/compute_bump.py \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/compute_bump.py" \
             --notes-dir "${{ inputs.notes-dir }}" \
             --format json
 
