@@ -359,6 +359,21 @@ jobs:
             tag `v${{ steps.bump.outputs.next }}` and, in that same run,
             builds the wheel/sdist and creates the GitHub Release.
 
+            This PR contains only the version bump, the `CHANGELOG.md`
+            update, the consumed note deletions, and the refreshed
+            `uv.lock`.
+
+            If the checks below show as not run, close this PR and
+            immediately reopen it — see `CONTRIBUTING.md`.
+          # E6: exempts this PR from changelog-check.yml's note requirement
+          # by label. It's also opened as github-actions[bot], which
+          # changelog-check.yml's default bot-actors already exempts (E5) —
+          # this label is defense in depth, not the only path. The caller
+          # must pass the same value here as it passes to
+          # changelog-check.yml's skip-label input, or E6 breaks silently
+          # for a repo that overrides one and not the other.
+          labels: ${{ inputs.skip-label }}
+
   publish:
     name: Publish to package index
     needs: version
@@ -383,18 +398,3 @@ jobs:
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
-
-            This PR contains only the version bump, the `CHANGELOG.md`
-            update, the consumed note deletions, and the refreshed
-            `uv.lock`.
-
-            If the checks below show as not run, close this PR and
-            immediately reopen it — see `CONTRIBUTING.md`.
-          # E6: exempts this PR from changelog-check.yml's note requirement
-          # by label. It's also opened as github-actions[bot], which
-          # changelog-check.yml's default bot-actors already exempts (E5) —
-          # this label is defense in depth, not the only path. The caller
-          # must pass the same value here as it passes to
-          # changelog-check.yml's skip-label input, or E6 breaks silently
-          # for a repo that overrides one and not the other.
-          labels: ${{ inputs.skip-label }}

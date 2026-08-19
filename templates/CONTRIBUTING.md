@@ -11,7 +11,7 @@ side works, see [EmergentMatter/actions](https://github.com/EmergentMatter/actio
 Before opening your PR:
 
 ```bash
-uv run changeset
+uv run scripts/changeset.py
 ```
 
 This asks you two things:

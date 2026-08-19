@@ -47,6 +47,7 @@ EmergentMatter/actions  (this repo -- shared, passive, no secrets)
  ├── .github/workflows/version.yml            ├─ each, calling back into
  ├── .github/workflows/build-release.yml     ─┘  this repo, pinned to @v1
  ├── pyproject.toml   [tool.towncrier] + [tool.em-release]
+ ├── scripts/changeset.py     NOT inside the package -- see docs/onboarding.md
  ├── CONTRIBUTING.md
  └── changelog.d/     pending notes, one per unreleased PR
 ```
@@ -55,7 +56,7 @@ Consumers always pin `@v1` — never a branch.
 
 ## Opting a repo in
 
-Onboarding a repo is **four files, a config block, and a label**. The full
+Onboarding a repo is **five files, a config block, and a label**. The full
 walkthrough — using `emergent-matter-materials`'s three-version-strings
 case as the worked example — is [`docs/onboarding.md`](docs/onboarding.md).
 The contributor-facing half (what you do day to day once a repo is
