@@ -8,9 +8,24 @@ name: Version
 # Two paths, chosen by whether HEAD is the release commit that a merged
 # release PR just produced:
 #
-#   HEAD IS the release commit  -> push the tag, stop.                (S1)
+#   HEAD IS the release commit  -> push the tag, build, create the GitHub
+#                                   Release, optionally publish. (S1/S2/S3/S4)
 #   otherwise                   -> compute the bump; if there's a note
 #                                   pending, draft/update the release PR.
+#
+# Build + release are INLINED into this job's tag path rather than left to
+# a separately tag-triggered workflow (build-release.yml). Reason, found by
+# the em-release-control-test rehearsal: the tag below is pushed using the
+# checkout's persisted GITHUB_TOKEN credentials, and GitHub does not run
+# further workflows from events created by GITHUB_TOKEN (the same
+# recursion guard documented for the release PR's own checks) — so a
+# `build-release.yml` stub listening for `push: tags: ["v*"]` would simply
+# never fire on the automated path. `uses:` can't take a templated ref
+# either, so this can't call build-release.yml as a nested reusable
+# workflow with the actions-ref input below — the steps are inlined
+# instead. build-release.yml still exists, retargeted at `workflow_dispatch`
+# and human-pushed tags (which DO trigger workflows), for manually
+# rebuilding/republishing a past release.
 #
 # Detecting "HEAD is the release commit": rather than parsing the merge
 # commit message (which differs by merge strategy — merge commit, squash,
@@ -67,6 +82,14 @@ on:
           already exempts independently.)
         type: string
         default: skip-changelog
+      publish:
+        description: Publish to a package index via OIDC trusted publishing. Opt-in, off by default. (S3)
+        type: boolean
+        default: false
+      environment:
+        description: GitHub Environment to run the publish job under (e.g. for required reviewers). Empty means none.
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -81,6 +104,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      is-release-commit: ${{ steps.detect.outputs.is-release-commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,20 +202,60 @@ jobs:
 
       - name: Push release tag
         if: steps.detect.outputs.is-release-commit == 'true'
+        id: tag
         env:
           VERSION: ${{ steps.released.outputs.version }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           tag="v${VERSION}"
+          # Note what follows this step still runs even if the tag already
+          # existed (e.g. a retried run) -- build/release below are
+          # idempotent, and skipping them here would mean a run that died
+          # between tag-push and release-creation leaves a tag with no
+          # Release attached forever.
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "Tag ${tag} already exists — nothing to do."
-            exit 0
+            echo "Tag ${tag} already exists — (re)building the release below anyway."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "${tag}" "${SHA}"
+            git push origin "${tag}"
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${tag}" "${SHA}"
-          git push origin "${tag}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # S2: build the wheel/sdist and attach them to a GitHub Release for
+      # the tag just pushed. Inlined here rather than in a tag-triggered
+      # workflow -- see the file header for why a GITHUB_TOKEN-pushed tag
+      # can't rely on that.
+      # ---------------------------------------------------------------
+      - name: Build wheel + sdist
+        if: steps.detect.outputs.is-release-commit == 'true'
+        run: uv build
+
+      - name: Create GitHub Release
+        if: steps.detect.outputs.is-release-commit == 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload build artifact for the publish job
+        # Only needed when publish is actually enabled -- the publish job
+        # runs on a separate, fresh runner and can't see this job's dist/.
+        # Short retention: this bridges the two jobs within one run, it is
+        # not meant as a long-lived download -- the GitHub Release above is
+        # the permanent artifact.
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.publish
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 1
+          if-no-files-found: error
 
       # ---------------------------------------------------------------
       # Not the release commit: compute the bump from pending notes.
@@ -269,8 +334,33 @@ jobs:
           # satisfies that; nothing extra is added here.
           body: |
             Automated release PR. Merging this is the release: it pushes
-            tag `v${{ steps.bump.outputs.next }}`, which triggers the build
-            and GitHub Release.
+            tag `v${{ steps.bump.outputs.next }}` and, in that same run,
+            builds the wheel/sdist and creates the GitHub Release.
+
+  publish:
+    name: Publish to package index
+    needs: version
+    if: needs.version.outputs.is-release-commit == 'true' && inputs.publish
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      # OIDC trusted publishing — no token, no long-lived secret. (S4)
+      # A separate job (not a step in `version`) purely so this can carry
+      # its own `environment:` — required reviewers etc. gate only the
+      # publish, not the tag/build/release-PR steps above, which run in
+      # `version`'s job and share none of this job's environment.
+      id-token: write
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
 
             This PR contains only the version bump, the `CHANGELOG.md`
             update, the consumed note deletions, and the refreshed

@@ -1,9 +1,16 @@
 name: Build & Release
 
 # Reusable workflow_call workflow — see CONTRACT.md "version.yml behaviour"
-# closing paragraph (S2/S3/S4). Invoked by a consuming repo's
-# templates/stub-build-release.yml on push of a `v*` tag, which version.yml
-# creates in its "HEAD is the release commit" path.
+# closing paragraph (S2/S3/S4).
+#
+# NOT the automated release path — version.yml builds and creates the
+# GitHub Release itself, inline, in the same run that pushes the release
+# tag, because a tag pushed with GITHUB_TOKEN does not trigger further
+# workflow runs (found by the em-release-control-test rehearsal; see the
+# comment at the top of version.yml). This workflow exists for the two
+# cases that aren't that automated path: a human pushing a `v*` tag by
+# hand, and templates/stub-build-release.yml's `workflow_dispatch` trigger
+# for manually rebuilding or republishing a past release.
 
 on:
   workflow_call:
