@@ -1,0 +1,234 @@
+name: Version
+
+# Reusable workflow_call workflow — see CONTRACT.md "version.yml behaviour".
+#
+# Called on every push to `main` in a consuming repo, after that repo's own
+# CI (the `needs: ci` edge in its stub — see templates/stub-version.yml).
+#
+# Two paths, chosen by whether HEAD is the release commit that a merged
+# release PR just produced:
+#
+#   HEAD IS the release commit  -> push the tag, stop.                (S1)
+#   otherwise                   -> compute the bump; if there's a note
+#                                   pending, draft/update the release PR.
+#
+# Detecting "HEAD is the release commit": rather than parsing the merge
+# commit message (which differs by merge strategy — merge commit, squash,
+# or rebase all produce a different HEAD message), we ask the GitHub API
+# which merged PR(s) contain this commit and check whether any of them has
+# `release-branch` as its head ref. That's strategy-agnostic and doesn't
+# depend on peter-evans/create-pull-request's exact commit/PR-title text.
+#
+# scripts/compute_bump.py and scripts/sync_version.py live in THIS repo,
+# not the consumer's — a called reusable workflow only checks out the
+# CALLER's code by default, so we check out EmergentMatter/actions a
+# second time, pinned to this workflow's own ref (github.workflow_ref),
+# into .em-actions/, and invoke the scripts from there against the
+# consumer's checked-out pyproject.toml / changelog.d/.
+
+on:
+  workflow_call:
+    inputs:
+      release-branch:
+        description: Fixed branch the release PR is opened from. Force-updated every run.
+        type: string
+        default: release/next
+      notes-dir:
+        description: Directory containing pending changelog note fragments.
+        type: string
+        default: changelog.d
+      python-version:
+        description: Python version used to run compute_bump.py / sync_version.py.
+        type: string
+        default: "3.13"
+      uv-version:
+        description: Exact uv version to install (never "latest" — uv version --bump needs >=0.7).
+        type: string
+        default: "0.12.5"
+      skip-label:
+        description: >-
+          Label applied to the release PR so it exempts its own note check (E6).
+          Must match whatever the repo passes as changelog-check.yml's skip-label
+          input — a repo that overrides one and not the other breaks E6 silently.
+          (Defense in depth only: the release PR is also authored by
+          github-actions[bot], which changelog-check.yml's default bot-actors
+          already exempts independently.)
+        type: string
+        default: skip-changelog
+
+permissions: {}
+
+concurrency:
+  group: version-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Compute release / tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve this workflow's own ref
+        id: actions-ref
+        run: echo "ref=${GITHUB_WORKFLOW_REF##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout EmergentMatter/actions scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: EmergentMatter/actions
+          ref: ${{ steps.actions-ref.outputs.ref }}
+          path: .em-actions
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ inputs.uv-version }}
+
+      # ---------------------------------------------------------------
+      # S1: is HEAD the commit a merge of the release PR just produced?
+      # ---------------------------------------------------------------
+      - name: Detect release commit
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RELEASE_BRANCH: ${{ inputs.release-branch }}
+        run: |
+          set -euo pipefail
+          # No `|| true` here: an empty result because no merged PR matches
+          # is a normal, successful `gh api` exit (jq's select() just
+          # yields nothing) and is handled correctly below. A real API
+          # failure (rate limit, transient 5xx) must fail this step loudly
+          # via set -e, not be swallowed into "not a release commit" — that
+          # would silently skip tagging a just-merged release with a green
+          # check and no error anywhere.
+          refs=$(
+            gh api "repos/${REPO}/commits/${SHA}/pulls" --paginate \
+              -q '.[] | select(.merged_at != null) | .head.ref'
+          )
+          is_release_commit=false
+          if grep -qxF "${RELEASE_BRANCH}" <<< "$refs"; then
+            is_release_commit=true
+          fi
+          echo "is-release-commit=${is_release_commit}" >> "$GITHUB_OUTPUT"
+
+      - name: Read released version
+        if: steps.detect.outputs.is-release-commit == 'true'
+        id: released
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Push release tag
+        if: steps.detect.outputs.is-release-commit == 'true'
+        env:
+          VERSION: ${{ steps.released.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists — nothing to do."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${tag}" "${SHA}"
+          git push origin "${tag}"
+
+      # ---------------------------------------------------------------
+      # Not the release commit: compute the bump from pending notes.
+      # ---------------------------------------------------------------
+      - name: Compute next version
+        if: steps.detect.outputs.is-release-commit == 'false'
+        id: bump
+        run: |
+          python3 .em-actions/scripts/compute_bump.py \
+            --notes-dir "${{ inputs.notes-dir }}" \
+            --format github
+
+      - name: Bump [project] version and refresh the lockfile
+        # V4 self-consistency: both files, one step, one eventual commit.
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        env:
+          LEVEL: ${{ steps.bump.outputs.level }}
+          EXPECTED_NEXT: ${{ steps.bump.outputs.next }}
+        run: |
+          set -euo pipefail
+          uv version --bump "${LEVEL}"
+          uv lock
+          actual=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "${actual}" != "${EXPECTED_NEXT}" ]; then
+            echo "::error::uv computed version ${actual} but compute_bump.py expected ${EXPECTED_NEXT} — semver bump semantics have diverged between uv and compute_bump.py's V2 rule (no 0.x special-casing)."
+            exit 1
+          fi
+
+      - name: Sync declared version strings
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        run: |
+          python3 .em-actions/scripts/sync_version.py --version "${{ steps.bump.outputs.next }}"
+
+      - name: Build CHANGELOG.md and consume notes
+        # A7: towncrier writes the changelog and deletes the fragments it
+        # consumed in this same working-tree change, so both land in the
+        # one commit the PR step below creates.
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        run: |
+          uvx towncrier build --yes --version "${{ steps.bump.outputs.next }}"
+
+      - name: Open or update the release PR
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ github.token }}
+          branch: ${{ inputs.release-branch }}
+          base: main
+          delete-branch: false
+          commit-message: "release: v${{ steps.bump.outputs.next }}"
+          title: "Release v${{ steps.bump.outputs.next }}"
+          # R3: this PR must contain only the version bump, changelog
+          # update, note deletions, and lockfile refresh — nothing else ran
+          # in this job before this step, so the working tree diff already
+          # satisfies that; nothing extra is added here.
+          body: |
+            Automated release PR. Merging this is the release: it pushes
+            tag `v${{ steps.bump.outputs.next }}`, which triggers the build
+            and GitHub Release.
+
+            This PR contains only the version bump, the `CHANGELOG.md`
+            update, the consumed note deletions, and the refreshed
+            `uv.lock`.
+
+            If the checks below show as not run, close this PR and
+            immediately reopen it — see `CONTRIBUTING.md`.
+          # E6: exempts this PR from changelog-check.yml's note requirement
+          # by label. It's also opened as github-actions[bot], which
+          # changelog-check.yml's default bot-actors already exempts (E5) —
+          # this label is defense in depth, not the only path. The caller
+          # must pass the same value here as it passes to
+          # changelog-check.yml's skip-label input, or E6 breaks silently
+          # for a repo that overrides one and not the other.
+          labels: ${{ inputs.skip-label }}

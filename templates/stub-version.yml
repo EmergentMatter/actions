@@ -1,0 +1,24 @@
+# .github/workflows/version.yml
+name: Version
+on:
+  push:
+    branches: [main]
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml      # the repo's OWN checks (C4)
+    # `secrets: inherit` belongs HERE, and only if your own ci.yml needs a repo
+    # secret. A local reusable-workflow call does not inherit secrets implicitly
+    # either. Real example: sdm-core's CI fetches the private sibling
+    # emergent-matter-materials with MATERIALS_REPO_TOKEN, so its ci job needs it.
+    # A repo whose CI needs no secrets should omit this line.
+    secrets: inherit
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    permissions: { contents: write, pull-requests: write }
+    # NO `secrets: inherit` here, deliberately. None of the three shared
+    # workflows reads `secrets.*` — they use only the auto-injected
+    # `github.token`. Granting org secrets to a workflow hosted in a public repo
+    # and pinned by a movable `v1` tag would make that tag equivalent to secret
+    # access across every consuming repo. Don't add it back without a concrete
+    # secret the shared workflow actually reads.

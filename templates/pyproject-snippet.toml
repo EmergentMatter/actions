@@ -1,0 +1,52 @@
+# Copy this block into your repo's pyproject.toml to opt into release control.
+# See docs/onboarding.md in EmergentMatter/actions for the full walkthrough,
+# and templates/CONTRIBUTING.md for the contributor-facing half.
+
+# ── towncrier: turns changelog.d/ notes into CHANGELOG.md ─────────────────
+#
+# Exactly three fragment types, matching the three bump levels the release
+# workflow understands (see EmergentMatter/actions CONTRACT.md). Do not add
+# a fourth type — compute_bump.py only recognizes major/minor/patch and
+# exits 1 on anything else.
+[tool.towncrier]
+directory = "changelog.d"          # where `uv run changeset` writes notes
+filename = "CHANGELOG.md"
+# Insert this marker into CHANGELOG.md once, above your existing history.
+# towncrier writes new release sections directly below it and never touches
+# anything beneath — see docs/onboarding.md for inserting it into a
+# hand-written changelog without disturbing prior entries.
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## {version} ({project_date})"
+underlines = ["-", "~", "^"]
+
+[[tool.towncrier.type]]
+directory = "major"
+name = "Major"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "minor"
+name = "Minor"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "patch"
+name = "Patch"
+showcontent = true
+
+# ── em-release: tells sync_version.py every place the version string lives ──
+#
+# One entry per "path:symbol" location, beyond `[project] version` itself
+# (that one is handled separately, by `uv version --bump` in the release
+# workflow — do not list it here).
+#
+# Every location you list gets written on every release. Anything you don't
+# list is never touched — that's deliberate, so a data/schema version that
+# is meant to move independently of the package version is safe just by
+# being left off this list. See docs/onboarding.md for the
+# emergent-matter-materials worked example, where __catalog_version__ *is*
+# listed because it's meant to track the package version in lockstep.
+[tool.em-release]
+version_files = [
+  "src/<package_name>/__init__.py:__version__",
+]

@@ -1,0 +1,111 @@
+# Starting CI template for a consuming repo — copy to
+# `.github/workflows/ci.yml` and adjust as the repo needs.
+#
+# Most repos in the org currently run no automated checks at all; this is
+# the floor every repo gets on day one, not the ceiling. Three stages,
+# consistent names across every repo that copies this (C4), so "the lint
+# job" and "the build job" mean the same thing everywhere:
+#
+#   lint  - non-blocking for now (continue-on-error below). Turning a
+#           linter on across an established codebase produces a pile of
+#           findings unrelated to whatever PR happens to trip the check
+#           first, and a check people learn to click past is worse than no
+#           check. Land this non-blocking, clear the existing backlog in
+#           its own dedicated PR, THEN remove continue-on-error so it
+#           actually blocks. Don't skip straight to blocking.
+#   test  - runs the repo's test suite. If there isn't one yet, it still
+#           runs (and passes) rather than being skipped outright — see the
+#           "no tests" branch below. The floor is never zero (C5).
+#   build - `uv build` and keep the wheel/sdist as an artifact. A green
+#           test suite only proves the source tree works; tests run
+#           against source, but users install the built package, so a
+#           repo can be fully green on tests and still be broken to
+#           install. This stage is what actually catches that (C2).
+#
+# `uv sync --locked` in every job fails if uv.lock is out of date, so this
+# always runs on a clean, from-lockfile install rather than trusting
+# whatever's already resolved on a developer's machine (C3).
+#
+# Must stay callable both directly on pull_request AND as a reusable
+# workflow_call — the version.yml stub does `needs: ci` onto this file by
+# reference (`uses: ./.github/workflows/ci.yml`).
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # Staged rollout: non-blocking until the existing lint backlog is
+    # cleared in its own PR. Remove this line once that's done.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+
+      - run: uv sync --locked
+
+      - run: uv run ruff check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+
+      # Install must be the step immediately before the test run, with
+      # nothing that writes a version string in between. Some repos have
+      # tests that read INSTALLED package metadata (importlib.metadata),
+      # not the source tree — e.g. emergent-matter-materials asserts
+      # importlib.metadata.version() agrees with the module's __version__.
+      # A fresh sync right before the test step, on every run, makes that
+      # class of "environment vs. tree" drift structurally impossible —
+      # it's a concrete instance of why C3 requires a clean-machine,
+      # from-lockfile install rather than a persisted/cached environment.
+      # If you add a step here later, keep it above this line, not between
+      # sync and test.
+      - run: uv sync --locked
+
+      - name: Run tests
+        run: |
+          if [ -d tests ]; then
+            uv run pytest
+          else
+            echo "No tests/ directory yet — nothing to run. (install + build still ran below.)"
+          fi
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+
+      - run: uv sync --locked
+
+      - run: uv build
+
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error

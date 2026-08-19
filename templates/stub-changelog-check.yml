@@ -1,0 +1,18 @@
+# .github/workflows/changelog-check.yml
+name: Changelog
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  changelog:
+    uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+    # No `secrets: inherit` — changelog-check.yml only ever uses the
+    # auto-injected github.token, never secrets.*. This trigger also runs
+    # on pull_request, which can be a fork PR in a public repo; omitting
+    # an unused grant here costs nothing and forecloses that risk outright
+    # rather than relying on platform defaults. Add it back only if this
+    # repo's own copy of the workflow grows a step that genuinely needs a
+    # named secret.

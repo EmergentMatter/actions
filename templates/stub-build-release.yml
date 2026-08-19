@@ -1,0 +1,25 @@
+# .github/workflows/build-release.yml
+#
+# CONTRACT.md's "Consumer stub" section only spells out the version.yml
+# stub's exact shape; this one and stub-changelog-check.yml are this
+# repo's own design, per CLAUDE.md's "Known Issues" note. Triggered by the
+# tag version.yml pushes when it detects HEAD is the release commit.
+name: Build & Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    uses: EmergentMatter/actions/.github/workflows/build-release.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+    # No `secrets: inherit` — build-release.yml never reads secrets.*;
+    # publishing uses OIDC trusted publishing (id-token: write above), not
+    # a token. Add it back only if this repo's own copy grows a step that
+    # genuinely needs a named secret.
+    with:
+      # Opt-in, off by default (S3). Flip to true — and set `environment:`
+      # to a GitHub Environment wired to a PyPI trusted publisher — once
+      # this repo is ready to publish releases to an index.
+      publish: false

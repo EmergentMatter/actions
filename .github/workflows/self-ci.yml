@@ -1,0 +1,58 @@
+name: Self CI
+
+# This repo's own checks — not reusable, not workflow_call. Ruff + pytest
+# over scripts/ and tests/, matching CLAUDE.md's documented "Build & Run"
+# commands exactly (uv sync / uv run ruff check . / uv run pytest) so local
+# reproduction is identical to CI. Ruleset and line-length live in this
+# repo's own pyproject.toml [tool.ruff] — not duplicated here as CLI flags.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+
+      - name: uv sync
+        run: uv sync --locked
+
+      - name: ruff check
+        run: uv run ruff check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+
+      - name: uv sync
+        run: uv sync --locked
+
+      - name: pytest
+        run: uv run pytest
