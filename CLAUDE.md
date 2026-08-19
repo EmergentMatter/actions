@@ -154,21 +154,12 @@ mostly doesn't come up outside scalar CLI args.
 
 ## Known Issues
 
-- `CONTRACT.md`'s "Consumer stub (this exact shape)" example does not
-  show the `with: { actions-ref: v1 }` block that the real
-  `templates/stub-version.yml` carries — a reader who copies CONTRACT.md's
-  example literally gets a stub that's missing a required input.
-- `CONTRACT.md`'s workflow-inputs table lists `actions-ref` as an input
-  of `build-release.yml`; the actual `.github/workflows/build-release.yml`
-  declares no such input (it never checks out this repo's `scripts/`, so
-  it doesn't need one), and `templates/stub-build-release.yml` doesn't
-  pass one. One of the two is wrong; reconcile before anyone builds a
-  build-release stub from the table instead of the real template.
-
-Both found during the 2026-08-19 documentation sweep by reading the
-actual files rather than trusting CONTRACT.md's prose — flagged to
-CONTRACT.md's owner rather than fixed here, since this file doesn't own
-that spec.
+None currently open. Two `CONTRACT.md` staleness findings from the
+2026-08-19 documentation sweep — its "Consumer stub" example missing the
+`with: { actions-ref: v1 }` block that `templates/stub-version.yml`
+actually carries, and its workflow-inputs table wrongly listing
+`actions-ref` as a `build-release.yml` input — were both fixed in
+`CONTRACT.md` the same day, by its owner.
 
 ## Current Work
 
