@@ -46,8 +46,10 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
 - `.github/workflows/{changelog-check,version,build-release}.yml` — the
   three reusable `workflow_call` workflows consuming repos pin to `@v1`.
 - `templates/` — everything a consuming repo copies in at onboarding time:
-  the three workflow stubs, `CONTRIBUTING.md`, and `pyproject-snippet.toml`
-  (the `[tool.towncrier]` + `[tool.em-release]` config block).
+  the three workflow stubs, `changeset.py` (→ `scripts/changeset.py` at
+  the consumer's root, **not** inside their package), `CONTRIBUTING.md`,
+  and `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`
+  config block).
 - `docs/onboarding.md` — the human walkthrough for onboarding a repo,
   worked through `emergent-matter-materials`'s three-version-strings case.
 
@@ -71,10 +73,28 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
 - **Silent no-ops are the bug to avoid**, not the failure to avoid: both
   scripts exit 1 loudly on anything ambiguous (unparseable bump level,
   missing declared file/symbol) rather than guessing or skipping.
+- **The release is not tag-triggered.** A tag pushed with `GITHUB_TOKEN`
+  never triggers a workflow (GitHub suppresses it to prevent recursion),
+  so the obvious design -- push a `v*` tag, let `build-release.yml`
+  fire -- silently never runs on the automated path. Confirmed on the
+  rehearsal repo: `v1.0.0` was tagged and zero tag-triggered runs appear
+  in its history. `version.yml` pushes the tag **and** builds/publishes
+  the release **in the same run** instead. `build-release.yml` still
+  exists, but only for a human-pushed tag (which does trigger normally)
+  or a manual `workflow_dispatch` rebuild -- it is deliberately not the
+  automatic path, not a redundant leftover.
+- **`scripts/changeset.py` must live at a consumer repo's root, outside
+  the package, invoked as `uv run scripts/changeset.py`** -- never as a
+  `[project.scripts]` console entry. Confirmed by building a wheel during
+  rehearsal: putting it inside `src/<package>/` (or wiring the console
+  script) shipped a `changeset` command onto the PATH of anyone who
+  installs the library. A contributor-only tool has no business in a
+  published package.
 - **No stub grants secrets to a shared workflow.** None of the three
   reusable workflows reads `secrets.*` — they use only the auto-injected
-  `github.token`, and `build-release.yml` publishes over OIDC trusted
-  publishing (`id-token: write`), not a token. `stub-changelog-check.yml`
+  `github.token`, and `build-release.yml` and `version.yml` publish over
+  OIDC trusted publishing (`id-token: write`) when configured, not a
+  token. `stub-changelog-check.yml`
   omits `secrets: inherit` because it triggers on `pull_request` (which
   can be a fork PR in a public repo) and there's nothing to grant.
   `stub-build-release.yml` omits it for the OIDC reason above.

@@ -102,7 +102,12 @@ jobs:
           path: .em-actions
 
       - name: Build and create the GitHub Release
-        uses: ./.em-actions/.github/actions/build-and-release
+        # A local `./` action inside a REUSABLE workflow resolves against the
+        # repository holding that workflow (this one), not the caller's
+        # workspace. Pointing it at the .em-actions checkout instead failed the
+        # whole workflow at parse time with startup_failure, because that path
+        # does not exist here. Observed live.
+        uses: ./.github/actions/build-and-release
         with:
           tag-name: ${{ steps.tag.outputs.tag }}
           python-version: ${{ inputs.python-version }}

@@ -1,6 +1,6 @@
 # Onboarding a repo
 
-Onboarding a repo into release control is **four files, a config block,
+Onboarding a repo into release control is **five files, a config block,
 and a label**. This walks through all of them, using
 [`emergent-matter-materials`](https://github.com/EmergentMatter/emergent-matter-materials)
 as the worked example — it's the hard case, because it has **three**
@@ -20,21 +20,54 @@ your CI first and only drafts a release if it passes — see
 for why. If you don't have one yet, that's a prerequisite to sort out
 before wiring this up, not a step this doc covers.
 
-## The four files
+## The five files
 
 | # | File | What it does |
 |---|---|---|
 | 1 | `.github/workflows/changelog-check.yml` | On every PR: fails the PR if it's missing a `changelog.d/` note and doesn't carry the `skip-changelog` label. |
-| 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then computes the next version from pending notes and opens/updates the release PR. |
-| 3 | `.github/workflows/build-release.yml` | On the release tag: builds the wheel/sdist and attaches them to a GitHub Release. |
-| 4 | `CONTRIBUTING.md` | The contributor-facing instructions — how to add a note, what the three levels mean, the release-PR checks caveat. |
+| 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or -- if HEAD is the release commit that PR's merge just created -- tags the release and builds + publishes it, all in the same run. |
+| 3 | `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
+| 4 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
+| 5 | `CONTRIBUTING.md` | The contributor-facing instructions -- how to add a note, what the three levels mean, the release-PR checks caveat. |
 
 Files 1–3 are stub workflows: a few lines each that just point at the
 reusable workflow this repo hosts, pinned to `@v1`. Copy them from
 `EmergentMatter/actions`'s `templates/` directory into your repo's
-`.github/workflows/`. File 4 is a direct copy of
+`.github/workflows/`. File 5 is a direct copy of
 [`templates/CONTRIBUTING.md`](../templates/CONTRIBUTING.md) into your repo
-root, unmodified — it's generic, not repo-specific.
+root, unmodified -- it's generic, not repo-specific. File 4 needs its own
+explanation, below.
+
+### Why `build-release.yml` isn't the automatic path
+
+The obvious design looks like: push a `v*` tag, let `build-release.yml`
+fire, done. **That design doesn't work -- a tag pushed with
+`GITHUB_TOKEN` never triggers a workflow**, because GitHub suppresses it
+to prevent recursion. Shipped that way, every onboarded repo would tag a
+version and nothing would ever build or publish it, silently. This isn't
+theoretical: on the rehearsal repo, `v1.0.0` was tagged and **zero**
+tag-triggered runs appear anywhere in its history.
+
+So `version.yml` pushes the tag **and** builds and publishes the release
+**in the same run** (its final step, once it detects HEAD is the
+just-merged release commit). `build-release.yml` still exists, but only
+for a **human-pushed** tag (which does trigger workflows normally) or a
+manual `workflow_dispatch` rebuild -- it's a deliberate fallback, not a
+redundant leftover you can skip copying.
+
+### Why `scripts/changeset.py` must live outside the package
+
+Put `changeset.py` inside `src/<package>/`, or wire it up as a
+`[project.scripts]` console-script entry, and it **ships inside the
+wheel**. This was caught during rehearsal by actually building one: doing
+either put a `changeset` command on the PATH of anyone who installs the
+library. `changeset.py` is a contributor-only tool -- it has no business
+in a package your users install.
+
+Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
+root, and invoke it as `uv run scripts/changeset.py`. That's a longer
+command than `uv run changeset` would be, on purpose -- don't "tidy" it
+back into a console-script entry to shorten it.
 
 The `version.yml` stub is the one to get exactly right, because it's the
 one that wires your own CI in as a gate. This is its exact shape:
@@ -70,13 +103,49 @@ it's conditional even there:
   **omit the line entirely** rather than adding it out of habit.
 - **On `version:`, deliberately absent — this is a security decision,
   not an oversight.** None of the three shared workflows reads
-  `secrets.*`; they use only the auto-injected `github.token`, and
-  `build-release.yml` publishes over OIDC trusted publishing, which is
-  secret-less by design. `EmergentMatter/actions` is a **public** repo
-  pinned by a **movable** `v1` tag. Granting it your org's secrets via
-  `secrets: inherit` would make that tag equivalent to secret access
-  across every repo that pins it — so don't add it back as boilerplate,
-  even though it looks like it's "missing" next to the `ci:` job above it.
+  `secrets.*`; they use only the auto-injected `github.token`, and both
+  `version.yml` and `build-release.yml` publish over OIDC trusted
+  publishing when configured, which is secret-less by design.
+  `EmergentMatter/actions` is a **public** repo pinned by a **movable**
+  `v1` tag. Granting it your org's secrets via `secrets: inherit` would
+  make that tag equivalent to secret access across every repo that pins
+  it — so don't add it back as boilerplate, even though it looks like
+  it's "missing" next to the `ci:` job above it.
+
+## Publishing to a package index (optional)
+
+Off by default -- most repos stop at "GitHub Release with a wheel and
+sdist attached" and never touch this. If you want `version.yml` to also
+publish to a package index over OIDC trusted publishing, three things
+change together, not separately:
+
+1. **Add `id-token: write` to the `version:` job's `permissions:`
+   block.** `permissions:` on a `workflow_call` is a **ceiling for every
+   job inside the called workflow, not a per-job grant** -- setting it
+   inside the shared workflow itself wouldn't be enough. Skip this and
+   OIDC silently yields an empty token, and publishing fails in a way
+   that looks like a PyPI problem, not a permissions one.
+2. **Pass `publish: true` and `environment: <name>`** in the `version:`
+   job's `with:` block. `environment` names a [GitHub
+   Environment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+   you create in the repo's own settings -- it's what scopes the OIDC
+   token.
+3. **Attach that Environment's PyPI trusted publisher**, in PyPI's
+   project settings, pointing at this repo, this workflow, and this
+   environment name.
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    permissions: { contents: write, pull-requests: write, id-token: write }
+    with: { publish: true, environment: pypi }
+```
+
+It's off by default on purpose: an unused elevated permission
+(`id-token: write`) is worth avoiding, and publishing is a decision a
+repo owner makes explicitly -- not something that starts happening the
+first time a release PR merges.
 
 ## The config block
 
