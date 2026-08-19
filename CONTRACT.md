@@ -66,10 +66,20 @@ Writes the version into every location the repo declares, and nothing else.
 | Workflow | Inputs (all optional unless noted, with defaults) |
 |---|---|
 | `changelog-check.yml` | `notes-dir`=`changelog.d`, `skip-label`=`skip-changelog`, `bot-actors`=`dependabot[bot],github-actions[bot]`, `python-version`=`3.13` |
-| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog` |
-| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=`''`, `retention-days`=`90` |
+| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name |
+| `build-release.yml` | `actions-ref`=`v1`, `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name |
 
-All three accept `secrets: inherit`. Consumers pin `@v1` — never a branch. (P1)
+Consumers pin `@v1` — never a branch (P1) — and pass `actions-ref` matching that pin, on
+**every** stub that has it. There is no context giving a reusable workflow its own ref:
+`github.workflow_ref` is the *caller's*, and `github.job_workflow_sha` does not exist. The
+workflows prefer `job.workflow_sha` (the commit of the reusable workflow file itself, which
+cannot drift from the pin) and fall back to `actions-ref`, logging which path was taken. An
+unresolvable ref is refused outright, because an empty checkout ref silently means "the
+default branch" — which is how two earlier attempts passed while ignoring the pin entirely.
+
+`environment` must be **non-empty**: `environment:` is validated when the workflow is parsed,
+before any `if:` runs, so an empty name fails every run with `startup_failure` even with
+publishing off.
 
 ## version.yml behaviour
 
@@ -94,8 +104,23 @@ On push to `main` in the consuming repo:
      silently. Defense in depth: the release PR is authored by `github-actions[bot]`, which
      `changelog-check.yml`'s default `bot-actors` already exempts independently.
 
-Tag `v*` then triggers `build-release.yml`: `uv build` → GitHub Release with wheel + sdist
-attached → optional index publish via OIDC, opt-in and off by default. (S2/S3/S4)
+7. **Same run**: `uv build` → GitHub Release with wheel + sdist attached → optional index
+   publish over OIDC, opt-in and off by default. (S2/S3/S4)
+
+**Why the release is not tag-triggered.** The obvious design — tag `v*` fires
+`build-release.yml` — cannot work. **A tag pushed with `GITHUB_TOKEN` never triggers a
+workflow**; GitHub suppresses that to prevent recursion. Shipped as drawn, the tag would land
+and nothing would ever be built or published, silently. Verified on the rehearsal repo:
+`v1.0.0` was tagged and not one tag-triggered run appears in its history. So the tag push and
+the release happen in the same `version.yml` run. `build-release.yml` is kept for a
+**human-pushed** tag (which does trigger workflows) and for `workflow_dispatch` rebuilds — it
+is deliberately not the automatic path.
+
+**`permissions:` on a `workflow_call` is a ceiling for every job in the called workflow**, not
+a per-job grant. So a repo setting `publish: true` must **also** add `id-token: write` to its
+stub's `permissions:` block, or OIDC yields an empty token and publishing fails. It is not
+granted by default, because publishing is opt-in (S3) and an unused elevated permission is
+worth avoiding.
 
 ## The known limitation — document it, do not work around it
 
