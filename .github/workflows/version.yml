@@ -240,28 +240,24 @@ jobs:
       # the tag just pushed. Inlined here (via the shared composite action
       # below) rather than left to a tag-triggered workflow -- see the file
       # header for why a GITHUB_TOKEN-pushed tag can't rely on that.
-      #
-      # The composite action lives in EmergentMatter/actions itself, so it
-      # is reached the same way scripts/ is: through the .em-actions
-      # checkout above, by LOCAL PATH. `uses:` cannot take a templated ref
-      # (${{ }} isn't allowed after the @), which is exactly why this can't
-      # instead be `uses: EmergentMatter/actions/.github/actions/
-      # build-and-release@<ref>` with a dynamic ref -- the local path
-      # inherits whatever ref .em-actions was actually checked out at
-      # (job.workflow_sha, or the actions-ref fallback), so it can't drift
-      # from the pin. build-release.yml calls the same action the same way,
-      # for the human-tag / workflow_dispatch path -- see its comments.
-      # ---------------------------------------------------------------
       # Build + create the Release inline, in this same job.
       #
-      # This cannot be a shared composite action. A local `./` action inside a
-      # REUSABLE workflow is resolved against the CALLER's repository and is
-      # validated when the workflow is parsed -- so a `./...` path that does not
-      # exist in the consuming repo fails every run with startup_failure before
-      # a single job starts. Both `./.em-actions/...` and `./.github/actions/...`
-      # were tried live and failed identically. Nor can it be
-      # `uses: EmergentMatter/actions/...@<ref>`: `uses:` cannot take a
-      # templated ref, so it could not follow the ref this workflow is pinned at.
+      # These steps are duplicated in build-release.yml, which covers the
+      # human-pushed-tag / workflow_dispatch path. Keep the two in step.
+      #
+      # A shared composite action was tried and withdrawn. Be careful with the
+      # history here: it was removed while chasing a startup_failure whose real
+      # cause turned out to be elsewhere (the publish job requested a permission
+      # the caller had not granted -- see that job). So the composite action was
+      # NOT proven to be the problem and may well work. What is genuinely
+      # awkward is the reference: `uses:` cannot take a templated ref, so
+      # `EmergentMatter/actions/...@<ref>` could not follow the ref this
+      # workflow is pinned at, and a local `./` path has to exist wherever the
+      # runner resolves it from -- which for a reusable workflow called
+      # cross-repo is not obvious and was never isolated on its own.
+      #
+      # Given that, the duplication is four steps, verified working end to end.
+      # Revisit only with an isolated test of the `./` resolution question.
       #
       # These steps are therefore duplicated in build-release.yml, which serves
       # the human-pushed-tag / workflow_dispatch path. Keep the two in step.
