@@ -16,8 +16,8 @@ public, passive repo of reusable GitHub Actions workflows plus small
 stdlib-only Python scripts that let every Python repo in the org version
 and release the same way — one changelog note per PR, one computed release
 PR, merging that PR is the release. See [README.md](README.md) for the
-concept and [CONTRACT.md](CONTRACT.md) for the full behavioral spec; every
-workstream in this repo builds against CONTRACT.md as source of truth.
+concept, [docs/onboarding.md](docs/onboarding.md) to onboard a repo, and
+[CONTRACT.md](CONTRACT.md) for the full behavioural spec.
 
 This repo holds no secrets and calls nothing at runtime — consuming repos
 run the actual workflows in their own context using their own
@@ -36,9 +36,9 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
 
 ## Architecture / Key Files
 
-- `CONTRACT.md` — the build contract. Owned by Izuku; source of truth for
-  every script CLI, workflow input, and behavior in this repo. Read this
-  before touching anything.
+- `CONTRACT.md` — the behavioural spec: every script CLI, workflow input,
+  and the exact sequence `version.yml` performs, with the reasoning behind
+  each guarantee. Read it before changing how release control behaves.
 - `scripts/compute_bump.py` — reads `changelog.d/` notes, returns the
   release level/version that should be cut.
 - `scripts/sync_version.py` — writes a version string into every location
@@ -99,8 +99,9 @@ None yet — repo is new.
 
 ## Current Work
 
-Initial parallel build of the v1 release-control system per CONTRACT.md:
-scripts (`scripts/`, `tests/`), workflows (`.github/`, `templates/ci.yml`,
-`templates/stub-*.yml`), and documentation (this file, `README.md`,
-`docs/`, `templates/*.md`, `templates/pyproject-snippet.toml`) landing
-together. Not yet used by any consuming repo.
+v1 is built and verified locally but has not yet been proven end to end on
+GitHub, and there is deliberately **no `v1` tag yet** — nothing can onboard
+against an unproven release loop. The first real exercise of the full cycle
+is running against a disposable repo. No production repo consumes this yet;
+`emergent-matter-materials` is the intended first pilot, then
+`emergent-matter-sdm-core`.

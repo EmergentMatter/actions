@@ -1,10 +1,17 @@
-# Build contract — EmergentMatter/actions v1
+# Behavioural spec — EmergentMatter/actions v1
 
-**Owned by Izuku. Do not edit.** All workstreams code against this file so they can run in
-parallel. If you believe something here is wrong, message Izuku — do not change it unilaterally.
+The contract between the reusable workflows in this repo and the repos that call them:
+script CLIs, `workflow_call` inputs, and the exact sequence `version.yml` performs.
 
-Source of truth for intent: the "Release Control" proposal. Requirement IDs (A1, V4, C2 …)
-below refer to its §09.
+**If you are onboarding a repo, you want [`docs/onboarding.md`](docs/onboarding.md) instead.**
+This file is for people changing how release control itself behaves — it records not just
+what the system does but why, so a future change doesn't quietly break a guarantee.
+
+Requirement IDs (A1, V4, C2 …) refer to §09 of the "Release Control" proposal, which is the
+source of truth for intent. Changes here are changes to the contract every consuming repo
+depends on: they need review from the owners in `CODEOWNERS`, and anything that alters the
+inputs or the behaviour of a shared workflow is a breaking change for every repo pinned to
+`@v1`.
 
 ## Non-negotiables
 
@@ -132,11 +139,17 @@ jobs:
     # secret the shared workflow actually reads.
 ```
 
-## File ownership — do not edit outside your lane
+## Where each guarantee lives
 
-| Path | Owner |
+| Path | What it owns |
 |---|---|
-| `scripts/`, `tests/`, `templates/changeset.py` | W1 backend-engineer |
-| `.github/`, `templates/ci.yml`, `templates/stub-*.yml` | W2 devops-infrastructure-engineer |
-| `README.md`, `docs/`, `templates/*.md`, `templates/pyproject-snippet.toml`, `CLAUDE.md` | W3 technical-writer |
-| `CONTRACT.md`, `LICENSE`, `.gitignore` | Izuku |
+| `scripts/compute_bump.py` | Notes → bump level → next version (V1, V2, V3) |
+| `scripts/sync_version.py` | Writing the version to every declared location, and nothing else (V4, V5) |
+| `.github/workflows/version.yml` | The release-PR loop and tagging (R1–R5, S1) |
+| `.github/workflows/changelog-check.yml` | The PR gate (E2, E4, E5, E6) |
+| `.github/workflows/build-release.yml` | Build, GitHub Release, opt-in publish (S2, S3, S4) |
+| `templates/` | What gets copied into consuming repos — changes here propagate by hand |
+
+Changing `templates/` is the expensive one: those files are copied into each repo rather than
+referenced, so a fix does not reach repos already onboarded. Prefer putting behaviour in the
+reusable workflows, which every repo picks up from `@v1` automatically.
