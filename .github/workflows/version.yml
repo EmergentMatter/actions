@@ -252,18 +252,31 @@ jobs:
       # from the pin. build-release.yml calls the same action the same way,
       # for the human-tag / workflow_dispatch path -- see its comments.
       # ---------------------------------------------------------------
-      - name: Build and create the GitHub Release
+      # Build + create the Release inline, in this same job.
+      #
+      # This cannot be a shared composite action. A local `./` action inside a
+      # REUSABLE workflow is resolved against the CALLER's repository and is
+      # validated when the workflow is parsed -- so a `./...` path that does not
+      # exist in the consuming repo fails every run with startup_failure before
+      # a single job starts. Both `./.em-actions/...` and `./.github/actions/...`
+      # were tried live and failed identically. Nor can it be
+      # `uses: EmergentMatter/actions/...@<ref>`: `uses:` cannot take a
+      # templated ref, so it could not follow the ref this workflow is pinned at.
+      #
+      # These steps are therefore duplicated in build-release.yml, which serves
+      # the human-pushed-tag / workflow_dispatch path. Keep the two in step.
+      - name: Build wheel + sdist
         if: steps.detect.outputs.is-release-commit == 'true'
-        # A local `./` action inside a REUSABLE workflow resolves against the
-        # repository holding that workflow (this one), not the caller's
-        # workspace. Pointing it at the .em-actions checkout instead failed the
-        # whole workflow at parse time with startup_failure, because that path
-        # does not exist here. Observed live.
-        uses: ./.github/actions/build-and-release
+        run: uv build
+
+      - name: Create the GitHub Release
+        if: steps.detect.outputs.is-release-commit == 'true'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag-name: ${{ steps.tag.outputs.tag }}
-          python-version: ${{ inputs.python-version }}
-          uv-version: ${{ inputs.uv-version }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
 
       - name: Upload build artifact for the publish job
         # Only needed when publish is actually enabled -- the publish job
