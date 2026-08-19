@@ -12,7 +12,7 @@ release PR does.
 
 `v1` is live: `v1.0.0` and `v1.0.1` are tagged, immutable, and `v1`
 points at the latest of them. The walkthrough below has been run end to
-end against a real rehearsal repo, not just read through -- pin `@v1`
+end against a real rehearsal repo, not just read through — pin `@v1`
 with confidence, not as a placeholder for something unproven.
 
 ## Before you start
@@ -30,23 +30,23 @@ before wiring this up, not a step this doc covers.
 | # | File | What it does |
 |---|---|---|
 | 1 | `.github/workflows/changelog-check.yml` | On every PR: fails the PR if it's missing a `changelog.d/` note and doesn't carry the `skip-changelog` label. |
-| 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or -- if HEAD is the release commit that PR's merge just created -- tags the release and builds + publishes it, all in the same run. |
+| 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or — if HEAD is the release commit that PR's merge just created — tags the release and builds + publishes it, all in the same run. |
 | 3 | `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
 | 4 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
-| 5 | `CONTRIBUTING.md` | The contributor-facing instructions -- how to add a note, what the three levels mean, the release-PR checks caveat. |
+| 5 | `CONTRIBUTING.md` | The contributor-facing instructions — how to add a note, what the three levels mean, the release-PR checks caveat. |
 
 Files 1–3 are stub workflows: a few lines each that just point at the
 reusable workflow this repo hosts, pinned to `@v1`. Copy them from
 `EmergentMatter/actions`'s `templates/` directory into your repo's
 `.github/workflows/`. File 5 is a direct copy of
 [`templates/CONTRIBUTING.md`](../templates/CONTRIBUTING.md) into your repo
-root, unmodified -- it's generic, not repo-specific. File 4 needs its own
+root, unmodified — it's generic, not repo-specific. File 4 needs its own
 explanation, below.
 
 ### Why `build-release.yml` isn't the automatic path
 
 The obvious design looks like: push a `v*` tag, let `build-release.yml`
-fire, done. **That design doesn't work -- a tag pushed with
+fire, done. **That design doesn't work — a tag pushed with
 `GITHUB_TOKEN` never triggers a workflow**, because GitHub suppresses it
 to prevent recursion. Shipped that way, every onboarded repo would tag a
 version and nothing would ever build or publish it, silently. This isn't
@@ -57,7 +57,7 @@ So `version.yml` pushes the tag **and** builds and publishes the release
 **in the same run** (its final step, once it detects HEAD is the
 just-merged release commit). `build-release.yml` still exists, but only
 for a **human-pushed** tag (which does trigger workflows normally) or a
-manual `workflow_dispatch` rebuild -- it's a deliberate fallback, not a
+manual `workflow_dispatch` rebuild — it's a deliberate fallback, not a
 redundant leftover you can skip copying.
 
 ### Why `scripts/changeset.py` must live outside the package
@@ -66,12 +66,12 @@ Put `changeset.py` inside `src/<package>/`, or wire it up as a
 `[project.scripts]` console-script entry, and it **ships inside the
 wheel**. This was caught during rehearsal by actually building one: doing
 either put a `changeset` command on the PATH of anyone who installs the
-library. `changeset.py` is a contributor-only tool -- it has no business
+library. `changeset.py` is a contributor-only tool — it has no business
 in a package your users install.
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
 root, and invoke it as `uv run scripts/changeset.py`. That's a longer
-command than `uv run changeset` would be, on purpose -- don't "tidy" it
+command than `uv run changeset` would be, on purpose — don't "tidy" it
 back into a console-script entry to shorten it.
 
 The `version.yml` stub is the one to get exactly right, because it's the
@@ -101,7 +101,7 @@ that has an `actions-ref` input must set it to the same value** (both
 `version.yml` and `changelog-check.yml`'s stubs take this input;
 `build-release.yml`'s does not need it, since that workflow never checks
 out this repo's `scripts/`). There is no context field that lets a
-reusable workflow discover its own ref -- `github.workflow_ref` resolves
+reusable workflow discover its own ref — `github.workflow_ref` resolves
 to the *caller's* ref, not this repo's, and `github.job_workflow_sha`
 does not exist, both confirmed live rather than assumed. An unresolvable
 ref is refused outright rather than silently defaulting to this repo's
@@ -133,7 +133,7 @@ it's conditional even there:
 
 ## Publishing to a package index (optional, but read this before flipping it on)
 
-Off by default -- most repos stop at "GitHub Release with a wheel and
+Off by default — most repos stop at "GitHub Release with a wheel and
 sdist attached" and never touch this. If you do want `version.yml` to
 also publish to a package index over OIDC trusted publishing, get this
 right the first time: the mechanism behind it has already caused a
@@ -142,7 +142,7 @@ steps below are exactly this shape and no other.
 
 **The rule underneath everything here:** `permissions:` on a
 `workflow_call` is a **ceiling for every job inside the called
-workflow**, not a per-job grant -- and it is checked when the workflow is
+workflow**, not a per-job grant — and it is checked when the workflow is
 **parsed**, before any `if:` condition is ever evaluated. Two separate,
 real incidents came from this one rule:
 
@@ -155,25 +155,25 @@ real incidents came from this one rule:
   even start, not just the one job. It surfaced as `startup_failure`
   with no further message available anywhere via the API. The fix:
   the publish job now declares **no `permissions:` of its own** and
-  instead inherits whatever the *consumer's own stub* granted -- so a
+  instead inherits whatever the *consumer's own stub* granted — so a
   repo that never asked for `id-token: write` never runs into this at
   all, and a repo that did gets exactly what it granted itself.
-- Separately, `environment:` -- required on the publish job even when
+- Separately, `environment:` — required on the publish job even when
   `publish` is `false`, because GitHub validates it at the same
-  parse-time step -- used to default to an empty string. An empty
+  parse-time step — used to default to an empty string. An empty
   environment name is invalid at parse time too, so it broke every run
   the same way, for every repo, publishing or not. The fix: the shared
   workflow now ships a non-empty default (`release`).
 
 Both are fixed on this repo's side today. What's left is on your side:
 **a repo enabling `publish: true` without also granting `id-token: write`
-on its own stub doesn't get a clean error -- it gets a job that runs, an
+on its own stub doesn't get a clean error — it gets a job that runs, an
 OIDC token that comes back empty, and a publish step that fails.** Get it
 right the first time:
 
 1. **Add `id-token: write` to the `version:` job's `permissions:`
    block on your own stub.** This is the only place it can come from now
-   -- the shared workflow deliberately doesn't grant it to itself.
+   — the shared workflow deliberately doesn't grant it to itself.
 2. **Pass `publish: true`.** Leave `environment:` unset to use the
    shipped default (`release`), or pass your own name if you already
    have a different [GitHub
@@ -198,7 +198,7 @@ right the first time:
 
 It's off by default on purpose: an unused elevated permission
 (`id-token: write`) is worth avoiding, and publishing is a decision a
-repo owner makes explicitly -- not something that starts happening the
+repo owner makes explicitly — not something that starts happening the
 first time a release PR merges.
 
 ## The config block
@@ -216,7 +216,7 @@ example.
 
 ## The label
 
-The changelog check's escape hatch -- the `skip-changelog` label -- has
+The changelog check's escape hatch — the `skip-changelog` label — has
 one setup requirement of its own that's easy to miss: **GitHub doesn't
 auto-create labels.** `gh pr edit --add-label skip-changelog` (or the
 same thing clicked in the GitHub UI) fails with `'skip-changelog' not
@@ -229,7 +229,7 @@ gh label create skip-changelog \
   --color ededed
 ```
 
-Use the label for work that genuinely ships nothing user-visible -- CI
+Use the label for work that genuinely ships nothing user-visible — CI
 tuning, a comment fix, a test-only change. It's the counterpart to the
 rule `templates/CONTRIBUTING.md` already states: if a change isn't worth
 a version, it isn't worth a note either.
@@ -237,10 +237,10 @@ a version, it isn't worth a note either.
 **Why this isn't automated instead:** `changelog-check.yml` could create
 the label itself the first time it's missing, but labels are the issues
 API, and that would mean granting the workflow `issues: write`. That's
-the workflow that triggers on `pull_request` -- the one that can run
+the workflow that triggers on `pull_request` — the one that can run
 against a fork PR in a public repo, and the one this system deliberately
 keeps narrowly scoped (see `CLAUDE.md`'s "no stub grants secrets to a
-shared workflow" -- the same reasoning applies to permissions generally,
+shared workflow" — the same reasoning applies to permissions generally,
 not just secrets). Expanding its permissions to save one `gh label
 create` call is a bad trade. Document the setup step; don't automate
 around it.
@@ -432,39 +432,39 @@ protection for `main` (repo Settings → Branches) with:
   push or an un-reviewed merge).
 
 **Get the four context names from a pull request run, not a push-to-main
-run -- they are not the same strings.** `lint`, `test`, and `build` come
+run — they are not the same strings.** `lint`, `test`, and `build` come
 from `ci.yml`, which (per `templates/ci.yml`) triggers directly on
-`pull_request` as well as via `workflow_call` -- on a PR it runs
+`pull_request` as well as via `workflow_call` — on a PR it runs
 standalone, so GitHub shows its three job names bare. `changelog / Require
 a changelog note` is `changelog-check.yml`'s stub: the bare job id in
 your stub (`changelog`) followed by a ` / ` and the *reusable workflow's*
 job `name:` field, not its job id. But on a push to `main`, `ci.yml`
-runs a different way -- wrapped inside `version.yml`'s own `ci:` job via
-`uses: ./.github/workflows/ci.yml` -- and GitHub shows that run's checks
+runs a different way — wrapped inside `version.yml`'s own `ci:` job via
+`uses: ./.github/workflows/ci.yml` — and GitHub shows that run's checks
 prefixed: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
 **never appear on a pull request run** and so can never satisfy a
 required check there. Anyone who copies check names off a push run
 instead of a PR run ends up with four required contexts that no PR can
 ever produce, and `main` is blocked from merging anything, permanently,
 until someone notices and fixes the list. (Verified on the rehearsal
-repo's actual branch protection config -- the four contexts above are
+repo's actual branch protection config — the four contexts above are
 copied from it exactly.)
 
 The exact four names above assume `templates/ci.yml` copied in as-is
 (job ids `lint` / `test` / `build`). If your repo already had its own
 CI with different job names before onboarding, use *those* names
-instead -- same bare-vs-prefixed rule, different strings.
+instead — same bare-vs-prefixed rule, different strings.
 
 ## Releasing under branch protection
 
 `templates/CONTRIBUTING.md` says merging the release PR is the release,
-and that's still true in spirit -- but under branch protection it takes
+and that's still true in spirit — but under branch protection it takes
 three manual actions, not one click, and it's worth knowing that going
 in rather than discovering it mid-release:
 
 1. **Close the release PR, then immediately reopen it.** It was opened by
    `GITHUB_TOKEN`, which doesn't trigger further workflow runs on its own
-   PR -- see `templates/CONTRIBUTING.md`'s section on this. Its checks
+   PR — see `templates/CONTRIBUTING.md`'s section on this. Its checks
    show as not-run until you do this.
 2. **Get it approved** (or merge it yourself if you're listed as a
    code owner for this repo, in which case CODEOWNERS review rules let

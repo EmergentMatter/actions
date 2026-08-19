@@ -5,7 +5,7 @@ the EmergentMatter org **one way** to version and release: a note per PR,
 a computed version bump, and one release PR whose merge is the release.
 
 **Status:** `v1` is tagged and verified end to end against a real
-rehearsal repo -- pin `@v1` with confidence. Rollout to production repos
+rehearsal repo — pin `@v1` with confidence. Rollout to production repos
 (`emergent-matter-materials` first) is starting now.
 
 ## The concept
