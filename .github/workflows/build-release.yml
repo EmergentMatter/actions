@@ -39,9 +39,13 @@ on:
         type: boolean
         default: false
       environment:
-        description: GitHub Environment to run the publish job under (e.g. for required reviewers). Empty means none.
+        description: >-
+          GitHub Environment to run the publish job under. Non-empty
+          default required — see version.yml's identical input for why an
+          empty default breaks the whole workflow at parse time, not just
+          the publish path.
         type: string
-        default: ""
+        default: release
 
 permissions: {}
 

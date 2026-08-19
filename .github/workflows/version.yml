@@ -87,9 +87,20 @@ on:
         type: boolean
         default: false
       environment:
-        description: GitHub Environment to run the publish job under (e.g. for required reviewers). Empty means none.
+        description: >-
+          GitHub Environment to run the publish job under (e.g. for required
+          reviewers). Only consulted when publish is true, but it's still
+          used to name the environment even when publish is false: GitHub
+          validates `environment:` at workflow-PARSE time, before any `if:`
+          is evaluated, and an empty environment name is invalid there — so
+          an empty default doesn't get skipped by the publish gate, it
+          fails the whole workflow to load, for every run, including ones
+          that never touch publishing. Found live in the rehearsal
+          (startup_failure, no jobs ran at all). A repo enabling
+          `publish: true` must create a GitHub Environment with this name
+          and attach its PyPI trusted publisher to it.
         type: string
-        default: ""
+        default: release
 
 permissions: {}
 
