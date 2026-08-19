@@ -226,22 +226,28 @@ jobs:
 
       # ---------------------------------------------------------------
       # S2: build the wheel/sdist and attach them to a GitHub Release for
-      # the tag just pushed. Inlined here rather than in a tag-triggered
-      # workflow -- see the file header for why a GITHUB_TOKEN-pushed tag
-      # can't rely on that.
+      # the tag just pushed. Inlined here (via the shared composite action
+      # below) rather than left to a tag-triggered workflow -- see the file
+      # header for why a GITHUB_TOKEN-pushed tag can't rely on that.
+      #
+      # The composite action lives in EmergentMatter/actions itself, so it
+      # is reached the same way scripts/ is: through the .em-actions
+      # checkout above, by LOCAL PATH. `uses:` cannot take a templated ref
+      # (${{ }} isn't allowed after the @), which is exactly why this can't
+      # instead be `uses: EmergentMatter/actions/.github/actions/
+      # build-and-release@<ref>` with a dynamic ref -- the local path
+      # inherits whatever ref .em-actions was actually checked out at
+      # (job.workflow_sha, or the actions-ref fallback), so it can't drift
+      # from the pin. build-release.yml calls the same action the same way,
+      # for the human-tag / workflow_dispatch path -- see its comments.
       # ---------------------------------------------------------------
-      - name: Build wheel + sdist
+      - name: Build and create the GitHub Release
         if: steps.detect.outputs.is-release-commit == 'true'
-        run: uv build
-
-      - name: Create GitHub Release
-        if: steps.detect.outputs.is-release-commit == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: ./.em-actions/.github/actions/build-and-release
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          files: dist/*
-          fail_on_unmatched_files: true
-          generate_release_notes: true
+          tag-name: ${{ steps.tag.outputs.tag }}
+          python-version: ${{ inputs.python-version }}
+          uv-version: ${{ inputs.uv-version }}
 
       - name: Upload build artifact for the publish job
         # Only needed when publish is actually enabled -- the publish job

@@ -10,11 +10,22 @@ name: Build & Release
 # comment at the top of version.yml). This workflow exists for the two
 # cases that aren't that automated path: a human pushing a `v*` tag by
 # hand, and templates/stub-build-release.yml's `workflow_dispatch` trigger
-# for manually rebuilding or republishing a past release.
+# for manually rebuilding or republishing a past release. Don't read its
+# apparent redundancy with version.yml as dead code — they cover disjoint
+# triggers, and they share their actual build/release steps (the
+# build-and-release composite action) so there is nothing to drift.
 
 on:
   workflow_call:
     inputs:
+      actions-ref:
+        description: >-
+          Ref of EmergentMatter/actions to load the build-and-release
+          composite action from. MUST match the @ref this workflow is
+          pinned to in your stub. Same reasoning as version.yml's
+          actions-ref input — see there for why this can't be derived.
+        type: string
+        default: v1
       python-version:
         description: Python version used to build the package.
         type: string
@@ -31,72 +42,90 @@ on:
         description: GitHub Environment to run the publish job under (e.g. for required reviewers). Empty means none.
         type: string
         default: ""
-      retention-days:
-        description: Retention for the uploaded wheel/sdist artifact.
-        type: number
-        default: 90
 
 permissions: {}
 
 jobs:
-  build:
-    name: Build wheel + sdist
+  release:
+    name: Build + create GitHub Release
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - name: Resolve the tag being released
+        # For a human tag push this is the triggering ref. For
+        # workflow_dispatch it's whatever ref (branch or tag) was picked to
+        # "Run workflow" from — dispatching from an actual v* tag is what
+        # makes a manual rebuild/republish of a past release meaningful.
+        id: tag
+        run: echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the shared-workflow commit
+        # Same job.workflow_sha-first, actions-ref-fallback resolution as
+        # version.yml and changelog-check.yml — see version.yml's comment
+        # for the full reasoning. Needed here only to reach the
+        # build-and-release composite action by local path (uses: can't
+        # take a templated ref).
+        id: shared
+        env:
+          SHA: ${{ job.workflow_sha }}
+          REF: ${{ inputs.actions-ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved from job.workflow_sha: ${SHA}"
+            echo "ref=${SHA}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${REF:-}" ]]; then
+            echo "::notice::job.workflow_sha unavailable ('${SHA:-<empty>}'); falling back to actions-ref='${REF}'."
+            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Cannot resolve the EmergentMatter/actions commit: job.workflow_sha"
+            echo "is empty and actions-ref is unset. Refusing to continue, because an empty"
+            echo "checkout ref silently means the default branch and would ignore your pin."
+            exit 1
+          fi
+
+      - name: Checkout EmergentMatter/actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: EmergentMatter/actions
+          ref: ${{ steps.shared.outputs.ref }}
+          path: .em-actions
+
+      - name: Build and create the GitHub Release
+        uses: ./.em-actions/.github/actions/build-and-release
+        with:
+          tag-name: ${{ steps.tag.outputs.tag }}
           python-version: ${{ inputs.python-version }}
+          uv-version: ${{ inputs.uv-version }}
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: ${{ inputs.uv-version }}
-
-      - name: Build
-        run: uv build
-
-      - name: Upload build artifact
+      - name: Upload build artifact for the publish job
+        # Only needed when publish is enabled — see version.yml's identical
+        # step for why (separate job/runner, and why retention is short).
+        if: inputs.publish
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: dist
           path: dist/*
-          retention-days: ${{ inputs.retention-days }}
+          retention-days: 1
           if-no-files-found: error
-
-  release:
-    name: Attach to GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download build artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist
-          path: dist
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          files: dist/*
-          fail_on_unmatched_files: true
-          generate_release_notes: true
 
   publish:
     name: Publish to package index
-    needs: build
+    needs: release
     if: inputs.publish
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     permissions:
       # OIDC trusted publishing — no token, no long-lived secret. (S4)
+      # A separate job purely so id-token: write (and any environment
+      # required-reviewer gate) stays scoped to publishing, not the
+      # build/release steps above.
       id-token: write
     steps:
       - name: Download build artifact

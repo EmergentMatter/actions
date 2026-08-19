@@ -1,0 +1,44 @@
+name: Build and create the GitHub Release
+description: >-
+  uv build the checked-out package, then attach the wheel + sdist to a
+  GitHub Release for the given tag (S2). Shared by version.yml's inline
+  release-tag path and build-release.yml's manual/human-tag path, so the
+  build steps exist exactly once. Runs against whatever repo is already
+  checked out into the workspace when this action is invoked -- it does
+  not check anything out itself.
+
+inputs:
+  tag-name:
+    description: The tag this release is for (e.g. v1.2.3). Required.
+    required: true
+  python-version:
+    description: Python version used to build the package.
+    required: true
+  uv-version:
+    description: Exact uv version to install (never "latest").
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      with:
+        version: ${{ inputs.uv-version }}
+
+    - name: Build wheel + sdist
+      shell: bash
+      run: uv build
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      with:
+        tag_name: ${{ inputs.tag-name }}
+        files: dist/*
+        fail_on_unmatched_files: true
+        generate_release_notes: true
