@@ -136,28 +136,38 @@ jobs:
           printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
 
       - name: Validate the shared-workflow ref
-        # An empty checkout ref silently means "the default branch", so an
-        # unresolvable ref does not fail -- it quietly runs main while the
-        # consumer believes it pinned @v1. Fail loudly instead.
+        # Resolve which commit of EmergentMatter/actions to load scripts/ from.
         #
-        # Two derivations were tried and both resolve to empty or wrong:
-        # github.workflow_ref is the CALLER's ref (asked our repo for the
-        # consumer's refs/pull/N/merge), and github.job_workflow_sha is empty
-        # in practice. Both were caught by the em-release-control-test
-        # rehearsal, the second only because this assertion existed. Hence the
-        # explicit actions-ref input.
+        # Preferred: job.workflow_sha -- the commit of the reusable workflow
+        # file running this job (actions/runner#4335). Exact, and it cannot
+        # drift from the @ref the consumer pinned, because it IS that commit.
+        # Fallback: the actions-ref input, for runners predating that property.
+        #
+        # This is asserted rather than passed straight to checkout because an
+        # unresolvable ref evaluates to an EMPTY STRING and checkout treats an
+        # empty ref as "the default branch" -- it would quietly run main while
+        # the consumer believes it pinned @v1. Two earlier derivations failed
+        # exactly that way in the rehearsal: github.workflow_ref is the
+        # CALLER's ref, and github.job_workflow_sha does not exist.
         if: steps.exempt.outputs.is-exempt == 'false'
         id: shared
         env:
+          SHA: ${{ job.workflow_sha }}
           REF: ${{ inputs.actions-ref }}
         run: |
           set -euo pipefail
-          if [[ -z "${REF:-}" ]]; then
-            echo "::error::actions-ref is empty. An empty checkout ref silently means"
-            echo "the default branch, which would ignore the @ref you pinned."
+          if [[ "${SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved from job.workflow_sha: ${SHA}"
+            echo "ref=${SHA}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${REF:-}" ]]; then
+            echo "::notice::job.workflow_sha unavailable ('${SHA:-<empty>}'); falling back to actions-ref='${REF}'."
+            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Cannot resolve the EmergentMatter/actions commit: job.workflow_sha"
+            echo "is empty and actions-ref is unset. Refusing to continue, because an empty"
+            echo "checkout ref silently means the default branch and would ignore your pin."
             exit 1
           fi
-          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout EmergentMatter/actions scripts
         if: steps.exempt.outputs.is-exempt == 'false'
