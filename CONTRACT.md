@@ -110,9 +110,8 @@ On push to `main` in the consuming repo:
 **Why the release is not tag-triggered.** The obvious design — tag `v*` fires
 `build-release.yml` — cannot work. **A tag pushed with `GITHUB_TOKEN` never triggers a
 workflow**; GitHub suppresses that to prevent recursion. Shipped as drawn, the tag would land
-and nothing would ever be built or published, silently. Verified on the rehearsal repo:
-`v1.0.0` was tagged and not one tag-triggered run appears in its history. So the tag push and
-the release happen in the same `version.yml` run. `build-release.yml` is kept for a
+and nothing would ever be built or published, silently. So the tag push and the release
+happen in the same `version.yml` run. `build-release.yml` is kept for a
 **human-pushed** tag (which does trigger workflows) and for `workflow_dispatch` rebuilds — it
 is deliberately not the automatic path.
 

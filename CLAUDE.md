@@ -76,20 +76,18 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
 - **The release is not tag-triggered.** A tag pushed with `GITHUB_TOKEN`
   never triggers a workflow (GitHub suppresses it to prevent recursion),
   so the obvious design — push a `v*` tag, let `build-release.yml`
-  fire — silently never runs on the automated path. Confirmed on the
-  rehearsal repo: `v1.0.0` was tagged and zero tag-triggered runs appear
-  in its history. `version.yml` pushes the tag **and** builds/publishes
+  fire — silently never runs on the automated path.
+  `version.yml` pushes the tag **and** builds/publishes
   the release **in the same run** instead. `build-release.yml` still
   exists, but only for a human-pushed tag (which does trigger normally)
   or a manual `workflow_dispatch` rebuild — it is deliberately not the
   automatic path, not a redundant leftover.
 - **`scripts/changeset.py` must live at a consumer repo's root, outside
   the package, invoked as `uv run scripts/changeset.py`** — never as a
-  `[project.scripts]` console entry. Confirmed by building a wheel during
-  rehearsal: putting it inside `src/<package>/` (or wiring the console
-  script) shipped a `changeset` command onto the PATH of anyone who
-  installs the library. A contributor-only tool has no business in a
-  published package.
+  `[project.scripts]` console entry. Putting it inside `src/<package>/`,
+  or wiring the console script, ships a `changeset` command onto the PATH
+  of anyone who installs the library. A contributor-only tool has no
+  business in a published package.
 - **No stub grants secrets to a shared workflow.** None of the three
   reusable workflows reads `secrets.*` — they use only the auto-injected
   `github.token`, and `build-release.yml` and `version.yml` publish over
@@ -108,13 +106,12 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   full explanation aimed at onboarders.
 - **A `permissions:` ceiling on `workflow_call` is checked at parse
   time, before any `if:` runs — getting this wrong doesn't degrade, it
-  breaks the whole workflow.** Two real incidents from this one rule
-  during rehearsal: `version.yml`'s publish job briefly declared
-  `permissions: {id-token: write}` on itself, which broke **every**
-  run of `version.yml` for **every** onboarded repo, publish on or off,
-  with `startup_failure` and no message via the API — fixed by removing
-  that job-level `permissions:` entirely so the job now inherits
-  whatever the *consumer's own stub* grants. Separately, `environment:`
+  breaks the whole workflow.** A job declaring
+  `permissions: {id-token: write}` that the caller has not granted breaks
+  **every** run of `version.yml` for **every** onboarded repo, publish on
+  or off, with `startup_failure` and no message via the API. The publish
+  job therefore declares no `permissions:` at all and inherits whatever
+  the *consumer's own stub* grants. Likewise `environment:`
   (required on that job even when `publish` is `false`, since GitHub
   validates it at the same parse step) used to default to an empty
   string, which is invalid there too and broke every run the same way --
@@ -163,8 +160,7 @@ actually carries, and its workflow-inputs table wrongly listing
 
 ## Current Work
 
-`v1` is tagged, verified end to end against a real rehearsal repo
-(`em-release-control-test`), and ready to onboard production repos.
+`v1` is tagged and ready to onboard production repos.
 `v1.0.0` and `v1.0.1` have both shipped through the full cycle: PR →
 note check → release PR → (close/reopen to force checks under branch
 protection) → approve → merge → tag → build → GitHub Release. No

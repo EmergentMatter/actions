@@ -55,8 +55,8 @@ running.
 
 Do not push a breaking change out under `v1`.
 
-The sharpest example, because it cost us a long debugging session: **adding a
-`permissions:` requirement to a reusable workflow is a breaking change.** A
+**Adding a `permissions:` requirement to a reusable workflow is a breaking
+change.** A
 caller's `permissions:` is a ceiling for every job in the called workflow, so a
 job asking for more than the caller granted does not degrade — GitHub rejects
 the entire workflow when it parses it, and every run in that repo fails with
@@ -145,8 +145,7 @@ implied.
 in the same job run that pushes the release tag — not in a separately
 tag-triggered workflow. Reason: that tag is pushed using `GITHUB_TOKEN`
 credentials, and GitHub does not trigger further workflow runs from events
-created by `GITHUB_TOKEN` (found by the `em-release-control-test`
-end-to-end rehearsal). A `build-release.yml` stub listening for
+created by `GITHUB_TOKEN`. A `build-release.yml` stub listening for
 `push: tags: ["v*"]` alone would simply never fire on the automated path.
 
 `build-release.yml` still exists, but only for the two cases that aren't

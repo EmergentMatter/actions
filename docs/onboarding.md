@@ -10,10 +10,8 @@ If you haven't read the top-level concept yet, read the [README](../README.md)
 first — this doc assumes you know what a changelog note is and what the
 release PR does.
 
-`v1` is live: `v1.0.0` and `v1.0.1` are tagged, immutable, and `v1`
-points at the latest of them. The walkthrough below has been run end to
-end against a real rehearsal repo, not just read through — pin `@v1`
-with confidence, not as a placeholder for something unproven.
+`v1` is live: `v1.0.0` and `v1.0.1` are tagged and immutable, and `v1`
+points at the latest of them. Pin `@v1`.
 
 ## Before you start
 
@@ -49,9 +47,8 @@ The obvious design looks like: push a `v*` tag, let `build-release.yml`
 fire, done. **That design doesn't work — a tag pushed with
 `GITHUB_TOKEN` never triggers a workflow**, because GitHub suppresses it
 to prevent recursion. Shipped that way, every onboarded repo would tag a
-version and nothing would ever build or publish it, silently. This isn't
-theoretical: on the rehearsal repo, `v1.0.0` was tagged and **zero**
-tag-triggered runs appear anywhere in its history.
+version and nothing would ever build or publish it, silently.
+tag-triggered runs occur.
 
 So `version.yml` pushes the tag **and** builds and publishes the release
 **in the same run** (its final step, once it detects HEAD is the
@@ -64,9 +61,8 @@ redundant leftover you can skip copying.
 
 Put `changeset.py` inside `src/<package>/`, or wire it up as a
 `[project.scripts]` console-script entry, and it **ships inside the
-wheel**. This was caught during rehearsal by actually building one: doing
-either put a `changeset` command on the PATH of anyone who installs the
-library. `changeset.py` is a contributor-only tool — it has no business
+wheel**, putting a `changeset` command on the PATH of anyone who installs
+the library. `changeset.py` is a contributor-only tool — it has no business
 in a package your users install.
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
@@ -131,45 +127,34 @@ it's conditional even there:
   it — so don't add it back as boilerplate, even though it looks like
   it's "missing" next to the `ci:` job above it.
 
-## Publishing to a package index (optional, but read this before flipping it on)
+## Publishing to a package index (optional)
 
 Off by default — most repos stop at "GitHub Release with a wheel and
 sdist attached" and never touch this. If you do want `version.yml` to
-also publish to a package index over OIDC trusted publishing, get this
-right the first time: the mechanism behind it has already caused a
-system-wide outage once, during the rehearsal, and the fix is why the
-steps below are exactly this shape and no other.
+also publish to a package index over OIDC trusted publishing, follow the
+steps below exactly. Getting the permission wrong does not fail the publish
+— it stops every workflow in the repo from loading at all.
 
 **The rule underneath everything here:** `permissions:` on a
 `workflow_call` is a **ceiling for every job inside the called
 workflow**, not a per-job grant — and it is checked when the workflow is
-**parsed**, before any `if:` condition is ever evaluated. Two separate,
-real incidents came from this one rule:
+**parsed**, before any `if:` condition is ever evaluated. Two consequences
+follow, both already handled on this repo's side:
 
-- The reusable `version.yml` briefly declared `permissions: {id-token:
-  write}` directly on its own publish job, reasoning that the job needs
-  it to publish. **That broke every single run of `version.yml`, for
-  every onboarded repo, whether or not that repo published anything** --
-  because the job's own permission request exceeded what most callers'
-  stubs had granted, and a ceiling violation fails the whole workflow to
-  even start, not just the one job. It surfaced as `startup_failure`
-  with no further message available anywhere via the API. The fix:
-  the publish job now declares **no `permissions:` of its own** and
-  instead inherits whatever the *consumer's own stub* granted — so a
-  repo that never asked for `id-token: write` never runs into this at
-  all, and a repo that did gets exactly what it granted itself.
-- Separately, `environment:` — required on the publish job even when
-  `publish` is `false`, because GitHub validates it at the same
-  parse-time step — used to default to an empty string. An empty
-  environment name is invalid at parse time too, so it broke every run
-  the same way, for every repo, publishing or not. The fix: the shared
-  workflow now ships a non-empty default (`release`).
+- The shared `version.yml`'s publish job declares **no `permissions:` of
+  its own** and inherits whatever the consumer's stub granted. A job
+  requesting more than its caller granted fails the whole workflow to
+  start — for every onboarded repo, publishing or not — as
+  `startup_failure`, with no further message available via the API.
+- `environment:` is required on that job even when `publish` is `false`,
+  because GitHub validates it at the same parse-time step, and an empty
+  environment name is invalid. The shared workflow ships a non-empty
+  default (`release`).
 
-Both are fixed on this repo's side today. What's left is on your side:
-**a repo enabling `publish: true` without also granting `id-token: write`
-on its own stub doesn't get a clean error — it gets a job that runs, an
-OIDC token that comes back empty, and a publish step that fails.** Get it
-right the first time:
+What is left on your side: **a repo enabling `publish: true` without also
+granting `id-token: write` on its own stub gets no clean error — the job
+runs, the OIDC token comes back empty, and the publish step fails.**
+
 
 1. **Add `id-token: write` to the `version:` job's `permissions:`
    block on your own stub.** This is the only place it can come from now
@@ -269,10 +254,9 @@ always generates the random `+hex` form; that's the one you'll actually
 see, and it exists specifically so contributors never have to make a
 naming decision or worry about a collision.
 
-**Gotcha to expect, not a bug to work around:** anything you drop into
-`changelog.d/` that isn't a properly-named note — a stray file, a typo'd
-extension, an unrecognized level — fails the release job loudly rather
-than being silently ignored. That's the intended behavior.
+Anything in `changelog.d/` that isn't a properly-named note — a stray
+file, a typo'd extension, an unrecognized level — fails the release job
+loudly rather than being silently ignored. That is intended.
 
 ## Worked example: emergent-matter-materials
 
@@ -387,7 +371,7 @@ section above — this is usually a stray file that shouldn't be there at
 all). If `sync_version.py --check` fails, either a declared file/symbol
 doesn't exist as written, or you have a real drift to fix.
 
-## Gotcha: installed metadata vs. the source tree
+## Installed metadata versus the source tree
 
 `emergent-matter-materials` also has
 `test_installed_package_metadata_matches_module_version`, which checks
@@ -446,9 +430,7 @@ prefixed: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
 required check there. Anyone who copies check names off a push run
 instead of a PR run ends up with four required contexts that no PR can
 ever produce, and `main` is blocked from merging anything, permanently,
-until someone notices and fixes the list. (Verified on the rehearsal
-repo's actual branch protection config — the four contexts above are
-copied from it exactly.)
+until someone notices and fixes the list.
 
 The exact four names above assume `templates/ci.yml` copied in as-is
 (job ids `lint` / `test` / `build`). If your repo already had its own
@@ -473,11 +455,11 @@ in rather than discovering it mid-release:
    release tag, and in the same `version.yml` run, builds and publishes
    it.
 
-Verified end to end on the rehearsal repo: a PR without a changelog note
-was refused with *"the base branch policy prohibits the merge"* until
-the `skip-changelog` label was applied; `v1.0.1` was tagged and released
-with a wheel and sdist attached to the GitHub Release; and
-`changelog.d/` was back down to just `.gitkeep` immediately afterward.
+With protection configured, a pull request without a changelog note is
+refused with *"the base branch policy prohibits the merge"* until the
+`skip-changelog` label is applied. Merging the release PR tags the version,
+attaches a wheel and sdist to the GitHub Release, and leaves `changelog.d/`
+holding only `.gitkeep`.
 
 ## After onboarding
 
