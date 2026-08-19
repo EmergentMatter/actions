@@ -67,7 +67,7 @@ Writes the version into every location the repo declares, and nothing else.
 |---|---|
 | `changelog-check.yml` | `notes-dir`=`changelog.d`, `skip-label`=`skip-changelog`, `bot-actors`=`dependabot[bot],github-actions[bot]`, `python-version`=`3.13` |
 | `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name |
-| `build-release.yml` | `actions-ref`=`v1`, `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name |
+| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name — **no `actions-ref`**: it never checks out this repo's `scripts/` |
 
 Consumers pin `@v1` — never a branch (P1) — and pass `actions-ref` matching that pin, on
 **every** stub that has it. There is no context giving a reusable workflow its own ref:
@@ -155,6 +155,10 @@ jobs:
   version:
     needs: ci
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      # MUST match the @ref above; the two change together. Add
+      # `id-token: write` to permissions below only if this repo publishes.
+      actions-ref: v1
     permissions: { contents: write, pull-requests: write }
     # NO `secrets: inherit` here, deliberately. None of the three shared
     # workflows reads `secrets.*` — they use only the auto-injected
