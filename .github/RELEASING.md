@@ -7,144 +7,6 @@ that, see [`README.md`](../README.md) and
 
 ## Merging to `main` is not releasing
 
-This is the same rule this whole repo tells every consumer: a PR merging
-to `main` never releases anything by itself. That's true here too, for
-the same reason, at higher stakes. Work lands on `main` through a
-reviewed PR and changes nothing for anyone -- the pin exists precisely
-so `main` can be a normal working branch. **Moving `v1` is a separate,
-deliberate act**, because the instant it moves, every repo pinned to it
-runs the new code on its next run -- around thirty repos, none of them
-doing anything to trigger it. That makes moving `v1` the single
-highest-blast-radius action anyone can take against this system, and
-it's why the rest of this document treats it as its own procedure with
-its own owners, not a side effect of merging.
-
-## Promoting a `v1.x.y` release
-
-Restricted to the code owners named by the `v1*` tag ruleset --
-@telafifi, @evanmj, @ecarrig:
-
-```bash
-git checkout main && git pull
-
-# 1. Immutable version tag, annotated, message says what changed FOR CONSUMERS
-git tag -a v1.1.0 -m "..."
-git push origin v1.1.0
-
-# 2. Move the pin consumers actually follow
-git tag -f v1
-git push -f origin v1
-```
-
-Optionally create a GitHub Release on `v1.1.0` so consumers have a
-changelog to read. Both tag pushes above are enforced, not just
-convention -- see "Branch and tag protection, as configured today"
-below.
-
-## Versioning rules for this repo
-
-- **`v1.x.y`** -- anything backwards-compatible for a consumer: bug
-  fixes, new optional inputs, internal changes.
-- **A new `v2` tag** -- anything that breaks an existing stub: a renamed
-  or removed input, a changed default, a newly required permission.
-  Consumers migrate by editing their pin, deliberately, instead of
-  finding their pipeline broken one morning. Do **not** push a breaking
-  change out under `v1`.
-
-The sharpest concrete example of a breaking change, because it's the one
-this repo already lived through: **adding a `permissions:` requirement
-to a reusable workflow is breaking**, not additive. A caller that hasn't
-granted the new permission doesn't get a degraded run -- it gets
-`startup_failure` on every single run, because a `workflow_call`
-permissions ceiling is validated when the workflow is parsed, before any
-`if:` runs. See `docs/onboarding.md`'s "Publishing to a package index"
-section for the incident that taught us this.
-
-## Why this isn't automated
-
-Stated plainly so it isn't mistaken for an oversight: a workflow could,
-in principle, move `v1` automatically the moment a `v1.x.y` tag is
-pushed. It doesn't, because `GITHUB_TOKEN` runs as `github-actions[bot]`,
-which is not a repository admin, and the `v1*` tag ruleset blocks
-updating those refs for anyone else. Granting the bot an Integration
-bypass would let *any* workflow in this repo move `v1` -- which gives
-away the exact protection the ruleset exists to provide, for the
-convenience of skipping one manual `git push -f`. Revisit only if this
-repo gets quiet enough that hand-verifying the request is a bottleneck,
-and don't weaken the tag rules to get there.
-
-Worth noting separately: this repo can't dogfood its own release-control
-system to release itself -- doing so would need a working `v1` already,
-to release the commit that becomes `v1`.
-
-## Branch and tag protection, as configured today
-
-Documented here so it can be re-created or audited without reverse
-engineering it from GitHub's settings UI:
-
-- **`main` branch protection**: required status checks `lint` and
-  `test`; at least one approving review; code-owner review required; no
-  force pushes; no deletions.
-- **Code owners can merge without a separate approval**
-  (`enforce_admins: false`). Worth stating the tradeoff honestly rather
-  than glossing over it: classic branch protection can't separate "skip
-  the review" from "skip a failing check" into two different bypasses --
-  a code owner merging without waiting for another reviewer can, by the
-  same mechanism, also merge past a failing check. It's an escape hatch
-  for exactly the three code owners, and using it to skip a real failure
-  should be rare and deliberate, not routine.
-- **`v1*` tag ruleset** ("Protect `v1` release tags", covering
-  `refs/tags/v1` and `refs/tags/v1.*`): blocks deletion, non-fast-forward
-  pushes, and update -- i.e. moving or removing either kind of tag at
-  all -- with bypass limited to the repository-admin role. This is the
-  mechanism "Why this isn't automated" above depends on: `github-actions[bot]`
-  isn't in that bypass list, so no workflow running as `GITHUB_TOKEN` can
-  move `v1`, automated or not.
-- **`.github/CODEOWNERS`** covers `.github/workflows/`, `scripts/`,
-  `templates/`, and `CONTRACT.md` -- the parts that execute in other
-  repos or define the contract they depend on. Everything else in this
-  repo (docs included) is owned too, by the repo-wide `*` entry, but
-  those four paths are called out explicitly because a change there is a
-  change to every consuming repo's CI.
-
-## Tag strategy
-
-- **Consumers pin `@v1`, never a branch.** (P1, CONTRACT.md) Every
-  `uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1` in the org
-  resolves through this one tag.
-- **`v1` is a moving major tag.** Every `v1.x.y` release re-points `v1` to
-  that commit. This is the standard GitHub Actions major-tag convention —
-  it's what lets consumers get compatible fixes without editing every
-  stub in the org.
-- **`v1.0.0`, `v1.1.0`, etc. are immutable point tags.** They are cut once
-  and never re-pointed. `v1` always points at the latest one.
-- **The `v1` tag is protected** by a repository ruleset ("Protect v1 release
-  tags") covering `refs/tags/v1` and `refs/tags/v1.*`, blocking deletion,
-  non-fast-forward and update, with bypass limited to repository admins — in
-  practice the owners in [`CODEOWNERS`](CODEOWNERS). Consumer stubs deliberately
-  carry **no** `secrets: inherit` on the jobs that call this repo's
-  workflows (CONTRACT.md's Consumer stub block — `secrets: inherit`, where
-  it appears at all, sits on the consumer's own local `ci:` job, never on
-  the call into `EmergentMatter/actions/...@v1`), so a compromised or
-  force-pushed `v1` cannot read a consuming repo's named secrets. It is
-  still a real blast radius, just a smaller one: whatever `v1` resolves to
-  runs with the `contents: write` / `pull-requests: write` /
-  (when a repo has opted into `publish: true`) `id-token: write`
-  permissions that repo's own stub grants — enough to push arbitrary tags,
-  open or merge PRs, and, for any repo that publishes, mint an OIDC token
-  scoped to that repo's trusted-publisher config. `id-token: write` is
-  granted directly by the consumer's stub and doesn't route through
-  `secrets: inherit` at all, so it isn't mitigated by the point above —
-  it's the reason tag protection stays a hard prerequisite (see the risk
-  list already raised with the user) rather than something the
-  `secrets: inherit` removal made optional.
-  Point releases (`v1.x.y`) should be protected too, for the same reason
-  applied to anyone who pinned one directly during testing — but `v1` is
-  the one that matters in the common case, since it's what every stub
-  actually references.
-
-## Merging to `main` is not releasing
-
 Work lands on `main` through a reviewed pull request and **changes nothing for
 any consuming repo.** Moving `v1` is a separate, deliberate act.
 
@@ -215,6 +77,42 @@ there.
 Dogfooding release control on this repo is also circular: it would need a
 working `v1` to release itself with.
 
+## Tag strategy
+
+- **Consumers pin `@v1`, never a branch.** (P1, CONTRACT.md) Every
+  `uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1` in the org
+  resolves through this one tag.
+- **`v1` is a moving major tag.** Every `v1.x.y` release re-points `v1` to
+  that commit. This is the standard GitHub Actions major-tag convention —
+  it's what lets consumers get compatible fixes without editing every
+  stub in the org.
+- **`v1.0.0`, `v1.1.0`, etc. are immutable point tags.** They are cut once
+  and never re-pointed. `v1` always points at the latest one.
+- **The `v1` tag is protected** by a repository ruleset ("Protect v1 release
+  tags") covering `refs/tags/v1` and `refs/tags/v1.*`, blocking deletion,
+  non-fast-forward and update, with bypass limited to repository admins — in
+  practice the owners in [`CODEOWNERS`](CODEOWNERS). Consumer stubs deliberately
+  carry **no** `secrets: inherit` on the jobs that call this repo's
+  workflows (CONTRACT.md's Consumer stub block — `secrets: inherit`, where
+  it appears at all, sits on the consumer's own local `ci:` job, never on
+  the call into `EmergentMatter/actions/...@v1`), so a compromised or
+  force-pushed `v1` cannot read a consuming repo's named secrets. It is
+  still a real blast radius, just a smaller one: whatever `v1` resolves to
+  runs with the `contents: write` / `pull-requests: write` /
+  (when a repo has opted into `publish: true`) `id-token: write`
+  permissions that repo's own stub grants — enough to push arbitrary tags,
+  open or merge PRs, and, for any repo that publishes, mint an OIDC token
+  scoped to that repo's trusted-publisher config. `id-token: write` is
+  granted directly by the consumer's stub and doesn't route through
+  `secrets: inherit` at all, so it isn't mitigated by the point above —
+  it's the reason tag protection stays a hard prerequisite (see the risk
+  list already raised with the user) rather than something the
+  `secrets: inherit` removal made optional.
+  Point releases (`v1.x.y`) should be protected too, for the same reason
+  applied to anyone who pinned one directly during testing — but `v1` is
+  the one that matters in the common case, since it's what every stub
+  actually references.
+
 ## Branch protection, as configured
 
 Recorded so it can be audited or re-created:
@@ -231,6 +129,15 @@ protection cannot separate "owners skip the review requirement" from "owners
 can merge past a failing check." Turning off admin enforcement grants both. It
 is an escape hatch; using it to bypass a red check should be rare, deliberate,
 and explained in the pull request.
+
+[`.github/CODEOWNERS`](CODEOWNERS) is what makes "code-owner review" and the
+tag ruleset's admin bypass mean the same three people everywhere: it names
+@telafifi, @evanmj, @ecarrig for the repo as a whole, and calls out
+`.github/workflows/`, `scripts/`, `templates/`, and `CONTRACT.md` explicitly
+-- the parts that execute inside other repos' CI or define the contract they
+depend on -- even though the repo-wide entry already covers them, so a reviewer
+skimming CODEOWNERS sees the highest-blast-radius paths named, not just
+implied.
 
 ## Build + release run inline in `version.yml`, not on tag push
 
@@ -259,3 +166,16 @@ even drafted. The human escape hatch — close the release PR and
 immediately reopen it to force its checks to run — is documented in full
 in `templates/CONTRIBUTING.md`, which every consuming repo carries; this
 file doesn't repeat it beyond this pointer.
+
+## What a consumer actually sees
+
+None of the above is visible from a consuming repo -- this is where it
+surfaces. A consumer pins `EmergentMatter/actions/.github/workflows/<name>.yml@v1`
+and, on the stubs that take it, passes a matching `actions-ref: v1` (there's
+no context field that lets a reusable workflow discover its own ref, so this
+is passed explicitly -- see `docs/onboarding.md`). **Both change together, and
+only when migrating to a new major** (`v2`, once one exists): edit the `@ref`
+at the end of every `uses:` line in every stub, and the matching
+`actions-ref:` input alongside it, in the same PR. A `v1.x.y` promotion never
+touches a consumer's stub at all -- that's the entire point of pinning the
+moving major tag instead of a point release.
