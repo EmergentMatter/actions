@@ -75,6 +75,15 @@ jobs:
       - name: Checkout
         if: steps.exempt.outputs.is-exempt == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Pin to the PR head commit, not the default refs/pull/N/merge.
+          # This job validates the notes THIS PR adds, not a hypothetical
+          # merge result — and the merge ref is computed lazily by GitHub,
+          # so checking it out immediately after the PR event can race
+          # actions/checkout's retries and fail with "couldn't find remote
+          # ref" even though the PR is perfectly mergeable. The head sha
+          # always exists the instant the PR does.
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: List files added by this PR
         if: steps.exempt.outputs.is-exempt == 'false'
