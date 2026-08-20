@@ -450,10 +450,9 @@ check, or push straight to `main` and skip every check entirely. Turn on
 protection for `main` (repo Settings → Branches) with:
 
 - **Require these status checks to pass before merging**, using **these
-  four contexts, verbatim**:
+  three contexts, verbatim**:
 
   ```
-  lint
   test
   build
   changelog
@@ -463,8 +462,48 @@ protection for `main` (repo Settings → Branches) with:
 - **Do not allow direct pushes to `main`** (no bypassing via a force
   push or an un-reviewed merge).
 
-All four are bare job ids: `lint`/`test`/`build` are `ci.yml`'s job names,
+All three are bare job ids: `test` and `build` are `ci.yml`'s job names,
 and `changelog` is the job id in `changelog-check.yml`'s stub.
+
+**`lint` is deliberately absent.** It gets added later, in step 3 of the
+staged rollout below — not now.
+
+### Staging the lint rollout
+
+`templates/ci.yml` ships the lint job with `continue-on-error: true`. That
+line is often misread as "lint can't block anything yet." It cannot do
+that, and the difference is worth being exact about, because it decides
+whether the rollout works:
+
+| Level | On a lint failure |
+|---|---|
+| Job conclusion | `failure` |
+| Workflow **run** conclusion | `success` ← the only thing `continue-on-error` changes |
+| **Check run** conclusion | `failure` ← what branch protection matches |
+
+The check still fails. So adding `lint` to required contexts blocks PRs
+immediately, `continue-on-error` or not — which is exactly the pile-of-
+unrelated-findings problem the staging exists to avoid.
+
+What that line actually buys is that a lint failure doesn't fail the whole
+run, so it doesn't take down `version.yml`'s `needs: ci` and stall a
+release while the backlog is still being cleared.
+
+So the two levers move together:
+
+1. **Onboard.** Keep `continue-on-error`, require only `test` / `build` /
+   `changelog`. Lint runs and is visible to anyone who looks, but gates
+   nothing.
+2. **Clear the backlog.** One dedicated PR that fixes the existing
+   findings and does nothing else, so the diff is reviewable as "lint
+   fixes" rather than tangled into a feature change.
+3. **Enforce.** Delete `continue-on-error` from the lint job *and* add
+   `lint` to the required contexts. Both, in the same window.
+
+Doing step 3 by halves is worse than not doing it. Removing the line
+without adding the context leaves lint unenforced on PRs while newly able
+to stall a release; adding the context without removing the line enforces
+on PRs but still lets a lint failure sail through the release path.
 
 ### The name you see is not the name you type
 
@@ -487,11 +526,11 @@ GitHub shows its job names bare: `lint`, `test`, `build`. On a push to
 checks: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
 **never appear on a pull request run** and so can never satisfy a
 required check there. Anyone who copies check names off a push run
-instead of a PR run ends up with four required contexts that no PR can
+instead of a PR run ends up with required contexts that no PR can
 ever produce, and `main` is blocked from merging anything, permanently,
 until someone notices and fixes the list.
 
-The exact four names above assume `templates/ci.yml` and
+The exact names above assume `templates/ci.yml` and
 `templates/stub-changelog-check.yml` copied in as-is (job ids `lint` /
 `test` / `build` / `changelog`). If your repo already had its own CI
 with different job names before onboarding, use those names instead —
