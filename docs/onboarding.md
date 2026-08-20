@@ -154,12 +154,6 @@ the check needs come from the job's own `permissions:` block, shown
 above. Don't drop it: without it, the check's own checkout of the PR head
 and its `gh api` call to list PR files both fail.
 
-An old stub still on
-`uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1` —
-the `workflow_call` shape, with `actions-ref` — keeps working: that file
-is kept in this repo as a deprecated shim that forwards to the composite
-action. New onboarding should use the composite-action stub above.
-
 Notice `secrets: inherit` sits on the `ci:` job, not on `version:`, and
 it's conditional even there:
 
@@ -472,40 +466,16 @@ protection for `main` (repo Settings → Branches) with:
 All four are bare job ids: `lint`/`test`/`build` are `ci.yml`'s job names,
 and `changelog` is the job id in `changelog-check.yml`'s stub.
 
-### The name you SEE is not the name you TYPE
+### The name you see is not the name you type
 
-This trips people up every time, so be explicit about it. A check has two
-different strings, and branch protection only ever matches the second:
+The Checks tab shows the workflow's `name:` prepended to the context, and
+branch protection matches the context only. `Changelog / changelog` in the
+UI is the context `changelog`. Read them with `gh pr checks <PR>`, which
+prints contexts, rather than copying off the UI.
 
-| | Where you see it | Old `workflow_call` shape | Current composite-action shape |
-|---|---|---|---|
-| **Display name** | the PR's Checks tab | `Changelog / changelog / Require a changelog note` | `Changelog / changelog` |
-| **Context** | what you type into branch protection | `changelog / Require a changelog note` | `changelog` |
-
-The display name is the context with the **workflow's `name:` prepended**.
-That is where the extra segment comes from — so the old shape looked like
-three segments in the UI while its context was only ever two, and the
-current shape looks like two while its context is one.
-
-Type the **context**. Copying the display name off the Checks tab is the
-single most common way to end up with a required check that no run can
-ever produce.
-
-The reliable way to read a context, rather than eyeballing the UI:
-
-```bash
-gh pr checks <PR>          # prints contexts, not display names
-```
-
-This assumes your repo is on the current stub (`uses:
-EmergentMatter/actions/changelog-check@v1`, see above). If you're setting
-up protection on a repo still pinned to the deprecated
-`uses: .../workflows/changelog-check.yml@v1` path, that stub's checks
-still display the old three-segment name — require
-`changelog / Require a changelog note` instead of the bare `changelog`
-until you migrate the stub, then swap the required context in the same
-window you flip the stub (don't let the two drift, or `main` blocks on a
-context that can no longer be produced).
+If you ever rename a job or change a stub's shape, swap the required
+context in the same window — don't let the two drift, or `main` blocks on
+a context that can no longer be produced.
 
 **Still get these from a pull request run, not a push-to-main run —
 they are not the same strings.** `ci.yml` (per `templates/ci.yml`)

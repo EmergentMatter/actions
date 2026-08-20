@@ -36,10 +36,9 @@ own `secrets.GITHUB_TOKEN`:
 
 ```
 EmergentMatter/actions  (this repo -- shared, passive, no secrets)
- ├── .github/workflows/changelog-check.yml   deprecated shim, forwards to the action below
  ├── .github/workflows/version.yml           ─┐
  ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
- ├── changelog-check/action.yml              composite action -- the PR gate's current home
+ ├── changelog-check/action.yml              composite action -- the PR gate
  └── scripts/{compute_bump,sync_version}.py     stdlib-only, called by the above
         ▲
         │ uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1

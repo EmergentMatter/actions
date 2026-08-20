@@ -50,9 +50,6 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   and so its check name is two segments rather than three.
 - `.github/workflows/{version,build-release}.yml` — the two reusable
   `workflow_call` workflows consuming repos pin to `@v1`.
-- `.github/workflows/changelog-check.yml` — DEPRECATED shim forwarding to
-  the composite action above, kept so stubs still on the old `uses:` path
-  keep working. Do not add logic here.
 - `templates/` — everything a consuming repo copies in at onboarding time:
   the three workflow stubs, `changeset.py` (→ `scripts/changeset.py` at
   the consumer's root, **not** inside their package), `CONTRIBUTING.md`,

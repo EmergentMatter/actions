@@ -6,26 +6,10 @@ on:
 jobs:
   changelog:
     runs-on: ubuntu-latest
+    # Required: changelog-check is a composite action and cannot declare
+    # its own permissions.
     permissions:
       contents: read
       pull-requests: read
     steps:
-      # Composite action, not a reusable workflow_call: no `actions-ref`
-      # input to keep in sync with the `@ref` below -- a composite
-      # action's own repo is checked out for it automatically.
-      #
-      # It also shortens the check name. The name shown in the Checks tab
-      # and the context branch protection matches are DIFFERENT strings:
-      # this shape displays as `Changelog / changelog` with the context
-      # `changelog`, where the old workflow_call shape displayed as
-      # `Changelog / changelog / Require a changelog note` with the
-      # context `changelog / Require a changelog note`. Put the CONTEXT
-      # into branch protection, never the displayed name.
       - uses: EmergentMatter/actions/changelog-check@v1
-    # No `secrets: inherit` — changelog-check only ever uses the
-    # auto-injected github.token, never secrets.*. This trigger also runs
-    # on pull_request, which can be a fork PR in a public repo; omitting
-    # an unused grant here costs nothing and forecloses that risk outright
-    # rather than relying on platform defaults. Add it back only if this
-    # repo's own copy of the check grows a step that genuinely needs a
-    # named secret.

@@ -3,43 +3,8 @@ description: >-
   Fails a PR that doesn't add a changelog.d/ note, unless the PR carries
   skip-label or was opened by one of bot-actors.
 
-# Composite action — see CONTRACT.md "Composite actions" for the input
-# table. This used to be a `workflow_call` reusable workflow
-# (.github/workflows/changelog-check.yml, kept as a deprecated shim that
-# calls this action so old stubs don't break).
-#
-# Why composite over workflow_call: a composite action's own repo is
-# checked out by the runner for it, and `github.action_path` points at
-# that checkout -- so scripts/compute_bump.py is reachable directly below
-# as `${{ github.action_path }}/../scripts/compute_bump.py`. That deletes
-# the entire actions-ref mechanism the reusable-workflow version needed:
-# the `actions-ref` input, the job.workflow_sha-with-actions-ref-fallback
-# "Validate the shared-workflow ref" step, and the separate "Checkout
-# EmergentMatter/actions scripts" step.
-#
-# It also shortens the name. Two different strings matter here and they
-# are easy to confuse: the DISPLAYED name in the Checks tab, and the
-# CONTEXT that branch protection matches on. The displayed name is the
-# context with the workflow's `name:` prepended.
-#
-#   workflow_call shape:  display `Changelog / changelog / Require a
-#                         changelog note`, context `changelog / Require a
-#                         changelog note`
-#   this composite shape: display `Changelog / changelog`, context
-#                         `changelog`
-#
-# See docs/onboarding.md — typing a displayed name into branch protection
-# is the documented way to block `main` permanently.
-#
-# Enforcement is NOT delegated to scientific-python/action-towncrier-changelog
-# as the sole gate -- that action reads its config (enabled/skip-label) from a
-# `[tool.<BOT_USERNAME>.towncrier_changelog]` section in the CONSUMER's
-# pyproject.toml, which templates/pyproject-snippet.toml does not declare --
-# so relying on it alone would silently no-op (its script exits 0 when that
-# section is missing or `enabled` is unset). Verified no-op, and it cost a
-# Docker pull on every PR for nothing: dropped entirely rather than kept as
-# a best-effort step. The real gate is native, below: the "List files added
-# by this PR" step plus compute_bump.py's grammar validation.
+# Inputs are documented in CONTRACT.md. Call it from a job that triggers
+# `on: pull_request` — see templates/stub-changelog-check.yml.
 
 inputs:
   notes-dir:
@@ -55,31 +20,17 @@ inputs:
     description: Python version used to run compute_bump.py's grammar validation.
     default: "3.13"
 
-# Composite actions cannot declare `permissions:` -- there is no `runs.
-# permissions` key. The permissions this action needs (contents: read to
-# check out the PR head commit, pull-requests: read to list PR files via
-# `gh api`) come from the CALLING JOB's `permissions:` block instead. See
-# templates/stub-changelog-check.yml.
+# A composite action cannot declare `permissions:` — there is no
+# `runs.permissions` key. `contents: read` and `pull-requests: read` must
+# come from the calling job.
 
 runs:
   using: composite
   steps:
-    # The reusable-workflow version of this check carried
-    # `if: github.event_name == 'pull_request'` on its JOB. A composite
-    # action has no job to hang that on, and losing it silently is worse
-    # than it sounds: with a non-PR event, `github.event.pull_request` is
-    # empty, so `ref:` below resolves to "" (which actions/checkout treats
-    # as the DEFAULT BRANCH rather than erroring) and PR_NUMBER resolves to
-    # "" (which turns the files query into `repos/O/R/pulls//files` and
-    # dies on a bare 404). The gate would appear to run and check nothing
-    # recognisable.
-    #
-    # Fail loudly instead. Deliberately a failure, not a skip: a changelog
-    # gate that silently passes is the one outcome worth engineering
-    # against, since a broken-open gate and a working gate are both green.
-    # Correctly-configured callers never hit this -- the shipped stub
-    # triggers `on: pull_request` only, and the deprecated shim still has
-    # its job-level `if:` -- so this only catches genuine misuse.
+    # A composite action has no job-level `if:`, so this is a step. Fails
+    # rather than skips: on a non-PR event `github.event.pull_request` is
+    # empty, `ref:` below would silently become the default branch, and
+    # the check would appear to run while validating nothing.
     - name: Guard — pull_request events only
       shell: bash
       env:
@@ -89,13 +40,7 @@ runs:
         case "${EVENT_NAME}" in
           pull_request|pull_request_target) ;;
           *)
-            {
-              echo "::error::changelog-check only works on pull_request events (got '${EVENT_NAME}')."
-              echo "It reads github.event.pull_request to find the PR's head commit and its added"
-              echo "files; on any other event those are empty and the check cannot validate anything."
-              echo "Call it from a job whose workflow triggers 'on: pull_request'. See"
-              echo "templates/stub-changelog-check.yml."
-            } >&2
+            echo "::error::changelog-check needs a pull_request event (got '${EVENT_NAME}')." >&2
             exit 1
             ;;
         esac
@@ -104,7 +49,6 @@ runs:
       id: exempt
       shell: bash
       env:
-        EVENT_NAME: ${{ github.event_name }}
         ACTOR: ${{ github.actor }}
         BOT_ACTORS: ${{ inputs.bot-actors }}
         SKIP_LABEL: ${{ inputs.skip-label }}
@@ -113,8 +57,7 @@ runs:
         set -euo pipefail
         is_exempt=false
         reason=""
-        # Exact-segment match against the comma-separated bot-actors list —
-        # wrap both sides in delimiters so "bot" doesn't substring-match "robot".
+        # Delimiters on both sides so "bot" doesn't substring-match "robot".
         if [[ ",${BOT_ACTORS}," == *",${ACTOR},"* ]]; then
           is_exempt=true
           reason="actor '${ACTOR}' is in bot-actors"
@@ -129,13 +72,10 @@ runs:
       if: steps.exempt.outputs.is-exempt == 'false'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        # Pin to the PR head commit, not the default refs/pull/N/merge.
-        # This job validates the notes THIS PR adds, not a hypothetical
-        # merge result — and the merge ref is computed lazily by GitHub,
-        # so checking it out immediately after the PR event can race
-        # actions/checkout's retries and fail with "couldn't find remote
-        # ref" even though the PR is perfectly mergeable. The head sha
-        # always exists the instant the PR does.
+        # The PR head, not refs/pull/N/merge: this validates the notes THIS
+        # PR adds, and the merge ref is computed lazily, so checking it out
+        # right after the PR event can lose a race with checkout's retries
+        # and fail with "couldn't find remote ref" on a mergeable PR.
         ref: ${{ github.event.pull_request.head.sha }}
 
     - name: List files added by this PR
@@ -149,63 +89,37 @@ runs:
         NOTES_DIR: ${{ inputs.notes-dir }}
       run: |
         set -euo pipefail
-        # Run the query as its own command and check its status BEFORE
-        # reading the result, rather than `mapfile < <(gh api ...)`.
-        # Process substitution discards the inner exit code -- neither
-        # `set -e` nor `pipefail` sees it -- so a failed query used to
-        # yield an EMPTY list, which this step then reported as "no
-        # changelog note was added". A permissions or API problem would
-        # surface to the contributor as an accusation that they forgot a
-        # note they had actually written.
-        #
-        # This matters more since the check became a composite action. As
-        # a `workflow_call` workflow it declared its own job `permissions:`
-        # and a caller granting less failed at PARSE time with a clear
-        # startup_failure. Composite actions have no `runs.permissions`
-        # key, so that early check is gone and a stub missing
-        # `pull-requests: read` now fails right here instead -- which is
-        # precisely why this needs to say so plainly.
+        # Check the query's exit status explicitly. `mapfile < <(gh api ...)`
+        # hides it from both `set -e` and `pipefail`, so a failed query
+        # yields an empty list and gets reported below as "no note added" —
+        # telling a contributor they forgot a note they actually wrote.
         gh_err="${RUNNER_TEMP:-/tmp}/changelog-check-gh-err.txt"
         if ! added_raw="$(
           gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
             -q '.[] | select(.status == "added") | .filename' 2>"${gh_err}"
         )"; then
           {
-            echo "::error::Could not list the files in PR #${PR_NUMBER} of ${REPO}."
-            echo "The changelog note requirement could NOT be evaluated -- this is NOT a"
-            echo "statement about whether you added a note."
-            echo
-            echo "Most likely the calling job is missing the required permission block:"
-            echo
-            echo "    permissions:"
-            echo "      contents: read"
-            echo "      pull-requests: read"
-            echo
-            echo "A composite action cannot declare its own permissions, so they have to come"
-            echo "from the job that calls it. See templates/stub-changelog-check.yml."
-            echo
-            echo "gh api said:"
+            echo "::error::Could not list the files in PR #${PR_NUMBER} of ${REPO}, so the"
+            echo "changelog requirement could not be evaluated. This is NOT a statement about"
+            echo "whether you added a note. Most likely the calling job is missing:"
+            echo "    permissions: { contents: read, pull-requests: read }"
             cat "${gh_err}" || true
           } >&2
           exit 1
         fi
 
-        # Preserve the original semantics exactly: no output means a
-        # zero-length array. A bare `mapfile <<< "${added_raw}"` would
-        # instead yield one empty-string element, because a here-string
-        # always appends a newline.
+        # No output must mean a zero-length array; a bare here-string would
+        # give one empty-string element instead.
         added=()
         if [ -n "${added_raw}" ]; then
           mapfile -t added <<< "${added_raw}"
         fi
-        # Only asks "did this PR add anything under notes-dir/ at all?" —
-        # deliberately NOT matching the *.major.md|minor.md|patch.md
-        # grammar here. A note with a typo'd level (e.g. `+abcd.banana.md`)
-        # must still pass this gate, so the failure surfaces as
-        # compute_bump.py's "unrecognized bump level" a few steps down —
-        # the script that owns that grammar — rather than this step's
-        # generic "no note was added," which would send a contributor who
-        # DID add a note looking for the wrong problem.
+
+        # Only asks "was anything added under notes-dir/?" — deliberately NOT
+        # the *.major|minor|patch.md grammar. A typo'd level must reach
+        # compute_bump.py's "unrecognized bump level" below rather than this
+        # step's generic "no note was added", which would send a contributor
+        # who DID add a note looking for the wrong problem.
         matches=()
         for f in "${added[@]}"; do
           case "$f" in

@@ -68,12 +68,8 @@ Writes the version into every location the repo declares, and nothing else.
 | `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name |
 | `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name — **no `actions-ref`**: it never checks out this repo's `scripts/` |
 
-`changelog-check.yml` used to be in this table. It's now a **deprecated shim** that forwards to
-the composite action described below and no longer does the check's work itself — kept only so a
-consumer stub still pinned to `uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1`
-keeps working after `v1` moves onto a commit past this rewrite. Its `actions-ref` input is still
-accepted (so old stubs that pass it don't fail to parse) but is ignored. Don't add new inputs to
-it or grow it back into doing real work — new behavior belongs in the composite action.
+The changelog check is not in this table: it is a composite action, not a `workflow_call`
+workflow. See "Composite action inputs" below.
 
 Consumers pin `@v1` — never a branch (P1). `version.yml` additionally passes `actions-ref`
 matching that pin. There is no context giving a reusable workflow its own ref:
@@ -129,9 +125,8 @@ On push to `main` in the consuming repo:
      lockfile refresh. Nothing else. (R3)
    - Auto-apply the `skip-label` value at creation so the release PR exempts its own note
      check. (E6) **`version.yml`'s `skip-label` input must be set to the same value passed to the
-     changelog check's `skip-label` input** (`changelog-check/action.yml`'s, or the deprecated
-     `changelog-check.yml` shim's, if a stub is still on the old path) — a repo that overrides one
-     and not the other breaks E6 silently. Defense in depth: the release PR is authored by
+     changelog check's `skip-label` input** (`changelog-check/action.yml`'s) — a repo that
+     overrides one and not the other breaks E6 silently. Defense in depth: the release PR is authored by
      `github-actions[bot]`, which the changelog check's default `bot-actors` already exempts
      independently.
 
@@ -205,8 +200,7 @@ jobs:
 | `scripts/compute_bump.py` | Notes → bump level → next version (V1, V2, V3) |
 | `scripts/sync_version.py` | Writing the version to every declared location, and nothing else (V4, V5) |
 | `.github/workflows/version.yml` | The release-PR loop and tagging (R1–R5, S1) |
-| `changelog-check/action.yml` | The PR gate (E2, E4, E5, E6) — the current implementation |
-| `.github/workflows/changelog-check.yml` | Deprecated shim forwarding to `changelog-check/action.yml`, kept so stubs still pinned to the old `uses:` path keep working |
+| `changelog-check/action.yml` | The PR gate (E2, E4, E5, E6) |
 | `.github/workflows/build-release.yml` | Build, GitHub Release, opt-in publish (S2, S3, S4) |
 | `templates/` | What gets copied into consuming repos — changes here propagate by hand |
 
