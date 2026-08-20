@@ -58,7 +58,7 @@ Consumers always pin `@v1` — never a branch.
 
 ## Opting a repo in
 
-Onboarding a repo is **five files, a config block, and a label**. The full
+Onboarding a repo is **six files, a config block, and a label**. The full
 walkthrough — using `emergent-matter-materials`'s three-version-strings
 case as the worked example — is [`docs/onboarding.md`](docs/onboarding.md).
 The contributor-facing half (what you do day to day once a repo is

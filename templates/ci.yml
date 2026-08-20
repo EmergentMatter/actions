@@ -6,13 +6,12 @@
 # consistent names across every repo that copies this (C4), so "the lint
 # job" and "the build job" mean the same thing everywhere:
 #
-#   lint  - non-blocking for now (continue-on-error below). Turning a
-#           linter on across an established codebase produces a pile of
-#           findings unrelated to whatever PR happens to trip the check
-#           first, and a check people learn to click past is worse than no
-#           check. Land this non-blocking, clear the existing backlog in
-#           its own dedicated PR, THEN remove continue-on-error so it
-#           actually blocks. Don't skip straight to blocking.
+#   lint  - advisory during rollout; see the staged-rollout note on the
+#           lint job below. Turning a linter on across an established
+#           codebase produces a pile of findings unrelated to whatever PR
+#           happens to trip the check first, and a check people learn to
+#           click past is worse than no check. Clear the backlog in its own
+#           dedicated PR before enforcing. Don't skip straight to blocking.
 #   test  - runs the repo's test suite. If there isn't one yet, it still
 #           runs (and passes) rather than being skipped outright — see the
 #           "no tests" branch below. The floor is never zero (C5).
@@ -49,8 +48,31 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
-    # Staged rollout: non-blocking until the existing lint backlog is
-    # cleared in its own PR. Remove this line once that's done.
+    # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking
+    # on pull requests, and believing otherwise gets the rollout backwards.
+    # Verified on a real run, not assumed:
+    #
+    #   job conclusion .................. failure
+    #   workflow RUN conclusion ......... success  <- all this line changes
+    #   CHECK RUN conclusion ............ failure  <- branch protection sees this
+    #
+    # So a failing lint job still reports a failed check and still blocks a
+    # PR the moment `lint` is a required status check. What this line
+    # actually buys is that a lint failure doesn't fail the whole run, so
+    # it doesn't take down `version.yml`'s `needs: ci` and stall a release
+    # while the backlog is still being cleared.
+    #
+    # Whether lint blocks PRs is controlled by ONE thing: whether `lint` is
+    # in the repo's required status checks. The two levers move together:
+    #
+    #   Phase 1  keep this line, and leave `lint` OUT of required contexts
+    #            -> advisory everywhere, visible to anyone who looks
+    #   Phase 2  clear the existing findings in a dedicated lint-only PR
+    #   Phase 3  delete this line AND add `lint` to required contexts
+    #            -> enforced on PRs and on the release path
+    #
+    # Deleting this line without adding the context leaves lint unenforced
+    # on PRs while newly able to stall a release — the worst of both.
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
