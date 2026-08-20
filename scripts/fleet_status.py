@@ -49,11 +49,14 @@ sys.modules["lint_gate"] = lint_gate
 _spec.loader.exec_module(lint_gate)
 
 ACTIONS_REPO = "EmergentMatter/actions"
+TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
+CHANGESET = "scripts/changeset.py"
 
 REMOVED_WORKFLOW_PATH = "actions/.github/workflows/changelog-check.yml@"
 COMPOSITE_ACTION_PATH = "actions/changelog-check@"
+VERIFY_WHEEL_PATH = "actions/verify-wheel@"
 
 # Pinned action versions whose action.yml declares `runs.using: node20`.
 # GitHub force-runs these on Node 24 and warns on every job. Add entries as
@@ -142,6 +145,75 @@ def check_naming(text: str | None) -> list[Finding]:
     return []
 
 
+def check_workflow_call(text: str | None) -> list[Finding]:
+    """ci.yml must be callable by reference or the release path never starts.
+
+    `version.yml` reaches it with `uses: ./.github/workflows/ci.yml`. A
+    workflow that isn't `workflow_call`-able fails at PARSE time, so every
+    push to main errors before a job runs -- and nothing about the repo
+    looks wrong until someone pushes.
+    """
+    if text is None:
+        return []
+    if re.search(r"^\s{2,4}workflow_call:", text, re.MULTILINE):
+        return []
+    return [
+        Finding(
+            "workflow_call",
+            "broken",
+            "ci.yml is not workflow_call-able; version.yml fails at parse time "
+            "on every push to main",
+        )
+    ]
+
+
+def check_verify_wheel(text: str | None) -> list[Finding]:
+    """A build job that only runs `uv build` proves less than it looks.
+
+    `uv build` reports success for a wheel containing nothing importable, so
+    without the verify step the build stage catches only builds that fail
+    outright -- not the "green tests, broken package" case it exists for.
+    """
+    if text is None or "uv build" not in text:
+        return []
+    if VERIFY_WHEEL_PATH in text:
+        return []
+    return [
+        Finding(
+            "verify",
+            "warn",
+            "build job runs `uv build` without verify-wheel; a wheel that builds "
+            "but installs nothing would pass. Add "
+            "`- uses: EmergentMatter/actions/verify-wheel@v1` after `uv build`.",
+        )
+    ]
+
+
+def check_changeset(text: str | None) -> list[Finding]:
+    """changeset.py is copied, and divergence is always a mistake.
+
+    Unlike ci.yml -- which repos legitimately customise -- every consumer's
+    copy of this contributor tool should be identical to the template. A
+    difference means a repo is running an old version, silently.
+    """
+    try:
+        template = (TEMPLATES / "changeset.py").read_text()
+    except OSError:
+        return []
+    if text is None:
+        return [Finding("changeset", "warn", f"no {CHANGESET}; contributors cannot write notes")]
+    if text != template:
+        return [
+            Finding(
+                "changeset",
+                "warn",
+                f"{CHANGESET} differs from templates/changeset.py -- it is copied at "
+                "onboarding and never re-synced, so this repo is on an older version",
+            )
+        ]
+    return []
+
+
 def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
     if ci_text is None or contexts is None:
         return []
@@ -169,12 +241,18 @@ def check_contexts(contexts: list[str] | None) -> list[Finding]:
 
 
 def evaluate(
-    ci_text: str | None, stub_text: str | None, contexts: list[str] | None
+    ci_text: str | None,
+    stub_text: str | None,
+    contexts: list[str] | None,
+    changeset_text: str | None = None,
 ) -> list[Finding]:
     return [
         *check_stub(stub_text),
+        *check_workflow_call(ci_text),
         *check_gate(ci_text, contexts),
         *check_contexts(contexts),
+        *check_verify_wheel(ci_text),
+        *check_changeset(changeset_text),
         *check_pins(ci_text),
         *check_naming(ci_text),
     ]
@@ -227,8 +305,9 @@ def inspect(repo: str) -> RepoReport:
     try:
         ci = fetch_file(repo, CI_FILE)
         stub = fetch_file(repo, CHANGELOG_STUB)
+        changeset = fetch_file(repo, CHANGESET)
         contexts = fetch_contexts(repo)
-        return RepoReport(repo, evaluate(ci, stub, contexts))
+        return RepoReport(repo, evaluate(ci, stub, contexts, changeset))
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep
         return RepoReport(repo, [], error=str(exc))
 

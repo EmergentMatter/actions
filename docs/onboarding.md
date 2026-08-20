@@ -19,6 +19,31 @@ repo lists what actually exists; this doc deliberately doesn't enumerate
 them, because an enumerated list here went stale and claimed a `v1.0.1`
 that was never cut.
 
+## The short version
+
+`scripts/onboard.py` does the mechanical steps. From a clone of this repo:
+
+```bash
+uv run python scripts/onboard.py --repo-path ../your-repo --dry-run
+```
+
+It prints what it would do, then stops and asks you to decide one thing —
+which version strings must move on every release. Re-run with
+`--version-file PATH:SYMBOL` for each, and it writes everything.
+
+What it cannot do for you, and why:
+
+| Step | Why it stays manual |
+|---|---|
+| Declaring `version_files` | Whether a data version should track the package version is a judgement about *your* repo. See the worked example below — it exists to prevent one specific mistake. |
+| Branch protection | The required contexts have to be read off a real pull request run, not predicted. |
+| Proving the gate works | You have to watch it go red. |
+
+The rest of this document is what the script is doing and why, which is
+worth reading once — particularly [the worked example](#worked-example-emergent-matter-materials)
+and [proving the gate](#prove-the-gate-actually-works-before-you-trust-it).
+Tool reference lives in [tooling.md](tooling.md).
+
 ## Before you start
 
 Release control runs your repo's own CI first and only drafts a release if
