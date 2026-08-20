@@ -12,10 +12,15 @@ jobs:
     steps:
       # Composite action, not a reusable workflow_call: no `actions-ref`
       # input to keep in sync with the `@ref` below -- a composite
-      # action's own repo is checked out for it automatically. This also
-      # makes the check display as `Changelog / changelog`, not the
-      # three-segment `Changelog / changelog / Require a changelog note`
-      # the old workflow_call shape produced.
+      # action's own repo is checked out for it automatically.
+      #
+      # It also shortens the check name. The name shown in the Checks tab
+      # and the context branch protection matches are DIFFERENT strings:
+      # this shape displays as `Changelog / changelog` with the context
+      # `changelog`, where the old workflow_call shape displayed as
+      # `Changelog / changelog / Require a changelog note` with the
+      # context `changelog / Require a changelog note`. Put the CONTEXT
+      # into branch protection, never the displayed name.
       - uses: EmergentMatter/actions/changelog-check@v1
     # No `secrets: inherit` — changelog-check only ever uses the
     # auto-injected github.token, never secrets.*. This trigger also runs

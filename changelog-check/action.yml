@@ -15,9 +15,21 @@ description: >-
 # the entire actions-ref mechanism the reusable-workflow version needed:
 # the `actions-ref` input, the job.workflow_sha-with-actions-ref-fallback
 # "Validate the shared-workflow ref" step, and the separate "Checkout
-# EmergentMatter/actions scripts" step. It also flattens the displayed
-# check name from three segments (caller workflow / caller job /
-# `workflow_call` job name) to two: `Changelog / changelog`.
+# EmergentMatter/actions scripts" step.
+#
+# It also shortens the name. Two different strings matter here and they
+# are easy to confuse: the DISPLAYED name in the Checks tab, and the
+# CONTEXT that branch protection matches on. The displayed name is the
+# context with the workflow's `name:` prepended.
+#
+#   workflow_call shape:  display `Changelog / changelog / Require a
+#                         changelog note`, context `changelog / Require a
+#                         changelog note`
+#   this composite shape: display `Changelog / changelog`, context
+#                         `changelog`
+#
+# See docs/onboarding.md — typing a displayed name into branch protection
+# is the documented way to block `main` permanently.
 #
 # Enforcement is NOT delegated to scientific-python/action-towncrier-changelog
 # as the sole gate -- that action reads its config (enabled/skip-label) from a
@@ -52,10 +64,47 @@ inputs:
 runs:
   using: composite
   steps:
+    # The reusable-workflow version of this check carried
+    # `if: github.event_name == 'pull_request'` on its JOB. A composite
+    # action has no job to hang that on, and losing it silently is worse
+    # than it sounds: with a non-PR event, `github.event.pull_request` is
+    # empty, so `ref:` below resolves to "" (which actions/checkout treats
+    # as the DEFAULT BRANCH rather than erroring) and PR_NUMBER resolves to
+    # "" (which turns the files query into `repos/O/R/pulls//files` and
+    # dies on a bare 404). The gate would appear to run and check nothing
+    # recognisable.
+    #
+    # Fail loudly instead. Deliberately a failure, not a skip: a changelog
+    # gate that silently passes is the one outcome worth engineering
+    # against, since a broken-open gate and a working gate are both green.
+    # Correctly-configured callers never hit this -- the shipped stub
+    # triggers `on: pull_request` only, and the deprecated shim still has
+    # its job-level `if:` -- so this only catches genuine misuse.
+    - name: Guard — pull_request events only
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        case "${EVENT_NAME}" in
+          pull_request|pull_request_target) ;;
+          *)
+            {
+              echo "::error::changelog-check only works on pull_request events (got '${EVENT_NAME}')."
+              echo "It reads github.event.pull_request to find the PR's head commit and its added"
+              echo "files; on any other event those are empty and the check cannot validate anything."
+              echo "Call it from a job whose workflow triggers 'on: pull_request'. See"
+              echo "templates/stub-changelog-check.yml."
+            } >&2
+            exit 1
+            ;;
+        esac
+
     - name: Determine exemption
       id: exempt
       shell: bash
       env:
+        EVENT_NAME: ${{ github.event_name }}
         ACTOR: ${{ github.actor }}
         BOT_ACTORS: ${{ inputs.bot-actors }}
         SKIP_LABEL: ${{ inputs.skip-label }}
@@ -100,10 +149,55 @@ runs:
         NOTES_DIR: ${{ inputs.notes-dir }}
       run: |
         set -euo pipefail
-        mapfile -t added < <(
+        # Run the query as its own command and check its status BEFORE
+        # reading the result, rather than `mapfile < <(gh api ...)`.
+        # Process substitution discards the inner exit code -- neither
+        # `set -e` nor `pipefail` sees it -- so a failed query used to
+        # yield an EMPTY list, which this step then reported as "no
+        # changelog note was added". A permissions or API problem would
+        # surface to the contributor as an accusation that they forgot a
+        # note they had actually written.
+        #
+        # This matters more since the check became a composite action. As
+        # a `workflow_call` workflow it declared its own job `permissions:`
+        # and a caller granting less failed at PARSE time with a clear
+        # startup_failure. Composite actions have no `runs.permissions`
+        # key, so that early check is gone and a stub missing
+        # `pull-requests: read` now fails right here instead -- which is
+        # precisely why this needs to say so plainly.
+        gh_err="${RUNNER_TEMP:-/tmp}/changelog-check-gh-err.txt"
+        if ! added_raw="$(
           gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
-            -q '.[] | select(.status == "added") | .filename'
-        )
+            -q '.[] | select(.status == "added") | .filename' 2>"${gh_err}"
+        )"; then
+          {
+            echo "::error::Could not list the files in PR #${PR_NUMBER} of ${REPO}."
+            echo "The changelog note requirement could NOT be evaluated -- this is NOT a"
+            echo "statement about whether you added a note."
+            echo
+            echo "Most likely the calling job is missing the required permission block:"
+            echo
+            echo "    permissions:"
+            echo "      contents: read"
+            echo "      pull-requests: read"
+            echo
+            echo "A composite action cannot declare its own permissions, so they have to come"
+            echo "from the job that calls it. See templates/stub-changelog-check.yml."
+            echo
+            echo "gh api said:"
+            cat "${gh_err}" || true
+          } >&2
+          exit 1
+        fi
+
+        # Preserve the original semantics exactly: no output means a
+        # zero-length array. A bare `mapfile <<< "${added_raw}"` would
+        # instead yield one empty-string element, because a here-string
+        # always appends a newline.
+        added=()
+        if [ -n "${added_raw}" ]; then
+          mapfile -t added <<< "${added_raw}"
+        fi
         # Only asks "did this PR add anything under notes-dir/ at all?" —
         # deliberately NOT matching the *.major.md|minor.md|patch.md
         # grammar here. A note with a typo'd level (e.g. `+abcd.banana.md`)

@@ -14,9 +14,11 @@ name: Changelog check
 # move: a composite action's own repo is checked out for it (github.
 # action_path resolves it automatically), which deletes the actions-ref /
 # job.workflow_sha-fallback indirection this file used to need to reach
-# scripts/compute_bump.py, and it flattens the displayed check name from
-# three segments (`Changelog / changelog / Require a changelog note`,
-# inherent to workflow_call) down to two (`Changelog / changelog`).
+# scripts/compute_bump.py, and it shortens the check name: displayed
+# `Changelog / changelog / Require a changelog note` (context
+# `changelog / Require a changelog note`) becomes displayed
+# `Changelog / changelog` (context `changelog`). Callers still on THIS
+# shim keep the longer pair — see docs/onboarding.md.
 #
 # Keeping this shim alive is what makes the change backwards-compatible —
 # see .github/RELEASING.md: a change that broke every existing stub's

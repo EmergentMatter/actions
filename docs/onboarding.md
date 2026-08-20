@@ -470,9 +470,32 @@ protection for `main` (repo Settings → Branches) with:
   push or an un-reviewed merge).
 
 All four are bare job ids: `lint`/`test`/`build` are `ci.yml`'s job names,
-and `changelog` is the job id in `changelog-check.yml`'s stub — the
-composite action it calls no longer adds a third segment the way the old
-`workflow_call` shape did (`changelog / Require a changelog note`).
+and `changelog` is the job id in `changelog-check.yml`'s stub.
+
+### The name you SEE is not the name you TYPE
+
+This trips people up every time, so be explicit about it. A check has two
+different strings, and branch protection only ever matches the second:
+
+| | Where you see it | Old `workflow_call` shape | Current composite-action shape |
+|---|---|---|---|
+| **Display name** | the PR's Checks tab | `Changelog / changelog / Require a changelog note` | `Changelog / changelog` |
+| **Context** | what you type into branch protection | `changelog / Require a changelog note` | `changelog` |
+
+The display name is the context with the **workflow's `name:` prepended**.
+That is where the extra segment comes from — so the old shape looked like
+three segments in the UI while its context was only ever two, and the
+current shape looks like two while its context is one.
+
+Type the **context**. Copying the display name off the Checks tab is the
+single most common way to end up with a required check that no run can
+ever produce.
+
+The reliable way to read a context, rather than eyeballing the UI:
+
+```bash
+gh pr checks <PR>          # prints contexts, not display names
+```
 
 This assumes your repo is on the current stub (`uses:
 EmergentMatter/actions/changelog-check@v1`, see above). If you're setting
