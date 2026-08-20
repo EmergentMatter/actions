@@ -146,12 +146,77 @@ def test_unprotected_branch_is_a_warning():
     assert severities(fleet_status.check_contexts(None), "contexts") == ["warn"]
 
 
+# ------------------------------------------------------- workflow_call
+
+
+def test_ci_without_workflow_call_is_broken():
+    """version.yml fails at PARSE time, so every push to main errors."""
+    ci = CI_LINT_OFF.replace("on:\n  pull_request:\n", "on:\n  pull_request:\n  push:\n")
+    findings = fleet_status.check_workflow_call(ci)
+    assert severities(findings, "workflow_call") == ["broken"]
+    assert "parse time" in messages(findings, "workflow_call")
+
+
+def test_ci_with_workflow_call_is_clean():
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    assert fleet_status.check_workflow_call(ci) == []
+
+
+# ----------------------------------------------------------- verify-wheel
+
+CI_MATERIALS_STYLE = "name: CI\njobs:\n  test:\n    steps:\n      - run: uv run pytest\n"
+
+
+def test_build_without_verify_wheel_is_flagged():
+    ci = "jobs:\n  build:\n    steps:\n      - run: uv build\n"
+    findings = fleet_status.check_verify_wheel(ci)
+    assert severities(findings, "verify") == ["warn"]
+    assert "verify-wheel@v1" in messages(findings, "verify")
+
+
+def test_build_with_verify_wheel_is_clean():
+    ci = (
+        "jobs:\n  build:\n    steps:\n      - run: uv build\n"
+        "      - uses: EmergentMatter/actions/verify-wheel@v1\n"
+    )
+    assert fleet_status.check_verify_wheel(ci) == []
+
+
+def test_a_repo_with_no_build_job_is_not_nagged():
+    """Repos keeping their own CI may have no build stage at all."""
+    assert fleet_status.check_verify_wheel(CI_MATERIALS_STYLE) == []
+
+
+# -------------------------------------------------------------- changeset
+
+
+def test_changeset_matching_the_template_is_clean():
+    template = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
+    assert fleet_status.check_changeset(template) == []
+
+
+def test_diverged_changeset_is_flagged():
+    """Unlike ci.yml, divergence here is always a mistake, never a choice."""
+    findings = fleet_status.check_changeset("# an older copy\n")
+    assert severities(findings, "changeset") == ["warn"]
+    assert "never re-synced" in messages(findings, "changeset")
+
+
+def test_missing_changeset_is_flagged():
+    assert severities(fleet_status.check_changeset(None), "changeset") == ["warn"]
+
+
 # ------------------------------------------------------------- roll-up logic
 
 
 def test_a_healthy_repo_has_no_actionable_findings():
-    findings = fleet_status.evaluate(CI_LINT_OFF, GOOD_STUB, HEALTHY_CONTEXTS)
-    assert [f for f in findings if f.severity != "info"] == []
+    """A genuinely healthy repo: workflow_call-able CI, composite-action stub,
+    the three required contexts, and an unmodified changeset.py."""
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    changeset = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
+    findings = fleet_status.evaluate(ci, GOOD_STUB, HEALTHY_CONTEXTS, changeset)
+    actionable = [f for f in findings if f.severity != "info"]
+    assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
 
 
 def test_broken_outranks_warn_in_the_roll_up():

@@ -68,6 +68,8 @@ meant to be copied verbatim into the consuming repo.
 ## Links
 
 - [`docs/onboarding.md`](docs/onboarding.md) — how to onboard a repo, start to finish
+- [`docs/tooling.md`](docs/tooling.md) — the maintenance scripts: `onboard.py`,
+  `fleet_status.py` (drift across every consumer), `lint_gate.py`, `verify_wheel.py`
 - [`templates/CONTRIBUTING.md`](templates/CONTRIBUTING.md) — the contributor-facing half, copied into consuming repos
 - [`templates/pyproject-snippet.toml`](templates/pyproject-snippet.toml) — the copy-pasteable config block
 - [`CONTRACT.md`](CONTRACT.md) — the full behavioral spec (script CLIs, workflow inputs, exact failure modes)

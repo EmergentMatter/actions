@@ -66,6 +66,8 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   the consumer's root, **not** inside their package), `CONTRIBUTING.md`,
   and `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`
   config block).
+- `docs/tooling.md` — how to run the four maintenance scripts above
+  against a target repo, and what each check means.
 - `docs/onboarding.md` — the human walkthrough for onboarding a repo,
   worked through `emergent-matter-materials`'s three-version-strings case.
 
