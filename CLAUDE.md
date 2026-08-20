@@ -43,6 +43,11 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   release level/version that should be cut.
 - `scripts/sync_version.py` — writes a version string into every location
   a consuming repo declares via `[tool.em-release] version_files`.
+- `scripts/lint_gate.py` — turns a consuming repo's lint gate on or off, or
+  reports its state. The gate has two halves that must agree — a
+  `continue-on-error` line in the repo's ci.yml and whether `lint` is a
+  required status check — and this moves both together. Maintenance tool,
+  run against a target repo; not copied into consumers.
 - `changelog-check/action.yml` — the PR gate, a **composite action**
   consuming repos call as `uses: EmergentMatter/actions/changelog-check@v1`
   inside a normal job. Composite rather than `workflow_call` so it reaches

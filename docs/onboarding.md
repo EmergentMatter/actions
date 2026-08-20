@@ -500,6 +500,31 @@ So the two levers move together:
 3. **Enforce.** Delete `continue-on-error` from the lint job *and* add
    `lint` to the required contexts. Both, in the same window.
 
+#### Don't do this by hand
+
+`scripts/lint_gate.py` moves both halves together, so the two can't drift:
+
+```bash
+# from the target repo's root (or pass --repo-path)
+python3 /path/to/actions/scripts/lint_gate.py status
+python3 /path/to/actions/scripts/lint_gate.py on     # step 3
+python3 /path/to/actions/scripts/lint_gate.py off    # back to step 1
+```
+
+`status` reports both halves and the state they imply — `OFF`, `ON`, or
+`INCONSISTENT` — and exits non-zero on `INCONSISTENT`, so it works as a
+check in its own right. The two inconsistent states are reported
+differently, because they fail in opposite directions.
+
+`on` **refuses if the repo still has lint findings**, since enforcing over
+a dirty backlog blocks every open PR with errors unrelated to its changes.
+That is step 2 made mandatory rather than merely advised. `--skip-backlog-check`
+overrides it, and you should expect to regret that.
+
+The file edit is left uncommitted deliberately — commit it and open a PR.
+Branch protection is updated immediately, so until that PR merges the repo
+and its protection disagree.
+
 Doing step 3 by halves is worse than not doing it. Removing the line
 without adding the context leaves lint unenforced on PRs while newly able
 to stall a release; adding the context without removing the line enforces
