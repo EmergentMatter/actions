@@ -1,0 +1,74 @@
+name: Verify built wheel
+description: >-
+  Install the built wheel into a clean environment and import what it
+  declares, so a wheel that builds but is unusable fails the build job.
+
+# `uv build` exiting 0 does not mean the wheel is usable. Verified against
+# hatchling: a wheel target naming a package directory that does not exist,
+# and `exclude = ["*"]`, BOTH build successfully and produce an artifact
+# containing nothing importable. The build stage's stated purpose is catching
+# "tests are green against the source tree but the built package is broken to
+# install" -- `uv build` alone does not do that, it only catches builds that
+# fail outright.
+#
+# The logic lives in scripts/verify_wheel.py, reachable here via
+# github.action_path, so it is unit-testable rather than buried in YAML.
+
+inputs:
+  dist-dir:
+    description: Directory holding the built artifacts.
+    default: dist
+  package-name:
+    description: >-
+      Distribution name to verify. Defaults to [project] name in the
+      consumer's pyproject.toml.
+    default: ""
+  python-version:
+    description: Interpreter for the clean environment.
+    default: "3.13"
+
+runs:
+  using: composite
+  steps:
+    - name: Install the wheel into a clean environment and import it
+      shell: bash
+      env:
+        DIST_DIR: ${{ inputs.dist-dir }}
+        PACKAGE_NAME: ${{ inputs.package-name }}
+        PY_VERSION: ${{ inputs.python-version }}
+        VERIFY_SCRIPT: ${{ github.action_path }}/../scripts/verify_wheel.py
+      run: |
+        set -euo pipefail
+
+        shopt -s nullglob
+        wheels=("${DIST_DIR}"/*.whl)
+        if [ "${#wheels[@]}" -eq 0 ]; then
+          echo "::error::No wheel in '${DIST_DIR}/'. Did 'uv build' run before this step?" >&2
+          exit 1
+        fi
+        if [ "${#wheels[@]}" -gt 1 ]; then
+          printf '::error::Expected one wheel in %s/, found %s:\n' "${DIST_DIR}" "${#wheels[@]}" >&2
+          printf '  %s\n' "${wheels[@]}" >&2
+          exit 1
+        fi
+        wheel="$(cd "$(dirname "${wheels[0]}")" && pwd)/$(basename "${wheels[0]}")"
+        echo "Verifying $(basename "${wheel}")"
+
+        name="${PACKAGE_NAME}"
+        if [ -z "${name}" ]; then
+          name="$(python3 -c '
+        import pathlib, tomllib
+        print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["name"])
+        ')"
+        fi
+
+        # A directory with no source tree in it. Running from the checkout
+        # would let `import yourpackage` resolve against the working tree and
+        # pass regardless of what the wheel holds -- which is the whole bug.
+        workdir="$(mktemp -d)"
+        uv venv --python "${PY_VERSION}" "${workdir}/venv"
+        uv pip install --python "${workdir}/venv/bin/python" "${wheel}"
+
+        cp "${VERIFY_SCRIPT}" "${workdir}/verify_wheel.py"
+        cd "${workdir}"
+        "${workdir}/venv/bin/python" verify_wheel.py "${name}"
