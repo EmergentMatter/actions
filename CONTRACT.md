@@ -65,17 +65,46 @@ Writes the version into every location the repo declares, and nothing else.
 
 | Workflow | Inputs (all optional unless noted, with defaults) |
 |---|---|
-| `changelog-check.yml` | `notes-dir`=`changelog.d`, `skip-label`=`skip-changelog`, `bot-actors`=`dependabot[bot],github-actions[bot]`, `python-version`=`3.13` |
 | `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name |
 | `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name — **no `actions-ref`**: it never checks out this repo's `scripts/` |
 
-Consumers pin `@v1` — never a branch (P1) — and pass `actions-ref` matching that pin, on
-**every** stub that has it. There is no context giving a reusable workflow its own ref:
+`changelog-check.yml` used to be in this table. It's now a **deprecated shim** that forwards to
+the composite action described below and no longer does the check's work itself — kept only so a
+consumer stub still pinned to `uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1`
+keeps working after `v1` moves onto a commit past this rewrite. Its `actions-ref` input is still
+accepted (so old stubs that pass it don't fail to parse) but is ignored. Don't add new inputs to
+it or grow it back into doing real work — new behavior belongs in the composite action.
+
+Consumers pin `@v1` — never a branch (P1). `version.yml` additionally passes `actions-ref`
+matching that pin. There is no context giving a reusable workflow its own ref:
 `github.workflow_ref` is the *caller's*, and `github.job_workflow_sha` does not exist. The
-workflows prefer `job.workflow_sha` (the commit of the reusable workflow file itself, which
-cannot drift from the pin) and fall back to `actions-ref`, logging which path was taken. An
+workflow prefers `job.workflow_sha` (the commit of the reusable workflow file itself, which
+cannot drift from the pin) and falls back to `actions-ref`, logging which path was taken. An
 unresolvable ref is refused outright, because an empty checkout ref silently means "the
 default branch" — which is how two earlier attempts passed while ignoring the pin entirely.
+
+## Composite action inputs (changelog-check/)
+
+| Action | Inputs (all optional, with defaults) |
+|---|---|
+| `changelog-check/action.yml` | `notes-dir`=`changelog.d`, `skip-label`=`skip-changelog`, `bot-actors`=`dependabot[bot],github-actions[bot]`, `python-version`=`3.13` |
+
+Same input names and defaults the reusable-workflow version of this check used — deliberately, so
+the contract this table describes didn't change, only the mechanism. **No `actions-ref` input.**
+A composite action isn't loaded through a `uses:` reference to a `workflow_call` workflow; the
+consumer's own `uses: EmergentMatter/actions/changelog-check@v1` step causes the runner to check
+out this repo at that ref and set `github.action_path` to point at it directly — so
+`scripts/compute_bump.py` is reached at `${{ github.action_path }}/../scripts/compute_bump.py`
+without a second checkout, a ref to resolve, or a fallback to reason about. The whole
+`actions-ref` / `job.workflow_sha`-fallback / "an empty checkout ref silently means the default
+branch" apparatus above now exists only for `version.yml`, which stays a `workflow_call`
+workflow — a reusable workflow genuinely has no way to discover its own ref, but a composite
+action does, automatically, which is *why* this check moved to that shape.
+
+Composite actions also cannot declare `permissions:` — there is no `runs.permissions` key. The
+`contents: read` (to check out the PR head commit) and `pull-requests: read` (to list PR files via
+`gh api`) this action needs come from the **calling job's** own `permissions:` block instead; see
+`templates/stub-changelog-check.yml`.
 
 `environment` must be **non-empty**: `environment:` is validated when the workflow is parsed,
 before any `if:` runs, so an empty name fails every run with `startup_failure` even with
@@ -99,10 +128,12 @@ On push to `main` in the consuming repo:
    - The PR body must contain only: version bumps, changelog update, note deletions,
      lockfile refresh. Nothing else. (R3)
    - Auto-apply the `skip-label` value at creation so the release PR exempts its own note
-     check. (E6) **`version.yml`'s `skip-label` input must be set to the same value the repo
-     passes to `changelog-check.yml`** — a repo that overrides one and not the other breaks E6
-     silently. Defense in depth: the release PR is authored by `github-actions[bot]`, which
-     `changelog-check.yml`'s default `bot-actors` already exempts independently.
+     check. (E6) **`version.yml`'s `skip-label` input must be set to the same value passed to the
+     changelog check's `skip-label` input** (`changelog-check/action.yml`'s, or the deprecated
+     `changelog-check.yml` shim's, if a stub is still on the old path) — a repo that overrides one
+     and not the other breaks E6 silently. Defense in depth: the release PR is authored by
+     `github-actions[bot]`, which the changelog check's default `bot-actors` already exempts
+     independently.
 
 7. **Same run**: `uv build` → GitHub Release with wheel + sdist attached → optional index
    publish over OIDC, opt-in and off by default. (S2/S3/S4)
@@ -174,7 +205,8 @@ jobs:
 | `scripts/compute_bump.py` | Notes → bump level → next version (V1, V2, V3) |
 | `scripts/sync_version.py` | Writing the version to every declared location, and nothing else (V4, V5) |
 | `.github/workflows/version.yml` | The release-PR loop and tagging (R1–R5, S1) |
-| `.github/workflows/changelog-check.yml` | The PR gate (E2, E4, E5, E6) |
+| `changelog-check/action.yml` | The PR gate (E2, E4, E5, E6) — the current implementation |
+| `.github/workflows/changelog-check.yml` | Deprecated shim forwarding to `changelog-check/action.yml`, kept so stubs still pinned to the old `uses:` path keep working |
 | `.github/workflows/build-release.yml` | Build, GitHub Release, opt-in publish (S2, S3, S4) |
 | `templates/` | What gets copied into consuming repos — changes here propagate by hand |
 

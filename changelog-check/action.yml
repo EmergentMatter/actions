@@ -1,0 +1,152 @@
+name: Changelog check
+description: >-
+  Fails a PR that doesn't add a changelog.d/ note, unless the PR carries
+  skip-label or was opened by one of bot-actors.
+
+# Composite action — see CONTRACT.md "Composite actions" for the input
+# table. This used to be a `workflow_call` reusable workflow
+# (.github/workflows/changelog-check.yml, kept as a deprecated shim that
+# calls this action so old stubs don't break).
+#
+# Why composite over workflow_call: a composite action's own repo is
+# checked out by the runner for it, and `github.action_path` points at
+# that checkout -- so scripts/compute_bump.py is reachable directly below
+# as `${{ github.action_path }}/../scripts/compute_bump.py`. That deletes
+# the entire actions-ref mechanism the reusable-workflow version needed:
+# the `actions-ref` input, the job.workflow_sha-with-actions-ref-fallback
+# "Validate the shared-workflow ref" step, and the separate "Checkout
+# EmergentMatter/actions scripts" step. It also flattens the displayed
+# check name from three segments (caller workflow / caller job /
+# `workflow_call` job name) to two: `Changelog / changelog`.
+#
+# Enforcement is NOT delegated to scientific-python/action-towncrier-changelog
+# as the sole gate -- that action reads its config (enabled/skip-label) from a
+# `[tool.<BOT_USERNAME>.towncrier_changelog]` section in the CONSUMER's
+# pyproject.toml, which templates/pyproject-snippet.toml does not declare --
+# so relying on it alone would silently no-op (its script exits 0 when that
+# section is missing or `enabled` is unset). Verified no-op, and it cost a
+# Docker pull on every PR for nothing: dropped entirely rather than kept as
+# a best-effort step. The real gate is native, below: the "List files added
+# by this PR" step plus compute_bump.py's grammar validation.
+
+inputs:
+  notes-dir:
+    description: Directory containing pending changelog note fragments.
+    default: changelog.d
+  skip-label:
+    description: PR label that exempts this check.
+    default: skip-changelog
+  bot-actors:
+    description: Comma-separated GitHub actors exempt from the note requirement.
+    default: "dependabot[bot],github-actions[bot]"
+  python-version:
+    description: Python version used to run compute_bump.py's grammar validation.
+    default: "3.13"
+
+# Composite actions cannot declare `permissions:` -- there is no `runs.
+# permissions` key. The permissions this action needs (contents: read to
+# check out the PR head commit, pull-requests: read to list PR files via
+# `gh api`) come from the CALLING JOB's `permissions:` block instead. See
+# templates/stub-changelog-check.yml.
+
+runs:
+  using: composite
+  steps:
+    - name: Determine exemption
+      id: exempt
+      shell: bash
+      env:
+        ACTOR: ${{ github.actor }}
+        BOT_ACTORS: ${{ inputs.bot-actors }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+        LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: |
+        set -euo pipefail
+        is_exempt=false
+        reason=""
+        # Exact-segment match against the comma-separated bot-actors list —
+        # wrap both sides in delimiters so "bot" doesn't substring-match "robot".
+        if [[ ",${BOT_ACTORS}," == *",${ACTOR},"* ]]; then
+          is_exempt=true
+          reason="actor '${ACTOR}' is in bot-actors"
+        elif [[ ",${LABELS}," == *",${SKIP_LABEL},"* ]]; then
+          is_exempt=true
+          reason="PR carries the '${SKIP_LABEL}' label"
+        fi
+        echo "is-exempt=${is_exempt}" >> "$GITHUB_OUTPUT"
+        echo "reason=${reason}" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout
+      if: steps.exempt.outputs.is-exempt == 'false'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # Pin to the PR head commit, not the default refs/pull/N/merge.
+        # This job validates the notes THIS PR adds, not a hypothetical
+        # merge result — and the merge ref is computed lazily by GitHub,
+        # so checking it out immediately after the PR event can race
+        # actions/checkout's retries and fail with "couldn't find remote
+        # ref" even though the PR is perfectly mergeable. The head sha
+        # always exists the instant the PR does.
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: List files added by this PR
+      if: steps.exempt.outputs.is-exempt == 'false'
+      id: files
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        NOTES_DIR: ${{ inputs.notes-dir }}
+      run: |
+        set -euo pipefail
+        mapfile -t added < <(
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            -q '.[] | select(.status == "added") | .filename'
+        )
+        # Only asks "did this PR add anything under notes-dir/ at all?" —
+        # deliberately NOT matching the *.major.md|minor.md|patch.md
+        # grammar here. A note with a typo'd level (e.g. `+abcd.banana.md`)
+        # must still pass this gate, so the failure surfaces as
+        # compute_bump.py's "unrecognized bump level" a few steps down —
+        # the script that owns that grammar — rather than this step's
+        # generic "no note was added," which would send a contributor who
+        # DID add a note looking for the wrong problem.
+        matches=()
+        for f in "${added[@]}"; do
+          case "$f" in
+            "${NOTES_DIR}"/*.md)
+              matches+=("$f")
+              ;;
+          esac
+        done
+        if [ "${#matches[@]}" -eq 0 ]; then
+          {
+            echo "::error::No changelog note was added under '${NOTES_DIR}/' by this PR."
+            echo "Run 'uv run changeset' and commit the file it writes, or apply the"
+            echo "'${{ inputs.skip-label }}' label if this change genuinely needs no note."
+          } >&2
+          exit 1
+        fi
+        printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
+
+    - name: Set up Python
+      if: steps.exempt.outputs.is-exempt == 'false'
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Validate note grammar (compute_bump.py)
+      if: steps.exempt.outputs.is-exempt == 'false'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/../scripts/compute_bump.py" \
+          --notes-dir "${{ inputs.notes-dir }}" \
+          --format json
+
+    - name: Report exemption
+      if: steps.exempt.outputs.is-exempt == 'true'
+      shell: bash
+      run: |
+        echo "Skipping changelog note requirement: ${{ steps.exempt.outputs.reason }}"

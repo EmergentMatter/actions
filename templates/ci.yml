@@ -29,6 +29,14 @@
 # Must stay callable both directly on pull_request AND as a reusable
 # workflow_call — the version.yml stub does `needs: ci` onto this file by
 # reference (`uses: ./.github/workflows/ci.yml`).
+#
+# `name: CI` below is what makes checks display as `CI / lint` etc.
+# instead of falling back to the file path (`.github/workflows/ci.yml /
+# lint`). Safe to add: required-status-check contexts are job names
+# (`lint`, `test`, `build`), not the workflow name, so this doesn't touch
+# branch protection.
+
+name: CI
 
 on:
   pull_request:
@@ -51,6 +59,11 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.13"
+          # Distinct per job: lint/test/build all cache the same
+          # dependency set and, run concurrently, raced the same
+          # setup-uv-2-... cache key ("Failed to save: Unable to reserve
+          # cache") without this.
+          cache-suffix: lint
 
       - run: uv sync --locked
 
@@ -66,6 +79,7 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.13"
+          cache-suffix: test
 
       # Install must be the step immediately before the test run, with
       # nothing that writes a version string in between. Some repos have
@@ -98,12 +112,13 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.13"
+          cache-suffix: build
 
       - run: uv sync --locked
 
       - run: uv build
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/*

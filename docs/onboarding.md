@@ -10,8 +10,14 @@ If you haven't read the top-level concept yet, read the [README](../README.md)
 first — this doc assumes you know what a changelog note is and what the
 release PR does.
 
-`v1` is live: `v1.0.0` and `v1.0.1` are tagged and immutable, and `v1`
-points at the latest of them. Pin `@v1`.
+`v1` is live. Each release is cut as an immutable `v1.x.y` point tag, and
+`v1` is force-moved to the newest of them — see
+[`.github/RELEASING.md`](../.github/RELEASING.md). **Pin `@v1`**, not a
+point tag: `v1` is the ref this system is designed around, and it is what
+gets you fixes without editing anything. `git ls-remote --tags` on this
+repo lists what actually exists; this doc deliberately doesn't enumerate
+them, because an enumerated list here went stale and claimed a `v1.0.1`
+that was never cut.
 
 ## Before you start
 
@@ -33,10 +39,14 @@ before wiring this up, not a step this doc covers.
 | 4 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
 | 5 | `CONTRIBUTING.md` | The contributor-facing instructions — how to add a note, what the three levels mean, the release-PR checks caveat. |
 
-Files 1–3 are stub workflows: a few lines each that just point at the
-reusable workflow this repo hosts, pinned to `@v1`. Copy them from
-`EmergentMatter/actions`'s `templates/` directory into your repo's
-`.github/workflows/`. File 5 is a direct copy of
+Files 1–3 are thin stubs pinned to `@v1`, copied from `EmergentMatter/actions`'s
+`templates/` directory into your repo's `.github/workflows/`. Files 2 and 3
+point at reusable workflows this repo hosts
+(`uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1`); file 1
+points at a composite action instead
+(`uses: EmergentMatter/actions/changelog-check@v1`, inside a normal job) —
+see "The changelog check doesn't need `actions-ref`" below for what that
+changes. File 5 is a direct copy of
 [`templates/CONTRIBUTING.md`](../templates/CONTRIBUTING.md) into your repo
 root, unmodified — it's generic, not repo-specific. File 4 needs its own
 explanation, below.
@@ -92,19 +102,63 @@ jobs:
                               # deliberately NO secrets: inherit
 ```
 
-Pin `@v1`, never a branch — see CONTRACT.md's non-negotiables. **Every stub
-that has an `actions-ref` input must set it to the same value** (both
-`version.yml` and `changelog-check.yml`'s stubs take this input;
-`build-release.yml`'s does not need it, since that workflow never checks
-out this repo's `scripts/`). There is no context field that lets a
-reusable workflow discover its own ref — `github.workflow_ref` resolves
-to the *caller's* ref, not this repo's, and `github.job_workflow_sha`
-does not exist, both confirmed live rather than assumed. An unresolvable
-ref is refused outright rather than silently defaulting to this repo's
-`main`, which is how an earlier version of this exact stub quietly ran
-unpinned code while believing it had pinned `@v1`. If you ever change the
-`@v1` at the end of a `uses:` line, change the matching `actions-ref:`
-in the same edit.
+Pin `@v1`, never a branch — see CONTRACT.md's non-negotiables. **`version.yml`'s
+stub is now the only one with an `actions-ref` input** (`build-release.yml`'s
+never needed it, since that workflow never checks out this repo's
+`scripts/`; `changelog-check.yml`'s stub no longer needs it either, now
+that the changelog check is a composite action — see below). There is no
+context field that lets a *reusable workflow* discover its own ref —
+`github.workflow_ref` resolves to the *caller's* ref, not this repo's,
+and `github.job_workflow_sha` does not exist, both confirmed live rather
+than assumed. An unresolvable ref is refused outright rather than
+silently defaulting to this repo's `main`, which is how an earlier
+version of this exact stub quietly ran unpinned code while believing it
+had pinned `@v1`. If you ever change the `@v1` at the end of `version.yml`'s
+`uses:` line, change the matching `actions-ref:` in the same edit.
+
+### The changelog check doesn't need `actions-ref`
+
+`changelog-check.yml`'s stub is a composite action call, not a
+`workflow_call` reference:
+
+```yaml
+# .github/workflows/changelog-check.yml
+name: Changelog
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: EmergentMatter/actions/changelog-check@v1
+```
+
+A composite action's own repo is checked out automatically for the runner
+that calls it, and `${{ github.action_path }}` inside it points straight
+at that checkout — so `scripts/compute_bump.py` is reachable without a
+second checkout, a ref to resolve, or the `actions-ref` apparatus above.
+That's a property of composite actions generally, not something this repo
+built — it's the reason the changelog check moved to this shape in the
+first place (see CONTRACT.md's "Composite action inputs"). `version.yml`
+and `build-release.yml` stay reusable `workflow_call` workflows, which
+don't get that free checkout, so `version.yml` keeps `actions-ref` for the
+reason above.
+
+Composite actions also can't declare their own `permissions:` — there's
+no `runs.permissions` key — so the `contents: read` / `pull-requests: read`
+the check needs come from the job's own `permissions:` block, shown
+above. Don't drop it: without it, the check's own checkout of the PR head
+and its `gh api` call to list PR files both fail.
+
+An old stub still on
+`uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1` —
+the `workflow_call` shape, with `actions-ref` — keeps working: that file
+is kept in this repo as a deprecated shim that forwards to the composite
+action. New onboarding should use the composite-action stub above.
 
 Notice `secrets: inherit` sits on the `ci:` job, not on `version:`, and
 it's conditional even there:
@@ -408,34 +462,47 @@ protection for `main` (repo Settings → Branches) with:
   lint
   test
   build
-  changelog / Require a changelog note
+  changelog
   ```
 
 - **Require at least one approving review** before merging.
 - **Do not allow direct pushes to `main`** (no bypassing via a force
   push or an un-reviewed merge).
 
-**Get the four context names from a pull request run, not a push-to-main
-run — they are not the same strings.** `lint`, `test`, and `build` come
-from `ci.yml`, which (per `templates/ci.yml`) triggers directly on
-`pull_request` as well as via `workflow_call` — on a PR it runs
-standalone, so GitHub shows its three job names bare. `changelog / Require
-a changelog note` is `changelog-check.yml`'s stub: the bare job id in
-your stub (`changelog`) followed by a ` / ` and the *reusable workflow's*
-job `name:` field, not its job id. But on a push to `main`, `ci.yml`
-runs a different way — wrapped inside `version.yml`'s own `ci:` job via
-`uses: ./.github/workflows/ci.yml` — and GitHub shows that run's checks
-prefixed: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
+All four are bare job ids: `lint`/`test`/`build` are `ci.yml`'s job names,
+and `changelog` is the job id in `changelog-check.yml`'s stub — the
+composite action it calls no longer adds a third segment the way the old
+`workflow_call` shape did (`changelog / Require a changelog note`).
+
+This assumes your repo is on the current stub (`uses:
+EmergentMatter/actions/changelog-check@v1`, see above). If you're setting
+up protection on a repo still pinned to the deprecated
+`uses: .../workflows/changelog-check.yml@v1` path, that stub's checks
+still display the old three-segment name — require
+`changelog / Require a changelog note` instead of the bare `changelog`
+until you migrate the stub, then swap the required context in the same
+window you flip the stub (don't let the two drift, or `main` blocks on a
+context that can no longer be produced).
+
+**Still get these from a pull request run, not a push-to-main run —
+they are not the same strings.** `ci.yml` (per `templates/ci.yml`)
+triggers directly on `pull_request` as well as via `workflow_call`, and
+those two triggers display differently. On a PR it runs standalone, so
+GitHub shows its job names bare: `lint`, `test`, `build`. On a push to
+`main` it runs wrapped inside `version.yml`'s own `ci:` job via
+`uses: ./.github/workflows/ci.yml`, and GitHub prefixes those same
+checks: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
 **never appear on a pull request run** and so can never satisfy a
 required check there. Anyone who copies check names off a push run
 instead of a PR run ends up with four required contexts that no PR can
 ever produce, and `main` is blocked from merging anything, permanently,
 until someone notices and fixes the list.
 
-The exact four names above assume `templates/ci.yml` copied in as-is
-(job ids `lint` / `test` / `build`). If your repo already had its own
-CI with different job names before onboarding, use *those* names
-instead — same bare-vs-prefixed rule, different strings.
+The exact four names above assume `templates/ci.yml` and
+`templates/stub-changelog-check.yml` copied in as-is (job ids `lint` /
+`test` / `build` / `changelog`). If your repo already had its own CI
+with different job names before onboarding, use those names instead —
+same bare-vs-prefixed rule, different strings.
 
 ## Releasing under branch protection
 
