@@ -46,7 +46,15 @@ LINT_CONTEXT = "lint"
 
 # Marks the comment block that explains the staged rollout. Used to keep the
 # comment honest when the line it describes is added or removed.
-OFF_COMMENT_SENTINEL = "# STAGED ROLLOUT."
+# Phrases that identify a staged-rollout comment as OURS to replace. The
+# second is the pre-v1.1.0 template's wording: repos onboarded before that
+# release carry it, and leaving it behind next to "Lint is ENFORCED"
+# produces a file that contradicts itself. Only ever add to this list --
+# removing an entry orphans the comment in every repo still carrying it.
+OFF_COMMENT_SENTINELS = (
+    "# STAGED ROLLOUT.",
+    "# Staged rollout: non-blocking until the existing lint backlog is",
+)
 ON_COMMENT = (
     "    # Lint is ENFORCED: this job has no continue-on-error, and `lint` is\n"
     "    # a required status check. To stage it back off, run lint_gate.py off\n"
@@ -115,7 +123,9 @@ def strip_continue_on_error(text: str) -> str:
     first = target
     while first - 1 >= start and lines[first - 1].lstrip().startswith("#"):
         first -= 1
-    owns_comment = any(OFF_COMMENT_SENTINEL in lines[i] for i in range(first, target))
+    owns_comment = any(
+        sentinel in lines[i] for i in range(first, target) for sentinel in OFF_COMMENT_SENTINELS
+    )
     if not owns_comment:
         first = target
 

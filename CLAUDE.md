@@ -48,6 +48,12 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   `continue-on-error` line in the repo's ci.yml and whether `lint` is a
   required status check — and this moves both together. Maintenance tool,
   run against a target repo; not copied into consumers.
+- `scripts/fleet_status.py` — sweeps every repo pinned to this one and
+  reports drift: broken changelog stubs, inconsistent lint gates, Node 20
+  action pins, missing required checks. Reads over the API, no clones.
+  Onboarding happens once per repo; `templates/` is copied and never
+  re-synced, so drift is the recurring problem and this is what watches it.
+  Exits non-zero on any finding, so it can run on a schedule.
 - `changelog-check/action.yml` — the PR gate, a **composite action**
   consuming repos call as `uses: EmergentMatter/actions/changelog-check@v1`
   inside a normal job. Composite rather than `workflow_call` so it reaches

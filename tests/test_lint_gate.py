@@ -96,6 +96,26 @@ def test_turning_on_removes_flag_and_its_rollout_comment():
     assert "uv build" in on
 
 
+def test_turning_on_replaces_the_pre_v1_1_0_rollout_comment():
+    """Repos onboarded before v1.1.0 carry the old template's wording.
+
+    Missing it leaves "non-blocking until the backlog is cleared" sitting
+    directly above "Lint is ENFORCED" -- a file that contradicts itself.
+    Caught on the first real run against em-release-control-test.
+    """
+    legacy = CI_OFF.replace(
+        "    # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking.\n"
+        "    # Managed by scripts/lint_gate.py.\n",
+        "    # Staged rollout: non-blocking until the existing lint backlog is\n"
+        "    # cleared in its own PR. Remove this line once that's done.\n",
+    )
+    assert "Staged rollout: non-blocking" in legacy, "fixture did not apply"
+
+    on = lint_gate.strip_continue_on_error(legacy)
+    assert "Staged rollout: non-blocking" not in on
+    assert "Lint is ENFORCED" in on
+
+
 def test_turning_on_leaves_an_unrelated_comment_alone():
     ci = CI_OFF.replace(
         "    continue-on-error: true",
