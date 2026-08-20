@@ -31,6 +31,10 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.13"
+          # Distinct per job: lint and test run concurrently and raced the
+          # same setup-uv-2-... cache key ("Failed to save: Unable to
+          # reserve cache") without this.
+          cache-suffix: lint
 
       - name: uv sync
         run: uv sync --locked
@@ -50,6 +54,7 @@ jobs:
         with:
           version: "0.12.5"
           python-version: "3.13"
+          cache-suffix: test
 
       - name: uv sync
         run: uv sync --locked

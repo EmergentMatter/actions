@@ -5,19 +5,11 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
 jobs:
   changelog:
-    uses: EmergentMatter/actions/.github/workflows/changelog-check.yml@v1
-    with:
-      # MUST match the @ref above. A reusable workflow cannot discover its own
-      # ref, and an empty checkout ref silently means "the default branch" --
-      # so this is passed explicitly rather than derived. Change both together.
-      actions-ref: v1
+    runs-on: ubuntu-latest
+    # Required: changelog-check is a composite action and cannot declare
+    # its own permissions.
     permissions:
       contents: read
       pull-requests: read
-    # No `secrets: inherit` — changelog-check.yml only ever uses the
-    # auto-injected github.token, never secrets.*. This trigger also runs
-    # on pull_request, which can be a fork PR in a public repo; omitting
-    # an unused grant here costs nothing and forecloses that risk outright
-    # rather than relying on platform defaults. Add it back only if this
-    # repo's own copy of the workflow grows a step that genuinely needs a
-    # named secret.
+    steps:
+      - uses: EmergentMatter/actions/changelog-check@v1

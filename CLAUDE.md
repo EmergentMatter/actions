@@ -43,8 +43,13 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   release level/version that should be cut.
 - `scripts/sync_version.py` — writes a version string into every location
   a consuming repo declares via `[tool.em-release] version_files`.
-- `.github/workflows/{changelog-check,version,build-release}.yml` — the
-  three reusable `workflow_call` workflows consuming repos pin to `@v1`.
+- `changelog-check/action.yml` — the PR gate, a **composite action**
+  consuming repos call as `uses: EmergentMatter/actions/changelog-check@v1`
+  inside a normal job. Composite rather than `workflow_call` so it reaches
+  `scripts/` via `github.action_path` (no `actions-ref` to keep in sync)
+  and so its check name is two segments rather than three.
+- `.github/workflows/{version,build-release}.yml` — the two reusable
+  `workflow_call` workflows consuming repos pin to `@v1`.
 - `templates/` — everything a consuming repo copies in at onboarding time:
   the three workflow stubs, `changeset.py` (→ `scripts/changeset.py` at
   the consumer's root, **not** inside their package), `CONTRIBUTING.md`,

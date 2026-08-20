@@ -36,12 +36,13 @@ own `secrets.GITHUB_TOKEN`:
 
 ```
 EmergentMatter/actions  (this repo -- shared, passive, no secrets)
- ├── .github/workflows/changelog-check.yml   ─┐
- ├── .github/workflows/version.yml            ├─ reusable workflow_call workflows
- ├── .github/workflows/build-release.yml     ─┘
- └── scripts/{compute_bump,sync_version}.py     stdlib-only, called by the workflows above
+ ├── .github/workflows/version.yml           ─┐
+ ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
+ ├── changelog-check/action.yml              composite action -- the PR gate
+ └── scripts/{compute_bump,sync_version}.py     stdlib-only, called by the above
         ▲
         │ uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1
+        │ uses: EmergentMatter/actions/changelog-check@v1
         │
  consuming repo (e.g. emergent-matter-materials)
  ├── .github/workflows/changelog-check.yml   ─┐  thin stubs -- a few lines

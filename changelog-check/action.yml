@@ -1,0 +1,160 @@
+name: Changelog check
+description: >-
+  Fails a PR that doesn't add a changelog.d/ note, unless the PR carries
+  skip-label or was opened by one of bot-actors.
+
+# Inputs are documented in CONTRACT.md. Call it from a job that triggers
+# `on: pull_request` — see templates/stub-changelog-check.yml.
+
+inputs:
+  notes-dir:
+    description: Directory containing pending changelog note fragments.
+    default: changelog.d
+  skip-label:
+    description: PR label that exempts this check.
+    default: skip-changelog
+  bot-actors:
+    description: Comma-separated GitHub actors exempt from the note requirement.
+    default: "dependabot[bot],github-actions[bot]"
+  python-version:
+    description: Python version used to run compute_bump.py's grammar validation.
+    default: "3.13"
+
+# A composite action cannot declare `permissions:` — there is no
+# `runs.permissions` key. `contents: read` and `pull-requests: read` must
+# come from the calling job.
+
+runs:
+  using: composite
+  steps:
+    # A composite action has no job-level `if:`, so this is a step. Fails
+    # rather than skips: on a non-PR event `github.event.pull_request` is
+    # empty, `ref:` below would silently become the default branch, and
+    # the check would appear to run while validating nothing.
+    - name: Guard — pull_request events only
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+      run: |
+        set -euo pipefail
+        case "${EVENT_NAME}" in
+          pull_request|pull_request_target) ;;
+          *)
+            echo "::error::changelog-check needs a pull_request event (got '${EVENT_NAME}')." >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Determine exemption
+      id: exempt
+      shell: bash
+      env:
+        ACTOR: ${{ github.actor }}
+        BOT_ACTORS: ${{ inputs.bot-actors }}
+        SKIP_LABEL: ${{ inputs.skip-label }}
+        LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+      run: |
+        set -euo pipefail
+        is_exempt=false
+        reason=""
+        # Delimiters on both sides so "bot" doesn't substring-match "robot".
+        if [[ ",${BOT_ACTORS}," == *",${ACTOR},"* ]]; then
+          is_exempt=true
+          reason="actor '${ACTOR}' is in bot-actors"
+        elif [[ ",${LABELS}," == *",${SKIP_LABEL},"* ]]; then
+          is_exempt=true
+          reason="PR carries the '${SKIP_LABEL}' label"
+        fi
+        echo "is-exempt=${is_exempt}" >> "$GITHUB_OUTPUT"
+        echo "reason=${reason}" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout
+      if: steps.exempt.outputs.is-exempt == 'false'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # The PR head, not refs/pull/N/merge: this validates the notes THIS
+        # PR adds, and the merge ref is computed lazily, so checking it out
+        # right after the PR event can lose a race with checkout's retries
+        # and fail with "couldn't find remote ref" on a mergeable PR.
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: List files added by this PR
+      if: steps.exempt.outputs.is-exempt == 'false'
+      id: files
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        NOTES_DIR: ${{ inputs.notes-dir }}
+      run: |
+        set -euo pipefail
+        # Check the query's exit status explicitly. `mapfile < <(gh api ...)`
+        # hides it from both `set -e` and `pipefail`, so a failed query
+        # yields an empty list and gets reported below as "no note added" —
+        # telling a contributor they forgot a note they actually wrote.
+        gh_err="${RUNNER_TEMP:-/tmp}/changelog-check-gh-err.txt"
+        if ! added_raw="$(
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            -q '.[] | select(.status == "added") | .filename' 2>"${gh_err}"
+        )"; then
+          {
+            echo "::error::Could not list the files in PR #${PR_NUMBER} of ${REPO}, so the"
+            echo "changelog requirement could not be evaluated. This is NOT a statement about"
+            echo "whether you added a note. Most likely the calling job is missing:"
+            echo "    permissions: { contents: read, pull-requests: read }"
+            cat "${gh_err}" || true
+          } >&2
+          exit 1
+        fi
+
+        # No output must mean a zero-length array; a bare here-string would
+        # give one empty-string element instead.
+        added=()
+        if [ -n "${added_raw}" ]; then
+          mapfile -t added <<< "${added_raw}"
+        fi
+
+        # Only asks "was anything added under notes-dir/?" — deliberately NOT
+        # the *.major|minor|patch.md grammar. A typo'd level must reach
+        # compute_bump.py's "unrecognized bump level" below rather than this
+        # step's generic "no note was added", which would send a contributor
+        # who DID add a note looking for the wrong problem.
+        matches=()
+        for f in "${added[@]}"; do
+          case "$f" in
+            "${NOTES_DIR}"/*.md)
+              matches+=("$f")
+              ;;
+          esac
+        done
+        if [ "${#matches[@]}" -eq 0 ]; then
+          {
+            echo "::error::No changelog note was added under '${NOTES_DIR}/' by this PR."
+            echo "Run 'uv run changeset' and commit the file it writes, or apply the"
+            echo "'${{ inputs.skip-label }}' label if this change genuinely needs no note."
+          } >&2
+          exit 1
+        fi
+        printf 'Note(s) added by this PR:\n%s\n' "$(printf '%s\n' "${matches[@]}")"
+
+    - name: Set up Python
+      if: steps.exempt.outputs.is-exempt == 'false'
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Validate note grammar (compute_bump.py)
+      if: steps.exempt.outputs.is-exempt == 'false'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/../scripts/compute_bump.py" \
+          --notes-dir "${{ inputs.notes-dir }}" \
+          --format json
+
+    - name: Report exemption
+      if: steps.exempt.outputs.is-exempt == 'true'
+      shell: bash
+      run: |
+        echo "Skipping changelog note requirement: ${{ steps.exempt.outputs.reason }}"
