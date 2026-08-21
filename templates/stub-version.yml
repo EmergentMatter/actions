@@ -18,10 +18,24 @@ jobs:
     with:
       # MUST match the @ref above -- see stub-changelog-check.yml for why.
       actions-ref: v1
+
+      # ── Private sibling checkout: DELETE unless your pyproject.toml has a
+      # `[tool.uv.sources]` entry pointing at a local path. Without it the
+      # bump step fails on that path source -- and CI stays GREEN while it
+      # happens, so the miss shows up only as a release that never gets cut.
+      # Pin sibling-ref to a SHA. See docs/onboarding.md, "A private sibling
+      # your package depends on".
+      # sibling-repo: EmergentMatter/emergent-matter-materials
+      # sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
+      # sibling-path: emergent-matter-materials
     permissions: { contents: write, pull-requests: write }
-    # NO `secrets: inherit` here, deliberately. None of the three shared
-    # workflows reads `secrets.*` — they use only the auto-injected
-    # `github.token`. Granting org secrets to a workflow hosted in a public repo
-    # and pinned by a movable `v1` tag would make that tag equivalent to secret
-    # access across every consuming repo. Don't add it back without a concrete
-    # secret the shared workflow actually reads.
+
+    # ── DELETE alongside the sibling-* inputs above if you aren't using them.
+    # secrets:
+    #   sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+
+    # NO `secrets: inherit` here, deliberately. `sibling-token` above is the
+    # only secret the shared workflows read, and it is mapped BY NAME;
+    # everything else uses the auto-injected `github.token`. Inheriting would
+    # hand a public repo behind a movable `v1` tag your whole org secret
+    # store. Map the one secret you need; never inherit.

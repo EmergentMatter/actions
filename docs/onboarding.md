@@ -241,15 +241,74 @@ it's conditional even there:
   the `ci:` job has to say so explicitly. If your CI needs no secrets,
   **omit the line entirely** rather than adding it out of habit.
 - **On `version:`, deliberately absent — this is a security decision,
-  not an oversight.** None of the three shared workflows reads
-  `secrets.*`; they use only the auto-injected `github.token`, and both
-  `version.yml` and `build-release.yml` publish over OIDC trusted
-  publishing when configured, which is secret-less by design.
+  not an oversight.** The shared workflows read exactly one optional
+  secret between them: `version.yml`'s `sibling-token`, for the private
+  sibling checkout described below, and that one is mapped **by name**
+  (`secrets: { sibling-token: ... }`), never inherited. Everything else
+  uses the auto-injected `github.token`, and both `version.yml` and
+  `build-release.yml` publish over OIDC trusted publishing when
+  configured, which is secret-less by design.
   `EmergentMatter/actions` is a **public** repo pinned by a **movable**
   `v1` tag. Granting it your org's secrets via `secrets: inherit` would
   make that tag equivalent to secret access across every repo that pins
   it — so don't add it back as boilerplate, even though it looks like
   it's "missing" next to the `ci:` job above it.
+
+## A private sibling your package depends on (optional)
+
+Skip this unless your `pyproject.toml` has a `[tool.uv.sources]` entry
+pointing at a **local path** — a dependency that isn't published to an
+index yet:
+
+```toml
+[tool.uv.sources]
+emergent-matter-materials = { path = "../emergent-matter-materials" }
+```
+
+Two different jobs need that sibling on disk, and they're solved in two
+different places:
+
+1. **Your own `ci.yml`** resolves the path in every job that runs
+   `uv sync --locked`. You own that file, so check the sibling out there
+   yourself, with a fine-grained PAT — `secrets.GITHUB_TOKEN` cannot read
+   a *different* private repo. Note `actions/checkout`'s `path:` cannot
+   escape `$GITHUB_WORKSPACE`, so your own repo has to be checked out
+   into a subdirectory too, making the two siblings on the runner.
+2. **The shared `version.yml`** hits it at the bump step, which runs
+   `uv version --bump` and `uv lock` — both resolve `[tool.uv.sources]`
+   and fail hard when the path is missing. You cannot add steps to a
+   workflow you call by reference, so pass it in instead:
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/emergent-matter-materials
+      sibling-ref: 9834441a6a4b95d6f491e129893fb37d5cecf320
+      sibling-path: emergent-matter-materials
+    secrets:
+      sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+    permissions: { contents: write, pull-requests: write }
+```
+
+**Miss step 2 and the failure is quiet in the worst way:** CI stays
+green, so the PR looks fine and merges — then the `Version` run on
+`main` dies at the bump step, the release PR is never opened, and no
+release is ever cut. It repeats on every merge that has pending notes.
+
+`sibling-ref` must be a **pinned SHA**, not a branch. Your `uv.lock`
+embeds the sibling's resolved version, and `uv sync --locked` refuses to
+proceed when that disagrees with what's checked out — so a floating ref
+turns any merge into the sibling into a red run in your repo, on a
+change nobody made there. Pin it, and bump the SHA and `uv.lock`
+together in one commit. Keep the SHA in your `ci.yml` and the
+`sibling-ref` here in step, too — they lock against the same thing.
+
+All of it is temporary: when the dependency ships to an index, drop the
+`[tool.uv.sources]` entry, the extra checkout in `ci.yml`, these three
+inputs, the secret, and the PAT.
 
 ## Publishing to a package index (optional)
 
