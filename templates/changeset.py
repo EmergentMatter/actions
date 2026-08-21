@@ -98,8 +98,12 @@ def prompt_level() -> str:
     if interactive:
         try:
             return prompt_level_interactive()
-        except Exception:
-            pass  # fall through to the numbered prompt on any platform quirk
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately broad: `import termios` itself fails on Windows,
+            # and this path must degrade to the numbered prompt on ANY
+            # platform quirk rather than take the script down.
+            print(f"interactive prompt unavailable ({exc}); using numbered prompt",
+                  file=sys.stderr)
     return prompt_level_numbered()
 
 
