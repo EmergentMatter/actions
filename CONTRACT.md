@@ -185,13 +185,58 @@ jobs:
       # `id-token: write` to permissions below only if this repo publishes.
       actions-ref: v1
     permissions: { contents: write, pull-requests: write }
-    # NO `secrets: inherit` here, deliberately. None of the three shared
-    # workflows reads `secrets.*` — they use only the auto-injected
-    # `github.token`. Granting org secrets to a workflow hosted in a public repo
-    # and pinned by a movable `v1` tag would make that tag equivalent to secret
-    # access across every consuming repo. Don't add it back without a concrete
-    # secret the shared workflow actually reads.
+    # NO `secrets: inherit` here, deliberately. The shared workflows read
+    # exactly ONE optional secret between them — version.yml's
+    # `sibling-token`, for a private-sibling checkout (see below) — and it is
+    # mapped by name when needed. Everything else uses the auto-injected
+    # `github.token`. Granting org secrets to a workflow hosted in a public
+    # repo and pinned by a movable `v1` tag would make that tag equivalent to
+    # secret access across every consuming repo. Map the one secret you need;
+    # never inherit the whole store.
 ```
+
+### Private sibling checkout (optional)
+
+For a repo whose `pyproject.toml` pins a dependency as a **local path
+source** because that dependency isn't on an index yet:
+
+```toml
+[tool.uv.sources]
+foo = { path = "../foo" }
+```
+
+Your own `ci.yml` can check that sibling out itself, but the shared
+`version.yml` is called **by reference** — you cannot inject steps into
+it — and its bump step runs `uv version --bump` and `uv lock`, both of
+which resolve `[tool.uv.sources]` and fail outright when the path is
+missing (`error: Distribution not found at: file:///.../foo`). Without
+this, the release PR is never opened and the run goes red on every merge
+to `main` that has pending notes.
+
+Pass the sibling in, and map the one secret explicitly:
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/foo
+      sibling-ref: <SHA>          # required; a float breaks `uv sync --locked`
+      sibling-path: foo           # must match the `../foo` above
+    secrets:
+      sibling-token: ${{ secrets.FOO_REPO_TOKEN }}   # NOT `secrets: inherit`
+    permissions: { contents: write, pull-requests: write }
+```
+
+`sibling-ref` must be a pinned SHA, not a branch: your `uv.lock` embeds
+the sibling's resolved version, and `uv sync --locked` fails the moment
+that disagrees with what's checked out — so a floating ref turns any
+merge into the sibling into a red run in **your** repo, on a change
+nobody made there. Bump the SHA and `uv.lock` in one commit.
+
+Omit all three inputs and the sibling steps skip entirely. The whole
+block comes out when the dependency ships to an index.
 
 ## Where each guarantee lives
 
