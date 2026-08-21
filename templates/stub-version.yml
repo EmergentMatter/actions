@@ -20,12 +20,11 @@ jobs:
       actions-ref: v1
 
       # ── Private sibling checkout: DELETE unless your pyproject.toml has a
-      # `[tool.uv.sources]` entry pointing at a local path. The bump step in
-      # the shared workflow runs `uv version --bump` and `uv lock`, which
-      # resolve that path source and fail hard when it isn't on disk -- and
-      # your CI stays GREEN while it happens, so the miss shows up only as a
-      # release that never gets cut. sibling-ref must be a pinned SHA; see
-      # docs/onboarding.md, "A private sibling your package depends on".
+      # `[tool.uv.sources]` entry pointing at a local path. Without it the
+      # bump step fails on that path source -- and CI stays GREEN while it
+      # happens, so the miss shows up only as a release that never gets cut.
+      # Pin sibling-ref to a SHA. See docs/onboarding.md, "A private sibling
+      # your package depends on".
       # sibling-repo: EmergentMatter/emergent-matter-materials
       # sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
       # sibling-path: emergent-matter-materials
@@ -35,10 +34,8 @@ jobs:
     # secrets:
     #   sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
 
-    # NO `secrets: inherit` here, deliberately. The shared workflows read
-    # exactly ONE optional secret between them -- version.yml's
-    # `sibling-token`, above -- and it is mapped BY NAME when a repo needs it.
-    # Everything else uses the auto-injected `github.token`. Granting org
-    # secrets to a workflow hosted in a public repo and pinned by a movable
-    # `v1` tag would make that tag equivalent to secret access across every
-    # consuming repo. Map the one secret you need; never inherit the store.
+    # NO `secrets: inherit` here, deliberately. `sibling-token` above is the
+    # only secret the shared workflows read, and it is mapped BY NAME;
+    # everything else uses the auto-injected `github.token`. Inheriting would
+    # hand a public repo behind a movable `v1` tag your whole org secret
+    # store. Map the one secret you need; never inherit.

@@ -105,63 +105,51 @@ on:
       # ── Private sibling checkout ──────────────────────────────────────
       #
       # For a consumer whose pyproject.toml pins a dependency as a LOCAL PATH
-      # source (`[tool.uv.sources] foo = { path = "../foo" }`) because that
-      # dependency isn't published to an index yet. The consumer's own ci.yml
-      # can check the sibling out itself, but this workflow is called by
-      # reference -- a consumer cannot inject steps into it -- and the bump
-      # step below runs `uv version --bump` and `uv lock`, BOTH of which
-      # resolve `[tool.uv.sources]` and fail outright if the path is missing:
+      # source (`[tool.uv.sources] foo = { path = "../foo" }`), because that
+      # dependency isn't on an index yet. Its own ci.yml can check the sibling
+      # out, but this workflow is called by reference and can't be given
+      # steps -- and the bump step below runs `uv version --bump` and
+      # `uv lock`, both of which resolve path sources and fail without it:
       #
       #   error: Distribution not found at: file:///.../foo
       #
-      # So the sibling has to be checked out in here, driven by these inputs.
-      # Leave them unset and every step below is skipped -- a consumer with no
-      # path sources is unaffected.
-      #
-      # This whole block comes out when the dependency ships to an index and
-      # the consumer drops its `[tool.uv.sources]` entry.
+      # Unset, every sibling step below is skipped and a consumer with no path
+      # sources is unaffected. The block comes out when the dependency ships
+      # to an index. See docs/onboarding.md for the consumer-side walkthrough.
       sibling-repo:
         description: >-
           owner/name of a private repo to check out alongside the consumer's
-          checkout, e.g. EmergentMatter/emergent-matter-materials. Empty (the
-          default) disables the sibling checkout entirely.
+          checkout. Empty (the default) disables the sibling checkout.
         type: string
         default: ""
       sibling-ref:
         description: >-
-          Exact ref of sibling-repo to check out. REQUIRED when sibling-repo is
-          set, and validated as non-empty below rather than defaulted: an empty
-          checkout ref silently means "the default branch", and a floating ref
-          is the wrong answer here. The consumer's uv.lock embeds the sibling's
-          resolved version, and `uv sync --locked` fails the moment that
-          disagrees with what's checked out -- so a float turns any merge into
-          the sibling into a red run in the consumer, on a change nobody made
-          there. Pin a SHA, and bump it alongside uv.lock.
+          Exact ref of sibling-repo. Required when sibling-repo is set, and
+          validated below rather than defaulted -- an empty checkout ref
+          silently means "the default branch". Pin a SHA: the consumer's
+          uv.lock embeds the sibling's resolved version, so a floating ref
+          turns any merge into the sibling into a red run in the consumer.
         type: string
         default: ""
       sibling-path:
         description: >-
-          Directory name the sibling lands under, as a SINGLE path segment (no
-          slashes). Must match what the consumer's `[tool.uv.sources]` path
-          points at: `{ path = "../foo" }` means `sibling-path: foo`.
+          Directory the sibling lands in, as a SINGLE path segment. Must match
+          the consumer's path source: `{ path = "../foo" }` means `foo`.
         type: string
         default: ""
 
     secrets:
       sibling-token:
         description: >-
-          Token used to read sibling-repo. Needed when it is private:
-          the auto-injected `github.token` cannot read a DIFFERENT private
-          repo, so a fine-grained PAT scoped to just that repo is the
-          intended value. Optional -- a public sibling falls back to
-          `github.token`.
+          Token used to read sibling-repo, needed when it is private --
+          `github.token` cannot read a DIFFERENT private repo, so a
+          fine-grained PAT scoped to that one repo is the intended value.
+          Optional; a public sibling falls back to `github.token`.
 
-          Map this ONE secret explicitly (`secrets: { sibling-token: ... }`).
-          Do NOT reach for `secrets: inherit` in the stub to satisfy it: this
-          workflow lives in a public repo behind a MOVABLE `v1` tag, and
-          inheriting would make that tag equivalent to org-wide secret access
-          in every consuming repo. One read-only, single-repo, expiring PAT is
-          a categorically smaller grant than the whole secret store.
+          Map it by name (`secrets: { sibling-token: ... }`), never via
+          `secrets: inherit` -- this workflow is public and pinned by a
+          MOVABLE `v1` tag, so inheriting would make that tag equivalent to
+          org-wide secret access in every consuming repo.
         required: false
 
 permissions: {}
@@ -237,14 +225,14 @@ jobs:
           SIBLING_PATH: ${{ inputs.sibling-path }}
         run: |
           set -euo pipefail
-          # Checked BEFORE the checkout below, not after: an empty ref does not
-          # fail checkout, it silently resolves to the sibling's default branch.
+          # Checked BEFORE the checkout: an empty ref doesn't fail checkout, it
+          # silently resolves to the sibling's default branch.
           if [ -z "${SIBLING_REF}" ]; then
             echo "::error::sibling-ref is required when sibling-repo is set — an empty ref silently means the sibling's default branch."
             exit 1
           fi
-          # sibling-path becomes a filesystem destination OUTSIDE the workspace
-          # in the relocate step, so it is constrained to one plain segment.
+          # Becomes a destination OUTSIDE the workspace in the relocate step,
+          # so it is constrained to one plain segment.
           case "${SIBLING_PATH}" in
             "" | */* | . | ..)
               echo "::error::sibling-path must be a single directory name with no slashes (got: '${SIBLING_PATH}')."
@@ -260,11 +248,10 @@ jobs:
           ref: ${{ inputs.sibling-ref }}
           # Falls back to github.token so a PUBLIC sibling needs no secret.
           token: ${{ secrets.sibling-token || github.token }}
-          # One-shot clone; nothing later in this job pushes to the sibling, so
-          # the token has no reason to stay in its git config.
+          # One-shot clone -- no reason to leave the token in its git config.
           persist-credentials: false
-          # Staged INSIDE the workspace because actions/checkout rejects a path
-          # that escapes $GITHUB_WORKSPACE. The next step moves it out.
+          # Staged INSIDE the workspace: actions/checkout rejects a path that
+          # escapes $GITHUB_WORKSPACE. The next step moves it out.
           path: .em-sibling/${{ inputs.sibling-path }}
 
       - name: Move the sibling alongside the consumer checkout
@@ -273,30 +260,29 @@ jobs:
           SIBLING_PATH: ${{ inputs.sibling-path }}
         run: |
           set -euo pipefail
-          # `{ path = "../foo" }` resolves relative to the consumer's
-          # pyproject.toml, which sits at $GITHUB_WORKSPACE -- so the sibling
-          # belongs one level ABOVE the workspace:
+          # `{ path = "../foo" }` resolves from the consumer's pyproject.toml
+          # at $GITHUB_WORKSPACE, so the sibling belongs one level ABOVE it:
           #
           #   /home/runner/work/<repo>/            <- dirname, destination
           #   ├── <repo>/                          <- $GITHUB_WORKSPACE
           #   └── foo/                             <- the sibling
           #
-          # actions/checkout cannot write there (it refuses to leave the
-          # workspace), but a plain `run:` step can, hence the stage-and-move.
+          # actions/checkout can't write outside the workspace; a plain `run:`
+          # step can, hence the stage-and-move.
           dest="$(dirname "${GITHUB_WORKSPACE}")/${SIBLING_PATH}"
-          # A sibling-path equal to the consumer's OWN repo name resolves dest
-          # straight onto $GITHUB_WORKSPACE, and the rm below would delete the
-          # checkout this job is releasing from. Cheap assert, catastrophic miss.
+          # A sibling-path equal to the consumer's OWN repo name puts dest on
+          # $GITHUB_WORKSPACE, and the rm below would delete the checkout this
+          # job is releasing from. Cheap assert, catastrophic miss.
           if [ "${dest}" = "${GITHUB_WORKSPACE}" ]; then
             echo "::error::sibling-path '${SIBLING_PATH}' resolves to the consumer checkout itself (${GITHUB_WORKSPACE})."
             exit 1
           fi
           rm -rf "${dest}"
           mv ".em-sibling/${SIBLING_PATH}" "${dest}"
-          # .em-sibling must not survive into the workspace: create-pull-request
-          # sweeps stray dirs into the release PR as gitlinks -- the exact bug
-          # the '.em-actions' cleanup step below exists to fix. Empty by now,
-          # so a plain rmdir both removes it and asserts the mv took everything.
+          # .em-sibling must not survive: create-pull-request sweeps stray dirs
+          # into the release PR as gitlinks -- the same bug the '.em-actions'
+          # cleanup step below fixes. rmdir over rm -rf so it also asserts the
+          # mv took everything.
           rmdir .em-sibling
           echo "sibling checked out at ${dest}"
 
