@@ -320,10 +320,16 @@ def apply_plan(plan: Plan, version_files: list[str]) -> list[str]:
                 if updated is not None:
                     dest.write_text(updated)
             else:
-                shutil.copyfile(TEMPLATES / "ci.yml", dest)
+                # copy, not copyfile: copyfile drops permission bits, and
+                # templates/changeset.py is 100755 for its shebang (see below).
+                shutil.copy(TEMPLATES / "ci.yml", dest)
         else:
             template = next(t for t, d in COPIES.items() if d == action.target)
-            shutil.copyfile(TEMPLATES / template, dest)
+            # `shutil.copy` preserves the mode; `copyfile` does not. changeset.py
+            # carries a shebang and is 100755 in templates/, and a copy that lands
+            # non-executable trips ruff's EXE001 in every repo onboarded -- which
+            # is exactly how it reached both consumers before this was fixed.
+            shutil.copy(TEMPLATES / template, dest)
         done.append(action.target)
     return done
 
