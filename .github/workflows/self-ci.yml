@@ -165,6 +165,79 @@ jobs:
           print(f"OK  {len(COPIES)} local health file(s) match templates/")
           EOF
 
+      - name: Issue forms parse and carry the keys GitHub requires
+        # A malformed issue form fails silently on GitHub's side: the form
+        # just does not appear in the new-issue chooser, with no error shown
+        # anywhere. Nothing else here would catch that, and these files are
+        # copied into every repo in the org.
+        #
+        # Ported from the retired EmergentMatter/.github repo's validate.py,
+        # which checked this before that repo was consolidated into this one.
+        # It only renders from a default branch, so CI is the only place this
+        # gets checked before a repo receives it.
+        run: |
+          uv run --with pyyaml python - <<'EOF'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          FORMS_DIR = Path("templates/ISSUE_TEMPLATE")
+          REQUIRED_FORM_KEYS = ("name", "description", "body")
+
+          failed = False
+
+          def fail(msg: str) -> None:
+              global failed
+              print(f"::error::{msg}")
+              failed = True
+
+          if not FORMS_DIR.is_dir():
+              fail(f"{FORMS_DIR} does not exist; the shared issue forms are missing")
+              sys.exit(1)
+
+          form_files = sorted(p for p in FORMS_DIR.iterdir() if p.suffix in (".yml", ".yaml"))
+          if not form_files:
+              fail(f"no .yml files in {FORMS_DIR}")
+              sys.exit(1)
+
+          for path in form_files:
+              try:
+                  data = yaml.safe_load(path.read_text())
+              except yaml.YAMLError as exc:
+                  fail(f"{path} is not valid YAML:\n{exc}")
+                  continue
+
+              if not isinstance(data, dict):
+                  fail(f"{path} must parse to a YAML mapping, got {type(data).__name__}")
+                  continue
+
+              if path.name == "config.yml":
+                  # Not an issue form. It configures the chooser page, so it
+                  # has its own shape: contact_links each need a name, an
+                  # http(s) url, and the `about` line shown under the name.
+                  for i, link in enumerate(data.get("contact_links") or []):
+                      if not isinstance(link, dict):
+                          fail(f"{path} contact_links[{i}] must be a mapping")
+                          continue
+                      for key in ("name", "url", "about"):
+                          if not link.get(key):
+                              fail(f"{path} contact_links[{i}] has no '{key}'")
+                      url = str(link.get("url", ""))
+                      if url and not url.startswith(("http://", "https://")):
+                          fail(f"{path} contact_links[{i}] url is not http(s): {url}")
+                  continue
+
+              missing = [k for k in REQUIRED_FORM_KEYS if k not in data]
+              if missing:
+                  fail(f"{path} is missing required issue-form key(s): {', '.join(missing)}")
+
+          if failed:
+              sys.exit(1)
+
+          print(f"OK  {len(form_files)} issue-template file(s) valid")
+          EOF
+
   test:
     name: test
     runs-on: ubuntu-latest
