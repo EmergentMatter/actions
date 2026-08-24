@@ -238,6 +238,23 @@ def test_malformed_manifest_raises_loudly(tmp_path):
         fleet_status.load_manifest(manifest)
 
 
+def test_entry_with_no_policy_key_raises_loudly(tmp_path):
+    """onboard.py's loader requires `policy` -- fleet_status.py must use that same
+    loader (not its own), so the two tools can never quietly disagree on this again.
+    A typo'd/omitted `policy` must fail loudly, not default to "managed" and turn a
+    seed-once file (customisable on purpose) into a false-positive drift finding."""
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """\
+[[template]]
+source = "PULL_REQUEST_TEMPLATE.md"
+dest   = ".github/PULL_REQUEST_TEMPLATE.md"
+"""
+    )
+    with pytest.raises(KeyError):
+        fleet_status.load_manifest(manifest)
+
+
 def test_managed_template_matching_is_clean():
     findings = fleet_status.check_templates(
         [MANAGED_ENTRY], {"scripts/changeset.py": CHANGESET_TEMPLATE}, stamp_status=None

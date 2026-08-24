@@ -61,10 +61,25 @@ lint_gate = importlib.util.module_from_spec(_spec)
 sys.modules["lint_gate"] = lint_gate
 _spec.loader.exec_module(lint_gate)
 
+# templates/manifest.toml has exactly one parser -- onboard.py's -- and
+# sync.py already imports it the same way. Redefining TemplateEntry/
+# load_manifest here would let this file's notion of the manifest drift
+# from the other two tools' (it did, briefly: this file used to default a
+# missing `policy` key to "managed" instead of raising, which would have
+# under-reported drift on exactly the seed-once files that default was
+# supposed to protect).
+_spec = importlib.util.spec_from_file_location(
+    "onboard", Path(__file__).resolve().parent / "onboard.py"
+)
+onboard = importlib.util.module_from_spec(_spec)
+sys.modules["onboard"] = onboard
+_spec.loader.exec_module(onboard)
+TemplateEntry = onboard.TemplateEntry
+load_manifest = onboard.load_manifest
+
 ACTIONS_REPO = "EmergentMatter/actions"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "templates"
-MANIFEST_PATH = TEMPLATES / "manifest.toml"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
 
@@ -200,32 +215,6 @@ def check_verify_wheel(text: str | None) -> list[Finding]:
             "but installs nothing would pass. Add "
             "`- uses: EmergentMatter/actions/verify-wheel@v1` after `uv build`.",
         )
-    ]
-
-
-@dataclass
-class TemplateEntry:
-    source: str  # relative to templates/, may be nested
-    dest: str  # relative to the target repo root
-    policy: str  # "managed" | "seed-once"
-
-
-def load_manifest(path: Path = MANIFEST_PATH) -> list[TemplateEntry]:
-    """Raises if the manifest is missing, unreadable, or malformed.
-
-    templates/manifest.toml is a tracked file, and this script only ever
-    runs from a clone of this repo -- its absence means something is
-    broken, not "zero templates". Treating a missing/malformed manifest as
-    empty would make every `templates` and `stamp` finding silently vanish
-    while the sweep still exits 0, which is exactly the failure mode this
-    system exists to catch.
-    """
-    if not path.is_file():
-        raise FileNotFoundError(f"manifest not found: {path}")
-    data = tomllib.loads(path.read_text())
-    return [
-        TemplateEntry(t["source"], t["dest"], t.get("policy", "managed"))
-        for t in data.get("template", [])
     ]
 
 
@@ -518,7 +507,7 @@ def main(argv: list[str]) -> int:
 
     try:
         manifest = load_manifest()
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, tomllib.TOMLDecodeError, KeyError, onboard.OnboardError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
