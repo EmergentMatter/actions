@@ -224,9 +224,8 @@ anyone who installs the library. `changeset.py` is a contributor-only
 tool. It has no business in a package your users install.
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
-root, and invoke it as `uv run scripts/changeset.py`. That's a longer
-command than `uv run changeset` would be, on purpose. Don't "tidy" it
-back into a console-script entry to shorten it.
+root, and invoke it as `uv run scripts/changeset.py`. Do not shorten
+that invocation with a console-script entry.
 
 The `version.yml` stub is the one to get exactly right, because it's the
 one that wires your own CI in as a gate. This is its exact shape:
