@@ -115,6 +115,56 @@ jobs:
           print("OK  templates/SECURITY.md and templates/SUPPORT.md agree on '## Scope'")
           EOF
 
+      - name: This repo's own health files match templates/
+        # actions carries its own copies of the health files it ships, because
+        # it is the repo the org's security policy points at and it needs a
+        # policy of its own. But it is deliberately NOT onboarded into release
+        # control, so it has no `templates_version` stamp and sync.py cannot
+        # reach it -- nothing would notice these copies going stale. This is
+        # the same drift the rest of this PR exists to catch, so it gets the
+        # same treatment: the copies must be byte-identical to their source.
+        #
+        # Only files that genuinely apply here are copied. NOTICE is an
+        # Apache-2.0 artifact and this repo is MIT; the issue forms require a
+        # `pip show` package version and this repo ships no package; and
+        # .github/CODEOWNERS is richer here than the template. Those three are
+        # deliberately absent, not forgotten.
+        run: |
+          uv run python - <<'EOF'
+          import sys
+          from pathlib import Path
+
+          COPIES = {
+              "SECURITY.md": "templates/SECURITY.md",
+              "SUPPORT.md": "templates/SUPPORT.md",
+              "CODE_OF_CONDUCT.md": "templates/CODE_OF_CONDUCT.md",
+              ".github/PULL_REQUEST_TEMPLATE.md": "templates/PULL_REQUEST_TEMPLATE.md",
+          }
+
+          failed = False
+          for local, template in COPIES.items():
+              local_path, template_path = Path(local), Path(template)
+              for p in (local_path, template_path):
+                  if not p.is_file():
+                      print(f"::error::{p} is missing; expected {local} to be a copy of {template}")
+                      failed = True
+              if failed:
+                  continue
+              if local_path.read_bytes() != template_path.read_bytes():
+                  print(
+                      f"::error::{local} has drifted from {template}. This repo's own copy "
+                      f"must stay byte-identical to the template it ships -- sync.py cannot "
+                      f"reach this repo, so nothing else would catch it. Copy {template} "
+                      f"over {local} and re-run."
+                  )
+                  failed = True
+
+          if failed:
+              sys.exit(1)
+
+          print(f"OK  {len(COPIES)} local health file(s) match templates/")
+          EOF
+
   test:
     name: test
     runs-on: ubuntu-latest
