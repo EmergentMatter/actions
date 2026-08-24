@@ -217,11 +217,11 @@ redundant leftover you can skip copying.
 
 ### Why `scripts/changeset.py` must live outside the package
 
-Put `changeset.py` inside `src/<package>/`, or wire it up as a
-`[project.scripts]` console-script entry, and it **ships inside the
-wheel**, putting a `changeset` command on the PATH of anyone who installs
-the library. `changeset.py` is a contributor-only tool. It has no business
-in a package your users install.
+**NEVER** put `changeset.py` inside `src/<package>/`, and **NEVER** wire
+it up as a `[project.scripts]` console-script entry. Do either and it
+**ships inside the wheel**, putting a `changeset` command on the PATH of
+anyone who installs the library. `changeset.py` is a contributor-only
+tool. It has no business in a package your users install.
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
 root, and invoke it as `uv run scripts/changeset.py`. That's a longer

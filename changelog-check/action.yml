@@ -131,8 +131,9 @@ runs:
         if [ "${#matches[@]}" -eq 0 ]; then
           {
             echo "::error::No changelog note was added under '${NOTES_DIR}/' by this PR."
-            echo "Run 'uv run changeset' and commit the file it writes, or apply the"
-            echo "'${{ inputs.skip-label }}' label if this change genuinely needs no note."
+            echo "Run 'uv run scripts/changeset.py' and commit the file it writes, or"
+            echo "apply the '${{ inputs.skip-label }}' label if this change genuinely"
+            echo "needs no note."
           } >&2
           exit 1
         fi
