@@ -24,6 +24,12 @@ It deliberately does NOT do three things:
                    "The name you see is not the name you type". Printed as a
                    next step instead.
 
+What gets copied and under what policy is declared once, in
+templates/manifest.toml (see load_manifest below) -- shared with sync.py,
+which is what keeps a "managed" template current after onboarding. A
+"seed-once" template (currently only ci.yml) is written here if absent and
+never touched again by either script.
+
 Stdlib only. GitHub access shells out to `gh`.
 
     python3 onboard.py --repo-path ../some-repo                 # propose
@@ -43,23 +49,61 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
+CI_DEST = ".github/workflows/ci.yml"
 LABEL = "skip-changelog"
 LABEL_DESC = "Exempts this PR from the changelog note requirement"
 LABEL_COLOR = "cfd3d7"
 
-# template -> destination, relative to the target repo root
-COPIES = {
-    "stub-changelog-check.yml": ".github/workflows/changelog-check.yml",
-    "stub-version.yml": ".github/workflows/version.yml",
-    "stub-build-release.yml": ".github/workflows/build-release.yml",
-    "changeset.py": "scripts/changeset.py",
-    "CONTRIBUTING.md": "CONTRIBUTING.md",
-}
-CI_DEST = ".github/workflows/ci.yml"
+_VALID_POLICIES = {"managed", "seed-once"}
 
 
 class OnboardError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class TemplateEntry:
+    source: str  # relative to templates/
+    dest: str  # relative to the target repo root
+    policy: str  # "managed" | "seed-once"
+
+
+def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
+    """Read templates/manifest.toml -- the one declaration onboard.py and
+    sync.py both consume. `path` is resolved against TEMPLATES at call time
+    (not at import time), so tests can point it at a fixture directory by
+    monkeypatching the module-level TEMPLATES constant."""
+    manifest_path = path if path is not None else TEMPLATES / "manifest.toml"
+    with manifest_path.open("rb") as f:
+        data = tomllib.load(f)
+    entries = [
+        TemplateEntry(source=raw["source"], dest=raw["dest"], policy=raw["policy"])
+        for raw in data.get("template", [])
+    ]
+    bad = {e.policy for e in entries} - _VALID_POLICIES
+    if bad:
+        word = "policy" if len(bad) == 1 else "policies"
+        raise OnboardError(f"manifest.toml: unknown {word} {sorted(bad)!r}")
+    return entries
+
+
+def current_templates_version(actions_repo: Path | None = None) -> str:
+    """The actions repo's own version, right now: the exact tag at HEAD if
+    there is one, else the short commit SHA. Both are valid refs for
+    `git show <ref>:templates/<path>`, which is how sync.py retrieves a
+    historical template later -- see CONTRACT.md."""
+    repo = actions_repo if actions_repo is not None else Path(__file__).resolve().parent.parent
+    p = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match"], cwd=repo, capture_output=True, text=True
+    )
+    if p.returncode == 0:
+        return p.stdout.strip()
+    p = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
+    )
+    if p.returncode != 0:
+        raise OnboardError(f"could not resolve a git ref for {repo}: {p.stderr.strip()}")
+    return p.stdout.strip()
 
 
 @dataclass
@@ -76,6 +120,7 @@ class Plan:
     version: str
     actions: list[Action] = field(default_factory=list)
     candidates: list[tuple[str, str]] = field(default_factory=list)
+    manifest: list[TemplateEntry] = field(default_factory=list)
     ci_needs_workflow_call: bool = False
     ci_job_names: list[str] = field(default_factory=list)
     ci_is_ours: bool = False
@@ -207,19 +252,27 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
         )
 
     plan = Plan(repo, name, version)
+    manifest = load_manifest()
+    plan.manifest = manifest
+    try:
+        ci_entry = next(e for e in manifest if e.dest == CI_DEST)
+    except StopIteration:
+        raise OnboardError(f"manifest.toml has no entry for {CI_DEST}") from None
 
-    for template, dest in COPIES.items():
-        target = repo / dest
+    for entry in manifest:
+        if entry.dest == CI_DEST:
+            continue  # handled below -- it gets bespoke treatment, not a plain copy
+        target = repo / entry.dest
         if target.exists():
-            same = target.read_bytes() == (TEMPLATES / template).read_bytes()
+            same = target.read_bytes() == (TEMPLATES / entry.source).read_bytes()
             note = (
                 "already present and identical"
                 if same
                 else "already present, DIFFERS from template -- left alone"
             )
-            plan.actions.append(Action("skip", dest, note))
+            plan.actions.append(Action("skip", entry.dest, note))
         else:
-            plan.actions.append(Action("create", dest, f"from templates/{template}"))
+            plan.actions.append(Action("create", entry.dest, f"from templates/{entry.source}"))
 
     ci = repo / CI_DEST
     if ci.exists():
@@ -247,7 +300,9 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
     else:
         plan.ci_is_ours = True
         plan.ci_job_names = ["lint", "test", "build"]
-        plan.actions.append(Action("create", CI_DEST, "from templates/ci.yml (repo has no CI)"))
+        plan.actions.append(
+            Action("create", CI_DEST, f"from templates/{ci_entry.source} (repo has no CI)")
+        )
 
     if not (repo / "changelog.d" / ".gitkeep").exists():
         plan.actions.append(Action("create", "changelog.d/.gitkeep", "holds pending notes"))
@@ -280,20 +335,24 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
 # -------------------------------------------------------------------- writing
 
 
-def render_config_block(version_files: list[str]) -> str:
+def render_config_block(version_files: list[str], templates_version: str) -> str:
     snippet = (TEMPLATES / "pyproject-snippet.toml").read_text()
     entries = "\n".join(f'  "{v}",' for v in version_files)
     block = re.sub(
         r"(?ms)^\[tool\.em-release\].*?^version_files\s*=\s*\[.*?^\]",
-        "[tool.em-release]\nversion_files = [\n" + entries + "\n]",
+        f'[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+        "version_files = [\n" + entries + "\n]",
         snippet,
     )
     if "[tool.em-release]" not in block:
-        block += "\n[tool.em-release]\nversion_files = [\n" + entries + "\n]\n"
+        block += (
+            f'\n[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+            "version_files = [\n" + entries + "\n]\n"
+        )
     return block
 
 
-def apply_plan(plan: Plan, version_files: list[str]) -> list[str]:
+def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> list[str]:
     done = []
     for action in plan.actions:
         if action.kind != "create":
@@ -313,23 +372,24 @@ def apply_plan(plan: Plan, version_files: list[str]) -> list[str]:
         elif action.target == "pyproject.toml":
             existing = dest.read_text()
             sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
-            dest.write_text(existing + sep + render_config_block(version_files))
+            dest.write_text(existing + sep + render_config_block(version_files, templates_version))
         elif action.target == CI_DEST:
             if dest.exists():
                 updated = add_workflow_call(dest.read_text())
                 if updated is not None:
                     dest.write_text(updated)
             else:
+                ci_entry = next(e for e in plan.manifest if e.dest == CI_DEST)
                 # copy, not copyfile: copyfile drops permission bits, and
                 # templates/changeset.py is 100755 for its shebang (see below).
-                shutil.copy(TEMPLATES / "ci.yml", dest)
+                shutil.copy(TEMPLATES / ci_entry.source, dest)
         else:
-            template = next(t for t, d in COPIES.items() if d == action.target)
+            entry = next(e for e in plan.manifest if e.dest == action.target)
             # `shutil.copy` preserves the mode; `copyfile` does not. changeset.py
             # carries a shebang and is 100755 in templates/, and a copy that lands
             # non-executable trips ruff's EXE001 in every repo onboarded -- which
             # is exactly how it reached both consumers before this was fixed.
-            shutil.copy(TEMPLATES / template, dest)
+            shutil.copy(TEMPLATES / entry.source, dest)
         done.append(action.target)
     return done
 
@@ -475,7 +535,13 @@ def main(argv: list[str]) -> int:
         print_next_steps(plan, args.version_file)
         return 0
 
-    written = apply_plan(plan, args.version_file)
+    try:
+        templates_version = current_templates_version()
+    except OnboardError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    written = apply_plan(plan, args.version_file, templates_version)
     print()
     for w in written:
         print(f"  wrote {w}")

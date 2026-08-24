@@ -1,0 +1,97 @@
+# The single declaration of what onboarding installs and what sync.py keeps
+# current. Consumed by onboard.py, sync.py, and fleet_status.py -- read with
+# stdlib tomllib. Do not change this shape without updating all three.
+#
+#   source  path relative to templates/ (may be nested, e.g. ISSUE_TEMPLATE/x)
+#   dest    path relative to the target repo root
+#   policy  "managed"    -- must always match the template. Divergence is
+#                            either staleness or a local edit; sync.py tells
+#                            the two apart with a three-way compare and
+#                            resolves or reports accordingly.
+#           "seed-once"  -- written once, at onboarding, if absent. Never
+#                            touched again, by onboard.py or sync.py.
+
+[[template]]
+source = "stub-changelog-check.yml"
+dest   = ".github/workflows/changelog-check.yml"
+policy = "managed"
+
+[[template]]
+source = "stub-version.yml"
+dest   = ".github/workflows/version.yml"
+policy = "managed"
+
+[[template]]
+source = "stub-build-release.yml"
+dest   = ".github/workflows/build-release.yml"
+policy = "managed"
+
+[[template]]
+source = "changeset.py"
+dest   = "scripts/changeset.py"
+policy = "managed"
+
+[[template]]
+source = "CONTRIBUTING.md"
+dest   = "CONTRIBUTING.md"
+policy = "managed"
+
+[[template]]
+source = "ci.yml"
+dest   = ".github/workflows/ci.yml"
+policy = "seed-once"
+
+[[template]]
+source = "SECURITY.md"
+dest   = "SECURITY.md"
+policy = "managed"
+
+[[template]]
+source = "SUPPORT.md"
+dest   = "SUPPORT.md"
+policy = "managed"
+
+[[template]]
+source = "CODE_OF_CONDUCT.md"
+dest   = "CODE_OF_CONDUCT.md"
+policy = "managed"
+
+[[template]]
+source = "NOTICE"
+dest   = "NOTICE"
+policy = "managed"
+
+[[template]]
+source = "LICENSE"
+dest   = "LICENSE"
+policy = "managed"
+
+[[template]]
+source = "CODEOWNERS"
+dest   = ".github/CODEOWNERS"
+policy = "managed"
+
+[[template]]
+source = "dependabot.yml"
+dest   = ".github/dependabot.yml"
+policy = "managed"
+
+[[template]]
+source = "PULL_REQUEST_TEMPLATE.md"
+dest   = ".github/PULL_REQUEST_TEMPLATE.md"
+policy = "managed"
+
+[[template]]
+source = "ISSUE_TEMPLATE/bug_report.yml"
+dest   = ".github/ISSUE_TEMPLATE/bug_report.yml"
+policy = "managed"
+
+[[template]]
+source = "ISSUE_TEMPLATE/feature_request.yml"
+dest   = ".github/ISSUE_TEMPLATE/feature_request.yml"
+policy = "managed"
+
+[[template]]
+source = "ISSUE_TEMPLATE/config.yml"
+dest   = ".github/ISSUE_TEMPLATE/config.yml"
+policy = "managed"
