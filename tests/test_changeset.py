@@ -69,8 +69,8 @@ def test_handle_key_ignores_a_digit_with_no_level(capsys):
 
 
 def test_handle_key_bare_esc_cancels():
-    # A lone Esc used to be read as the start of an arrow sequence and then
-    # block on two more reads -- "the script froze".
+    # A bare Esc must cancel outright. Waiting on it as the start of an
+    # arrow sequence that never continues would hang the prompt.
     assert changeset.handle_key(changeset.ESC, 1) == (1, "cancel")
 
 
@@ -81,7 +81,8 @@ def test_handle_key_ctrl_d_cancels():
 
 
 def test_handle_key_eof_cancels():
-    # "" is EOF. It used to fall into `else: continue` and spin forever.
+    # "" is EOF; anything but cancel here would spin the read loop forever
+    # once stdin closes.
     assert changeset.handle_key("", 0) == (0, "cancel")
 
 
@@ -124,10 +125,10 @@ def keyboard():
 
 
 def test_read_key_resolves_an_arrow_from_a_single_burst(keyboard):
-    # The regression guard that matters most: a terminal delivers "\x1b[A" as
-    # one write. Reading through sys.stdin's text layer would buffer the whole
-    # burst, leave select() reporting nothing pending, and turn every arrow
-    # key into a bare Esc -- i.e. into a cancel.
+    # The regression guard that matters most: a terminal sends "\x1b[A" as
+    # one write. Reading through sys.stdin's text layer would buffer the
+    # whole burst, so select() would report nothing pending and every arrow
+    # key would look like a bare Esc, which cancels.
     fd = keyboard(changeset.KEY_UP)
     assert changeset.read_key(fd) == changeset.KEY_UP
 

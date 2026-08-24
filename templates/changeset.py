@@ -9,8 +9,8 @@ authoring tool, and anything under the package root ships in the built
 wheel — see CONTRACT.md and docs/onboarding.md for why this file's location
 is load-bearing, not cosmetic.
 
-Run it, pick a bump level, write a one-line user-facing summary. `q` or
-`Esc` backs out of the level picker without writing anything.
+Run it, pick a bump level, write a one-line user-facing summary. `q`,
+`Esc`, or Ctrl-C backs out of the level picker without writing anything.
 """
 
 from __future__ import annotations
@@ -34,14 +34,13 @@ ESC = "\x1b"
 KEY_UP = "\x1b[A"
 KEY_DOWN = "\x1b[B"
 KEY_INTERRUPT = "\x03"  # Ctrl-C
-# Ctrl-D. Raw mode hands this over as a plain byte instead of closing stdin,
-# so it has to be recognised explicitly to mean what it already means at the
-# numbered prompt, where the line discipline turns it into an EOFError.
+# Ctrl-D. Raw mode delivers it as a plain byte instead of closing stdin, so
+# it has to be recognised explicitly here to mean what it already means at
+# the numbered prompt: EOF.
 KEY_EOT = "\x04"
 
-# Bracketed paste. A terminal in this mode wraps pasted text in these two
-# markers; without consuming the payload, a paste containing "q" would read
-# as a cancel keypress and silently drop the user out of the picker.
+# Bracketed paste markers. A terminal in this mode wraps pasted text between
+# these; see _swallow_paste for why the payload has to be discarded.
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
 
@@ -64,7 +63,7 @@ def handle_key(ch: str, selected: int) -> tuple[int, Action]:
     """Pure state machine for the interactive picker.
 
     Takes the key just read (an arrow key arrives as its whole escape
-    sequence; "" means EOF) and the current selection, and returns the new
+    sequence; "" means EOF) and the current selection. Returns the new
     selection plus what to do about it. Kept free of terminal I/O so it can
     be tested without a pty.
     """
@@ -89,10 +88,10 @@ def handle_key(ch: str, selected: int) -> tuple[int, Action]:
 def _read_byte(fd: int) -> str:
     """One byte from `fd`, decoded leniently. "" at EOF.
 
-    `os.read` rather than `sys.stdin.read` so the `_has_pending` peek below
-    is accurate: stdin's text layer pulls the whole burst ("\x1b[A") into its
-    own buffer on the first read, after which `select` would report nothing
-    pending and a real arrow key would look like a bare Esc.
+    `os.read` rather than `sys.stdin.read`, so the `_has_pending` peek below
+    stays accurate. Stdin's text layer buffers a whole burst ("\x1b[A") on
+    the first read; after that, `select` reports nothing pending and a real
+    arrow key looks like a bare Esc.
     """
     return os.read(fd, 1).decode("utf-8", "replace")
 
@@ -105,11 +104,11 @@ def _has_pending(fd: int) -> bool:
 def _swallow_paste(fd: int) -> None:
     """Discard a bracketed paste's payload, up to and including its end marker.
 
-    Pasted text is not keystrokes, and the picker has no field to paste into.
-    Reading it as keys means the first "q" in the pasted text cancels and the
-    first newline selects. Bounded by the same pending-input timeout as
-    everything else, so a paste that stalls mid-stream stops being swallowed
-    rather than hanging the prompt.
+    Pasted text isn't keystrokes, and the picker has nowhere to paste into.
+    Read as keys, the first "q" in the pasted text would cancel and the
+    first newline would select. Bounded by the same pending-input timeout
+    as everything else, so a paste that stalls mid-stream stops being
+    swallowed instead of hanging the prompt.
     """
     tail = ""
     while _has_pending(fd):
@@ -132,8 +131,8 @@ def read_key(fd: int) -> str:
     """
     ch = _read_byte(fd)
     if ch != ESC or not _has_pending(fd):
-        # Nothing followed the Esc, so it is a keypress in its own right and
-        # reading further would block — the hang this guards against.
+        # Nothing followed the Esc, so it's a keypress on its own. Reading
+        # further here would block waiting for bytes that never arrive.
         return ch
 
     ch2 = _read_byte(fd)
@@ -156,7 +155,8 @@ def read_key(fd: int) -> str:
 def prompt_level_interactive() -> str | None:
     """Arrow-key selectable list, using raw terminal mode.
 
-    Returns the chosen level, or None if the user cancelled with q/Esc/EOF.
+    Returns the chosen level, or None if the user cancelled (q, Esc,
+    Ctrl-D, or EOF).
     """
     import termios
     import tty
@@ -212,10 +212,10 @@ def ask(prompt: str) -> str | None:
     """`input()` with both ways out of a cooked-mode prompt handled.
 
     Returns None at EOF (Ctrl-D). On Ctrl-C it prints the newline the
-    terminal doesn't — cooked mode echoes "^C" without one, so "Cancelled."
-    would otherwise land glued to the prompt — then re-raises for the
-    top-level handler. The raw-mode picker needs none of this: it disables
-    echo, and its last render already ended the line.
+    terminal doesn't, then re-raises for the top-level handler. Cooked mode
+    echoes "^C" with no newline, so "Cancelled." would otherwise land glued
+    to the prompt. The raw-mode picker needs none of this: it disables
+    echo, and its last render already ends the line.
     """
     try:
         return input(prompt)
@@ -250,8 +250,8 @@ def prompt_level_numbered() -> str | None:
 def prompt_level() -> str | None:
     """Returns the chosen level, or None if the user cancelled.
 
-    Cancelling is a return value rather than a `sys.exit` so the broad
-    `except` below can't be tempted to swallow it and so it stays testable.
+    Cancelling is a return value rather than a `sys.exit`, so the broad
+    `except` below can't swallow it, and it stays testable.
     """
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     if interactive:
