@@ -20,6 +20,7 @@ import secrets
 import select
 import sys
 from pathlib import Path
+from typing import Literal
 
 LEVELS = [
     ("major", "Existing callers have to change something"),
@@ -44,26 +45,38 @@ KEY_EOT = "\x04"
 PASTE_START = "\x1b[200~"
 PASTE_END = "\x1b[201~"
 
+# A terminal only sends those markers to a program that asked for them, and
+# the shell turns the mode off before running us, so the picker has to ask
+# for itself. Terminals that don't support it ignore both of these.
+PASTE_MODE_ON = "\x1b[?2004h"
+PASTE_MODE_OFF = "\x1b[?2004l"
+
 # How long to wait for the rest of an escape sequence before concluding the
 # user pressed a bare Esc. Arrow keys arrive as one burst, so anything that
 # hasn't landed within this is not part of the sequence.
 ESC_SEQUENCE_TIMEOUT = 0.05
 
+# What a keypress means to the picker.
+Action = Literal["move", "select", "cancel", "interrupt", "ignore"]
 
-def handle_key(ch: str, selected: int) -> tuple[int, str]:
+
+def handle_key(ch: str, selected: int) -> tuple[int, Action]:
     """Pure state machine for the interactive picker.
 
     Takes the key just read (an arrow key arrives as its whole escape
     sequence; "" means EOF) and the current selection, and returns the new
-    selection plus one of "move", "select", "cancel", "interrupt", "ignore".
-    Kept free of terminal I/O so it can be tested without a pty.
+    selection plus what to do about it. Kept free of terminal I/O so it can
+    be tested without a pty.
     """
-    if ch == KEY_UP:
+    if ch in (KEY_UP, "k"):  # k/j as well as the arrows, for vim hands
         return (selected - 1) % len(LEVELS), "move"
-    if ch == KEY_DOWN:
+    if ch in (KEY_DOWN, "j"):
         return (selected + 1) % len(LEVELS), "move"
     if ch in ("\r", "\n"):
         return selected, "select"
+    if ch.isdigit() and 1 <= int(ch) <= len(LEVELS):
+        # The numbered fallback trains this muscle memory; honour it here too.
+        return int(ch) - 1, "select"
     if ch in ("q", "Q", ESC, KEY_EOT, ""):
         # A bare Esc is a deliberate back-out; "" is EOF (stdin closing under
         # us) and must not be looped on.
@@ -149,7 +162,6 @@ def prompt_level_interactive() -> str | None:
     import tty
 
     selected = 0
-    action = "cancel"
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
 
@@ -157,7 +169,7 @@ def prompt_level_interactive() -> str | None:
         # Raw mode turns off ONLCR, so "\n" is a bare line feed and leaves the
         # cursor in the current column. Every line must end "\r\n" or the list
         # walks diagonally across the screen on each redraw.
-        lines = ["Bump level (↑↓ then Enter, q to cancel)"]
+        lines = ["Bump level (↑↓ then Enter, or 1-3 to pick; q to cancel)"]
         for i, (level, desc) in enumerate(LEVELS):
             marker = "❯" if i == selected else " "
             lines.append(f"  {marker} {level:<8} {desc}")
@@ -172,20 +184,26 @@ def prompt_level_interactive() -> str | None:
 
     try:
         tty.setraw(fd)
+        sys.stdout.write(PASTE_MODE_ON)
         render()
         while True:
             selected, action = handle_key(read_key(fd), selected)
+            if action == "ignore":
+                continue
+            clear(len(LEVELS) + 1)
             if action == "move":
-                clear(len(LEVELS) + 1)
                 render()
-            elif action != "ignore":
-                break
+                continue
+            if action == "interrupt":
+                raise KeyboardInterrupt  # the finally below restores the terminal
+            if action == "cancel":
+                return None  # menu already cleared: leave the screen as we found it
+            render()  # a digit can pick a level the marker isn't on yet
+            break
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    if action == "interrupt":
-        raise KeyboardInterrupt
-    if action == "cancel":
-        return None
+        sys.stdout.write(PASTE_MODE_OFF)
+        sys.stdout.flush()
     print()
     return LEVELS[selected][0]
 

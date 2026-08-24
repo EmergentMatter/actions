@@ -53,6 +53,21 @@ def test_handle_key_q_cancels(key):
     assert changeset.handle_key(key, 1) == (1, "cancel")
 
 
+@pytest.mark.parametrize("key,expected", [("k", 0), ("j", 2)])
+def test_handle_key_accepts_vim_keys(key, expected):
+    assert changeset.handle_key(key, 1) == (expected, "move")
+
+
+@pytest.mark.parametrize("digit,index", [("1", 0), ("2", 1), ("3", 2)])
+def test_handle_key_digit_picks_that_level(digit, index):
+    # The numbered fallback trains 1-3; the picker honours it too.
+    assert changeset.handle_key(digit, 0) == (index, "select")
+
+
+def test_handle_key_ignores_a_digit_with_no_level(capsys):
+    assert changeset.handle_key("9", 1) == (1, "ignore")
+
+
 def test_handle_key_bare_esc_cancels():
     # A lone Esc used to be read as the start of an arrow sequence and then
     # block on two more reads -- "the script froze".
@@ -147,6 +162,13 @@ def test_read_key_swallows_a_bracketed_paste(keyboard):
     fd = keyboard(f"{changeset.PASTE_START}hello q world\r{changeset.PASTE_END}x")
     assert changeset.read_key(fd) == changeset.PASTE_START
     assert changeset.read_key(fd) == "x"
+
+
+def test_an_unterminated_paste_does_not_hang(keyboard):
+    # The bound on the swallow is what keeps a malformed or truncated paste
+    # from freezing the prompt: it gives up once nothing more is queued.
+    fd = keyboard(f"{changeset.PASTE_START}text that never ends")
+    assert changeset.read_key(fd) == changeset.PASTE_START
 
 
 def test_paste_content_never_reaches_the_state_machine(keyboard):
