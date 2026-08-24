@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -187,23 +188,147 @@ def test_a_repo_with_no_build_job_is_not_nagged():
     assert fleet_status.check_verify_wheel(CI_MATERIALS_STYLE) == []
 
 
-# -------------------------------------------------------------- changeset
+# -------------------------------------------------------------- templates
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CHANGESET_TEMPLATE = (REPO_ROOT / "templates" / "changeset.py").read_text()
+
+MANAGED_ENTRY = fleet_status.TemplateEntry(
+    source="changeset.py", dest="scripts/changeset.py", policy="managed"
+)
+SEED_ONCE_ENTRY = fleet_status.TemplateEntry(
+    source="ci.yml", dest=".github/workflows/ci.yml", policy="seed-once"
+)
+
+# Matches the real releases tagged on this repo (see `git tag --list`); used
+# as a realistic, deterministic fixture -- the checks take tags as data, so
+# nothing here actually shells out to git.
+ALL_TAGS = ["v1", "v1.0.0", "v1.0.2", "v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0", "v1.5.0"]
 
 
-def test_changeset_matching_the_template_is_clean():
-    template = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
-    assert fleet_status.check_changeset(template) == []
+def test_load_manifest_parses_the_documented_shape(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """\
+[[template]]
+source = "PULL_REQUEST_TEMPLATE.md"
+dest   = ".github/PULL_REQUEST_TEMPLATE.md"
+policy = "managed"
+"""
+    )
+    entries = fleet_status.load_manifest(manifest)
+    assert entries == [
+        fleet_status.TemplateEntry(
+            "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md", "managed"
+        )
+    ]
 
 
-def test_diverged_changeset_is_flagged():
-    """Unlike ci.yml, divergence here is always a mistake, never a choice."""
-    findings = fleet_status.check_changeset("# an older copy\n")
-    assert severities(findings, "changeset") == ["warn"]
-    assert "never re-synced" in messages(findings, "changeset")
+def test_missing_manifest_raises_loudly():
+    """A missing manifest.toml is a broken repo, not zero templates -- treating it as
+    empty would make every templates/stamp finding vanish while the sweep exits 0."""
+    with pytest.raises(OSError):
+        fleet_status.load_manifest(Path("/no/such/manifest.toml"))
 
 
-def test_missing_changeset_is_flagged():
-    assert severities(fleet_status.check_changeset(None), "changeset") == ["warn"]
+def test_malformed_manifest_raises_loudly(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text("this is not valid toml [[[")
+    with pytest.raises(tomllib.TOMLDecodeError):
+        fleet_status.load_manifest(manifest)
+
+
+def test_managed_template_matching_is_clean():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": CHANGESET_TEMPLATE}, stamp_status=None
+    )
+    assert findings == []
+
+
+def test_managed_template_differing_is_flagged():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# an older copy\n"}, stamp_status=None
+    )
+    assert severities(findings, "templates") == ["warn"]
+    assert "scripts/changeset.py differs from templates/changeset.py" in messages(
+        findings, "templates"
+    )
+
+
+def test_seed_once_template_differing_produces_no_finding():
+    """ci.yml is legitimately customised per repo -- a diff there is not a finding."""
+    findings = fleet_status.check_templates(
+        [SEED_ONCE_ENTRY], {".github/workflows/ci.yml": "totally different\n"}, stamp_status=None
+    )
+    assert findings == []
+
+
+def test_missing_managed_template_is_flagged():
+    findings = fleet_status.check_templates([MANAGED_ENTRY], {}, stamp_status=None)
+    assert severities(findings, "templates") == ["warn"]
+    assert "not installed" in messages(findings, "templates")
+
+
+def test_declared_template_missing_from_this_repo_is_broken():
+    """A manifest entry whose source file doesn't exist under templates/ is a defect in
+    THIS repo -- onboard.py/sync.py will fail on it too -- not something to skip past."""
+    entry = fleet_status.TemplateEntry(
+        source="does-not-exist.md", dest="docs/DOES_NOT_EXIST.md", policy="managed"
+    )
+    findings = fleet_status.check_templates([entry], {"docs/DOES_NOT_EXIST.md": "anything"}, None)
+    assert severities(findings, "templates") == ["broken"]
+    assert "does-not-exist.md" in messages(findings, "templates")
+    assert "declared in manifest.toml but missing" in messages(findings, "templates")
+
+
+def test_diff_with_current_stamp_is_info_not_warn():
+    """A current stamp plus a diff is a deliberate edit -- surfaced, not flagged as a mistake."""
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# customised\n"}, stamp_status="current"
+    )
+    assert severities(findings, "templates") == ["info"]
+    assert "deliberate local edit" in messages(findings, "templates")
+
+
+def test_diff_with_stale_stamp_stays_a_warning():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# old copy\n"}, stamp_status="stale"
+    )
+    assert severities(findings, "templates") == ["warn"]
+
+
+# ------------------------------------------------------------------ stamp
+
+
+def test_stale_stamp_reports_how_many_versions_behind():
+    findings = fleet_status.check_templates_version("v1.2.0", ALL_TAGS)
+    assert severities(findings, "stamp") == ["warn"]
+    assert "3 versions behind (v1.2.0 -> v1.5.0)" in messages(findings, "stamp")
+    assert "sync.py" in messages(findings, "stamp")
+
+
+def test_current_stamp_is_clean():
+    assert fleet_status.check_templates_version("v1.5.0", ALL_TAGS) == []
+
+
+def test_missing_stamp_is_reported_as_its_own_state():
+    """Not 'up to date', not 'stale' -- a repo onboarded before the stamp existed."""
+    findings = fleet_status.check_templates_version(None, ALL_TAGS)
+    assert severities(findings, "stamp") == ["info"]
+    assert "no templates_version stamp" in messages(findings, "stamp")
+
+
+def test_unrecognised_stamp_is_flagged():
+    findings = fleet_status.check_templates_version("v9.9.9", ALL_TAGS)
+    assert severities(findings, "stamp") == ["warn"]
+    assert "not a recognised release tag" in messages(findings, "stamp")
+
+
+def test_stamp_status_helper():
+    assert fleet_status._stamp_status("v1.5.0", ALL_TAGS) == "current"
+    assert fleet_status._stamp_status("v1.2.0", ALL_TAGS) == "stale"
+    assert fleet_status._stamp_status(None, ALL_TAGS) is None
+    assert fleet_status._stamp_status("v9.9.9", ALL_TAGS) is None
 
 
 # ------------------------------------------------------------- roll-up logic
@@ -211,12 +336,33 @@ def test_missing_changeset_is_flagged():
 
 def test_a_healthy_repo_has_no_actionable_findings():
     """A genuinely healthy repo: workflow_call-able CI, composite-action stub,
-    the three required contexts, and an unmodified changeset.py."""
+    the three required contexts, and an unmodified changeset.py.
+
+    No manifest/stamp is passed -- that's the "onboarded before provenance
+    tracking existed" state, which is `info`, not actionable.
+    """
     ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
-    changeset = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
-    findings = fleet_status.evaluate(ci, GOOD_STUB, HEALTHY_CONTEXTS, changeset)
+    findings = fleet_status.evaluate(ci, GOOD_STUB, HEALTHY_CONTEXTS)
     actionable = [f for f in findings if f.severity != "info"]
     assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
+
+
+def test_evaluate_wires_templates_and_stamp_checks_together():
+    """A repo with a current stamp and a hand-edited managed template: the
+    `templates` finding reads as info (a choice), and there's no `stamp`
+    finding at all (nothing to flag when the stamp is current)."""
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    findings = fleet_status.evaluate(
+        ci,
+        GOOD_STUB,
+        HEALTHY_CONTEXTS,
+        manifest=[MANAGED_ENTRY],
+        dest_texts={"scripts/changeset.py": "# customised\n"},
+        stamp="v1.5.0",
+        tags=ALL_TAGS,
+    )
+    assert severities(findings, "templates") == ["info"]
+    assert severities(findings, "stamp") == []
 
 
 def test_broken_outranks_warn_in_the_roll_up():

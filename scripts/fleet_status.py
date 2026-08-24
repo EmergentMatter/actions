@@ -5,6 +5,12 @@ Onboarding happens once per repo. Drift accumulates forever -- `templates/`
 is COPIED at onboarding and never re-synced, so every consumer's copy
 diverges from the day it lands. Nothing else watches that.
 
+`templates_version` in a repo's `[tool.em-release]` block (written by
+onboard.py, updated by sync.py) turns "this repo's copy differs" from a
+guess into a fact: a stale stamp means an old copy, a current stamp plus a
+diff means a deliberate local edit, and no stamp at all means the repo
+predates provenance tracking. See `templates` and `stamp` below.
+
 Checks, per repo:
 
   gate        the lint gate's two halves agree (see lint_gate.py)
@@ -15,9 +21,14 @@ Checks, per repo:
   contexts    required status checks look like a recognised configuration
   naming      ci.yml declares `name:`, so checks read `CI / lint` rather
               than `.github/workflows/ci.yml / lint`
+  templates   every `managed` file in templates/manifest.toml matches its
+              live copy (`seed-once` files, e.g. ci.yml, are skipped --
+              repos legitimately customise those)
+  stamp       the `templates_version` provenance stamp against this repo's
+              newest release tag
 
 Reads everything over the API -- no clones. Stdlib only; GitHub access
-shells out to `gh`, reusing its auth.
+shells out to `gh`.
 
     python3 fleet_status.py                    # discover consumers
     python3 fleet_status.py --repo owner/name  # just these
@@ -30,11 +41,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import importlib.util
 import json
 import re
 import subprocess
 import sys
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,10 +62,11 @@ sys.modules["lint_gate"] = lint_gate
 _spec.loader.exec_module(lint_gate)
 
 ACTIONS_REPO = "EmergentMatter/actions"
-TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATES = REPO_ROOT / "templates"
+MANIFEST_PATH = TEMPLATES / "manifest.toml"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
-CHANGESET = "scripts/changeset.py"
 
 REMOVED_WORKFLOW_PATH = "actions/.github/workflows/changelog-check.yml@"
 COMPOSITE_ACTION_PATH = "actions/changelog-check@"
@@ -189,29 +203,140 @@ def check_verify_wheel(text: str | None) -> list[Finding]:
     ]
 
 
-def check_changeset(text: str | None) -> list[Finding]:
-    """changeset.py is copied, and divergence is always a mistake.
+@dataclass
+class TemplateEntry:
+    source: str  # relative to templates/, may be nested
+    dest: str  # relative to the target repo root
+    policy: str  # "managed" | "seed-once"
 
-    Unlike ci.yml -- which repos legitimately customise -- every consumer's
-    copy of this contributor tool should be identical to the template. A
-    difference means a repo is running an old version, silently.
+
+def load_manifest(path: Path = MANIFEST_PATH) -> list[TemplateEntry]:
+    """Raises if the manifest is missing, unreadable, or malformed.
+
+    templates/manifest.toml is a tracked file, and this script only ever
+    runs from a clone of this repo -- its absence means something is
+    broken, not "zero templates". Treating a missing/malformed manifest as
+    empty would make every `templates` and `stamp` finding silently vanish
+    while the sweep still exits 0, which is exactly the failure mode this
+    system exists to catch.
     """
-    try:
-        template = (TEMPLATES / "changeset.py").read_text()
-    except OSError:
-        return []
-    if text is None:
-        return [Finding("changeset", "warn", f"no {CHANGESET}; contributors cannot write notes")]
-    if text != template:
+    if not path.is_file():
+        raise FileNotFoundError(f"manifest not found: {path}")
+    data = tomllib.loads(path.read_text())
+    return [
+        TemplateEntry(t["source"], t["dest"], t.get("policy", "managed"))
+        for t in data.get("template", [])
+    ]
+
+
+_VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+def _parse_version(tag: str) -> tuple[int, int, int] | None:
+    m = _VERSION_RE.match(tag)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def _sorted_versions(tags: list[str]) -> list[str]:
+    """Point-release tags only, oldest first. Drops the moving `v1` alias."""
+    parsed = [(t, _parse_version(t)) for t in tags]
+    valid = [(t, v) for t, v in parsed if v is not None]
+    valid.sort(key=lambda tv: tv[1])
+    return [t for t, _ in valid]
+
+
+def _stamp_status(stamp: str | None, tags: list[str]) -> str | None:
+    """'current', 'stale', or None (missing, or not a tag we recognise)."""
+    versions = _sorted_versions(tags)
+    if stamp is None or stamp not in versions:
+        return None
+    return "current" if stamp == versions[-1] else "stale"
+
+
+def check_templates(
+    entries: list[TemplateEntry],
+    dest_texts: dict[str, str | None],
+    stamp_status: str | None,
+) -> list[Finding]:
+    """Every `managed` template, compared to its live copy in the target repo.
+
+    `seed-once` templates (just ci.yml today) are skipped entirely -- repos
+    legitimately customise CI, so a diff there is not a finding.
+
+    Whether a diff means "old copy" or "deliberate edit" used to be a
+    guess (see the old changeset-only check this replaced). Now it's known
+    from the `stamp` check's verdict: a current stamp plus a diff is a
+    choice to surface, not a mistake, so it's reported as info, not warn.
+    A stale or unrecognised stamp doesn't establish a cause here -- see the
+    `stamp` finding for that.
+    """
+    out = []
+    for entry in entries:
+        if entry.policy != "managed":
+            continue
+        try:
+            template_text = (TEMPLATES / entry.source).read_text()
+        except OSError:
+            out.append(
+                Finding(
+                    "templates",
+                    "broken",
+                    f"templates/{entry.source} is declared in manifest.toml but missing "
+                    "from this repo -- onboard.py and sync.py will fail on it too",
+                )
+            )
+            continue
+        dest_text = dest_texts.get(entry.dest)
+        if dest_text is None:
+            out.append(Finding("templates", "warn", f"no {entry.dest}; not installed"))
+            continue
+        if dest_text == template_text:
+            continue
+        if stamp_status == "current":
+            out.append(
+                Finding(
+                    "templates",
+                    "info",
+                    f"{entry.dest} differs from templates/{entry.source} -- templates_version "
+                    "is current, so this is a deliberate local edit",
+                )
+            )
+        else:
+            out.append(
+                Finding("templates", "warn", f"{entry.dest} differs from templates/{entry.source}")
+            )
+    return out
+
+
+def check_templates_version(stamp: str | None, tags: list[str]) -> list[Finding]:
+    """The `templates_version` provenance stamp against this repo's newest tag.
+
+    Three distinct states, not two -- collapsing "no stamp" into either
+    "up to date" or "stale" would be reporting something that isn't known.
+    """
+    if stamp is None:
         return [
             Finding(
-                "changeset",
-                "warn",
-                f"{CHANGESET} differs from templates/changeset.py -- it is copied at "
-                "onboarding and never re-synced, so this repo is on an older version",
+                "stamp",
+                "info",
+                "no templates_version stamp in pyproject.toml -- onboarded before "
+                "provenance tracking existed; staleness can't be checked",
             )
         ]
-    return []
+    versions = _sorted_versions(tags)
+    if not versions:
+        return []
+    if stamp not in versions:
+        return [
+            Finding("stamp", "warn", f"templates_version {stamp!r} is not a recognised release tag")
+        ]
+    newest = versions[-1]
+    if stamp == newest:
+        return []
+    behind = len(versions) - 1 - versions.index(stamp)
+    plural = "s" if behind != 1 else ""
+    message = f"{behind} version{plural} behind ({stamp} -> {newest}); run sync.py"
+    return [Finding("stamp", "warn", message)]
 
 
 def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
@@ -244,15 +369,23 @@ def evaluate(
     ci_text: str | None,
     stub_text: str | None,
     contexts: list[str] | None,
-    changeset_text: str | None = None,
+    *,
+    manifest: list[TemplateEntry] | None = None,
+    dest_texts: dict[str, str | None] | None = None,
+    stamp: str | None = None,
+    tags: list[str] | None = None,
 ) -> list[Finding]:
+    manifest = manifest or []
+    dest_texts = dest_texts or {}
+    tags = tags or []
     return [
         *check_stub(stub_text),
         *check_workflow_call(ci_text),
         *check_gate(ci_text, contexts),
         *check_contexts(contexts),
         *check_verify_wheel(ci_text),
-        *check_changeset(changeset_text),
+        *check_templates(manifest, dest_texts, _stamp_status(stamp, tags)),
+        *check_templates_version(stamp, tags),
         *check_pins(ci_text),
         *check_naming(ci_text),
     ]
@@ -274,6 +407,31 @@ def fetch_file(repo: str, path: str) -> str | None:
         return base64.b64decode(out.strip()).decode("utf-8", errors="replace")
     except Exception:
         return None
+
+
+def fetch_stamp(repo: str) -> str | None:
+    text = fetch_file(repo, "pyproject.toml")
+    if text is None:
+        return None
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    return data.get("tool", {}).get("em-release", {}).get("templates_version")
+
+
+def fetch_local_tags() -> list[str]:
+    """This repo's own release tags -- local, read-only, no `gh` call.
+
+    Called once in main() and shared across every repo in the sweep, not
+    once per repo -- it's the same answer every time.
+    """
+    p = subprocess.run(
+        ["git", "tag", "--list", "v*"], cwd=REPO_ROOT, capture_output=True, text=True
+    )
+    if p.returncode != 0:
+        return []
+    return [line.strip() for line in p.stdout.splitlines() if line.strip()]
 
 
 def fetch_contexts(repo: str) -> list[str] | None:
@@ -301,13 +459,29 @@ def discover(org: str) -> list[str]:
     return sorted(repos)
 
 
-def inspect(repo: str) -> RepoReport:
+def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoReport:
     try:
         ci = fetch_file(repo, CI_FILE)
         stub = fetch_file(repo, CHANGELOG_STUB)
-        changeset = fetch_file(repo, CHANGESET)
+        dest_texts = {
+            entry.dest: fetch_file(repo, entry.dest)
+            for entry in manifest
+            if entry.policy == "managed"
+        }
+        stamp = fetch_stamp(repo)
         contexts = fetch_contexts(repo)
-        return RepoReport(repo, evaluate(ci, stub, contexts, changeset))
+        return RepoReport(
+            repo,
+            evaluate(
+                ci,
+                stub,
+                contexts,
+                manifest=manifest,
+                dest_texts=dest_texts,
+                stamp=stamp,
+                tags=tags,
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep
         return RepoReport(repo, [], error=str(exc))
 
@@ -343,6 +517,12 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     try:
+        manifest = load_manifest()
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
         repos = args.repo or discover(args.org)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -351,8 +531,10 @@ def main(argv: list[str]) -> int:
         print("No consuming repos found.")
         return 0
 
+    tags = fetch_local_tags()
+    inspect_repo = functools.partial(inspect, manifest=manifest, tags=tags)
     with ThreadPoolExecutor(max_workers=8) as pool:
-        reports = list(pool.map(inspect, repos))
+        reports = list(pool.map(inspect_repo, repos))
 
     if args.as_json:
         print(
