@@ -12,8 +12,11 @@ termios wrapper around it is a thin loop.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import sys
+import termios
+import tty
 from pathlib import Path
 
 import pytest
@@ -76,17 +79,97 @@ def test_handle_key_ignores_everything_else(key):
     assert changeset.handle_key(key, 1) == (1, "ignore")
 
 
+def test_handle_key_ignores_a_paste_marker():
+    assert changeset.handle_key(changeset.PASTE_START, 1) == (1, "ignore")
+
+
+# --------------------------------------------------------------------- read_key
+#
+# read_key is the one function here that cannot be tested without real
+# file-descriptor I/O -- its whole job is resolving escape sequences by
+# peeking at what is actually queued on the fd. A pty in raw mode is the
+# cheapest thing that behaves like a terminal.
+
+
+@pytest.fixture
+def keyboard():
+    """A raw-mode pty. Write keystrokes to it, read them back with read_key."""
+    master, slave = os.openpty()
+    tty.setraw(slave, termios.TCSANOW)
+
+    def send(data: str) -> int:
+        os.write(master, data.encode())
+        return slave
+
+    try:
+        yield send
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_read_key_resolves_an_arrow_from_a_single_burst(keyboard):
+    # The regression guard that matters most: a terminal delivers "\x1b[A" as
+    # one write. Reading through sys.stdin's text layer would buffer the whole
+    # burst, leave select() reporting nothing pending, and turn every arrow
+    # key into a bare Esc -- i.e. into a cancel.
+    fd = keyboard(changeset.KEY_UP)
+    assert changeset.read_key(fd) == changeset.KEY_UP
+
+
+def test_read_key_returns_a_lone_esc_without_blocking(keyboard):
+    fd = keyboard(changeset.ESC)
+    assert changeset.read_key(fd) == changeset.ESC
+
+
+def test_read_key_returns_a_plain_character(keyboard):
+    fd = keyboard("q")
+    assert changeset.read_key(fd) == "q"
+
+
+def test_read_key_consumes_a_long_sequence_whole(keyboard):
+    # Home is "\x1b[1~" -- longer than an arrow key. Stopping at a fixed
+    # three bytes would leave "~" queued to be read as its own keypress.
+    fd = keyboard("\x1b[1~x")
+    assert changeset.read_key(fd) == "\x1b[1~"
+    assert changeset.read_key(fd) == "x"
+
+
+def test_read_key_consumes_an_ss3_sequence_whole(keyboard):
+    fd = keyboard("\x1bOPx")
+    assert changeset.read_key(fd) == "\x1bOP"
+    assert changeset.read_key(fd) == "x"
+
+
+def test_read_key_swallows_a_bracketed_paste(keyboard):
+    # Without this, the "q" inside pasted text cancels the picker and the
+    # "\r" selects a level -- a paste silently throws away the prompt.
+    fd = keyboard(f"{changeset.PASTE_START}hello q world\r{changeset.PASTE_END}x")
+    assert changeset.read_key(fd) == changeset.PASTE_START
+    assert changeset.read_key(fd) == "x"
+
+
+def test_paste_content_never_reaches_the_state_machine(keyboard):
+    fd = keyboard(f"{changeset.PASTE_START}q\r{changeset.PASTE_END}")
+    _, action = changeset.handle_key(changeset.read_key(fd), 0)
+    assert action == "ignore"
+
+
 # --------------------------------------------------------- prompt_level_numbered
 
 
 def _scripted_input(monkeypatch, answers):
-    """Feed `answers` to input(); an Exception instance is raised instead."""
+    """Feed `answers` to input(); an exception instance is raised instead.
+
+    Keyed off BaseException, not Exception, because KeyboardInterrupt is one
+    of the answers these tests need to script.
+    """
     seen = []
 
     def fake_input(prompt=""):
         seen.append(prompt)
         answer = answers.pop(0)
-        if isinstance(answer, Exception):
+        if isinstance(answer, BaseException):
             raise answer
         return answer
 
@@ -120,6 +203,23 @@ def test_numbered_q_cancels(monkeypatch, answer):
 def test_numbered_eof_cancels(monkeypatch):
     _scripted_input(monkeypatch, [EOFError()])
     assert changeset.prompt_level_numbered() is None
+
+
+# ---------------------------------------------------------------------- ask
+
+
+def test_ask_returns_none_at_eof(monkeypatch):
+    _scripted_input(monkeypatch, [EOFError()])
+    assert changeset.ask("prompt: ") is None
+
+
+def test_ask_breaks_the_line_before_reraising_ctrl_c(monkeypatch, capsys):
+    # Cooked mode echoes "^C" with no newline, so without this the top-level
+    # handler's "Cancelled." lands glued to the prompt.
+    _scripted_input(monkeypatch, [KeyboardInterrupt()])
+    with pytest.raises(KeyboardInterrupt):
+        changeset.ask("Summary (user-facing, one line): ")
+    assert capsys.readouterr().out == "\n"
 
 
 # ------------------------------------------------------------- prompt_summary

@@ -22,7 +22,7 @@ uv run scripts/changeset.py
 This asks you two things:
 
 1. **A level** — pick with the arrow keys: `major`, `minor`, or `patch`.
-   Press `q` to back out; nothing is written.
+   Press `q` or `Esc` to back out; nothing is written.
 2. **One sentence** — what changed, in **plain, user-facing language**.
 
 It writes a small file into `changelog.d/`. Commit it with the rest of your

@@ -38,6 +38,12 @@ KEY_INTERRUPT = "\x03"  # Ctrl-C
 # numbered prompt, where the line discipline turns it into an EOFError.
 KEY_EOT = "\x04"
 
+# Bracketed paste. A terminal in this mode wraps pasted text in these two
+# markers; without consuming the payload, a paste containing "q" would read
+# as a cancel keypress and silently drop the user out of the picker.
+PASTE_START = "\x1b[200~"
+PASTE_END = "\x1b[201~"
+
 # How long to wait for the rest of an escape sequence before concluding the
 # user pressed a bare Esc. Arrow keys arrive as one burst, so anything that
 # hasn't landed within this is not part of the sequence.
@@ -67,33 +73,71 @@ def handle_key(ch: str, selected: int) -> tuple[int, str]:
     return selected, "ignore"
 
 
-def read_key(fd: int) -> str:
-    r"""Read one keypress from `fd`, resolving arrow-key escape sequences.
+def _read_byte(fd: int) -> str:
+    """One byte from `fd`, decoded leniently. "" at EOF.
 
-    Reads with `os.read` rather than `sys.stdin.read` so the `select` peek
-    below is accurate: stdin's text layer pulls the whole burst ("\x1b[A")
-    into its own buffer on the first read, after which `select` would report
-    nothing pending and a real arrow key would look like a bare Esc.
+    `os.read` rather than `sys.stdin.read` so the `_has_pending` peek below
+    is accurate: stdin's text layer pulls the whole burst ("\x1b[A") into its
+    own buffer on the first read, after which `select` would report nothing
+    pending and a real arrow key would look like a bare Esc.
+    """
+    return os.read(fd, 1).decode("utf-8", "replace")
+
+
+def _has_pending(fd: int) -> bool:
+    """Is there more input already on its way? Never blocks for long."""
+    return bool(select.select([fd], [], [], ESC_SEQUENCE_TIMEOUT)[0])
+
+
+def _swallow_paste(fd: int) -> None:
+    """Discard a bracketed paste's payload, up to and including its end marker.
+
+    Pasted text is not keystrokes, and the picker has no field to paste into.
+    Reading it as keys means the first "q" in the pasted text cancels and the
+    first newline selects. Bounded by the same pending-input timeout as
+    everything else, so a paste that stalls mid-stream stops being swallowed
+    rather than hanging the prompt.
+    """
+    tail = ""
+    while _has_pending(fd):
+        tail = (tail + _read_byte(fd))[-len(PASTE_END):]
+        if tail == PASTE_END:
+            return
+
+
+def read_key(fd: int) -> str:
+    r"""Read one keypress from `fd`, resolving whole escape sequences.
 
     Returns "" at EOF, ESC for a lone Esc, KEY_UP/KEY_DOWN for the arrows,
-    and the raw bytes read for anything else.
+    PASTE_START for a bracketed paste (whose payload is consumed and thrown
+    away), and whatever was read for anything else.
+
+    Sequences are consumed to their final byte rather than to a fixed length:
+    Home/End/F-keys and paste markers are longer than an arrow key
+    ("\x1b[1~", "\x1b[200~"), and stopping early would leave their tail bytes
+    in the queue to be read as separate keypresses.
     """
-
-    def read_one() -> str:
-        return os.read(fd, 1).decode("utf-8", "replace")
-
-    def pending() -> bool:
-        return bool(select.select([fd], [], [], ESC_SEQUENCE_TIMEOUT)[0])
-
-    ch = read_one()
-    if ch != ESC or not pending():
+    ch = _read_byte(fd)
+    if ch != ESC or not _has_pending(fd):
         # Nothing followed the Esc, so it is a keypress in its own right and
         # reading further would block — the hang this guards against.
         return ch
-    ch2 = read_one()
-    if ch2 != "[" or not pending():
+
+    ch2 = _read_byte(fd)
+    if ch2 not in ("[", "O") or not _has_pending(fd):
         return ESC + ch2
-    return ESC + ch2 + read_one()
+    if ch2 == "O":  # SS3: exactly one byte follows (F1-F4 on many terminals)
+        return ESC + ch2 + _read_byte(fd)
+
+    seq = ESC + ch2  # CSI: parameter bytes, then a final byte in @-~
+    while _has_pending(fd):
+        byte = _read_byte(fd)
+        seq += byte
+        if "\x40" <= byte <= "\x7e":
+            break
+    if seq == PASTE_START:
+        _swallow_paste(fd)
+    return seq
 
 
 def prompt_level_interactive() -> str | None:
@@ -146,6 +190,25 @@ def prompt_level_interactive() -> str | None:
     return LEVELS[selected][0]
 
 
+def ask(prompt: str) -> str | None:
+    """`input()` with both ways out of a cooked-mode prompt handled.
+
+    Returns None at EOF (Ctrl-D). On Ctrl-C it prints the newline the
+    terminal doesn't — cooked mode echoes "^C" without one, so "Cancelled."
+    would otherwise land glued to the prompt — then re-raises for the
+    top-level handler. The raw-mode picker needs none of this: it disables
+    echo, and its last render already ended the line.
+    """
+    try:
+        return input(prompt)
+    except EOFError:
+        print()
+        return None
+    except KeyboardInterrupt:
+        print()
+        raise
+
+
 def prompt_level_numbered() -> str | None:
     """Fallback for non-TTY stdin/stdout: plain numbered prompt.
 
@@ -155,11 +218,10 @@ def prompt_level_numbered() -> str | None:
     for i, (level, desc) in enumerate(LEVELS, start=1):
         print(f"  {i}. {level} - {desc}")
     while True:
-        try:
-            choice = input(f"Select 1-{len(LEVELS)} (or q to cancel): ").strip()
-        except EOFError:
-            print()
+        choice = ask(f"Select 1-{len(LEVELS)} (or q to cancel): ")
+        if choice is None:
             return None
+        choice = choice.strip()
         if choice.lower() == "q":
             return None
         if choice.isdigit() and 1 <= int(choice) <= len(LEVELS):
@@ -194,11 +256,10 @@ def prompt_summary() -> str | None:
     """
     prompt = "Summary (user-facing, one line): "
     while True:
-        try:
-            summary = input(prompt).strip()
-        except EOFError:
-            print()
+        summary = ask(prompt)
+        if summary is None:
             return None
+        summary = summary.strip()
         if summary:
             return summary
         prompt = "Summary can't be empty (Ctrl-C to cancel): "
