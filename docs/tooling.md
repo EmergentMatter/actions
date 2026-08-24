@@ -105,15 +105,12 @@ That third point, base, is why this is a three-way compare and not a diff:
 - All three differ -- a genuine **conflict**, both sides changed since the
   last sync. Prompts, unless you already know which side should win.
 
-Without the base, "stale" and "deliberately customized" look identical from
-the outside -- both are just "differs from the template," and a check that
-can only see that difference has no way to tell which one it's looking at.
-That's what `fleet_status.py`'s `templates` check used to get wrong, before
-it had a `templates_version` stamp to compare against: it flagged every
-divergent file the same way, whether the repo's copy had simply gone stale
-or someone had knowingly customized it, because "differs" was all it could
-report. Recording what the repo last synced *from* is what turns "these
-differ" into "here's why" -- for both that check and this one.
+This is the same distinction `fleet_status.py`'s `templates` check used to
+get wrong, before it had a `templates_version` stamp to compare against:
+every divergent file got flagged the same way, stale copy or knowing edit
+alike, because "differs from the template" was all a two-way diff could
+report. The stamp is what makes "here's why" possible, for both that check
+and this one.
 
 ```
 sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
@@ -123,13 +120,21 @@ sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
 - `--ours` / `--theirs` -- resolve every conflict this run without prompting,
   by keeping the repo's version or taking the template's. Mutually
   exclusive.
-- `--only DEST` -- limit the run to the one entry whose `dest` matches, for
-  pulling in a single file's change without touching the rest.
+- `--only DEST` -- restrict the run to the entries whose `dest` matches;
+  repeatable, for pulling in one or a few files' changes without touching
+  the rest.
 - `--json` -- machine-readable output, for scripting.
 
 `seed-once` entries (`ci.yml` today) are never touched -- not updated, not
 reported as drift. A repo's CI is its own from the moment `onboard.py` seeds
 it.
+
+Exit code follows the same convention as `lint_gate.py status`: 0 means done
+(nothing pending), 1 an error, 2 that at least one entry is still pending --
+a `--dry-run` or a skipped prompt both count, even if other entries in the
+same run updated cleanly. A CI job calling this non-interactively (no
+`--ours`/`--theirs`) should treat 2 the same as 1: something still needs a
+human to look at it.
 
 ---
 

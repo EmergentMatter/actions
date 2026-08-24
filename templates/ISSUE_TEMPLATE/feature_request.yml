@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Start with the problem, not the fix — it's easier to evaluate a solution
+        Start with the problem, not the fix. It's easier to evaluate a solution
         once the problem behind it is clear.
 
   - type: textarea

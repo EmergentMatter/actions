@@ -7,7 +7,7 @@ This policy covers software authored by EmergentMatter: the
 SDM toolchain.
 
 This organization also hosts forks of third-party open-source
-projects — for example `optax`, `diffrax`, `equinox`, `jax-fem`
+projects, for example `optax`, `diffrax`, `equinox`, `jax-fem`
 and `numpyro`. These are frozen snapshots kept for
 reproducibility. EmergentMatter does not maintain them. Please
 report issues and vulnerabilities in those projects to their

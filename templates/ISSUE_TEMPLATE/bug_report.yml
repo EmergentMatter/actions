@@ -8,7 +8,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to file a report. This form is for the package
-        in *this* repository — you don't need to name it below.
+        in *this* repository. You don't need to name it below.
 
         Found a security vulnerability instead? Do not open a public issue.
         Prefer this repository's own **Security → Report a vulnerability**

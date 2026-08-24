@@ -90,8 +90,8 @@ below for what `managed` means and where the entries it reads come from.
 - `--dry-run` reports what would change and writes nothing.
 - `--ours` / `--theirs` resolve every conflict for this run without prompting; mutually
   exclusive.
-- `--only DEST` restricts the run to the one entry whose `dest` matches, for pulling in a single
-  file's change without touching the rest.
+- `--only DEST` restricts the run to the entries whose `dest` matches; repeatable, for pulling in
+  one or a few files' changes without touching the rest.
 - `--json` for scripted/CI use, same semantics as the interactive run.
 - Never touches `seed-once` entries. Those are the repo's own from the moment `onboard.py` seeds
   them; this script has no opinion about them at all, not even to report drift.
@@ -105,7 +105,7 @@ One `[[template]]` entry per file `templates/` ships, read by both `sync.py` and
 [[template]]
 source = "SECURITY.md"      # path relative to templates/
 dest = "SECURITY.md"        # path relative to the target repo root
-policy = "managed"          # optional; "managed" is the default
+policy = "managed"          # required on every entry; no default
 
 [[template]]
 source = "ci.yml"
@@ -117,8 +117,9 @@ Two policies, and they mean opposite things:
 
 - **`managed`** -- the target repo's copy should always equal this repo's `templates/` copy. A
   difference is either staleness or a local edit, distinguished the way `sync.py` above
-  describes. This is every entry except `ci.yml` today, and the default when `policy` is
-  omitted.
+  describes. This is every entry except `ci.yml` today. `policy` has no default -- every entry in
+  `manifest.toml` sets it explicitly, and `load_manifest()` raises on an unrecognised value rather
+  than guessing.
 - **`seed-once`** -- written once, at onboarding, only if the target file doesn't already exist.
   Nothing in this repo ever touches it again. `ci.yml` is the only `seed-once` entry: a repo's CI
   is legitimately its own to shape, so neither `sync.py` nor `fleet_status.py`'s drift check
