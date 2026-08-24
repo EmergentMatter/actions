@@ -1,6 +1,6 @@
 # The maintenance tools
 
-Four scripts in `scripts/`, run **from a clone of this repo** against a
+Five scripts in `scripts/`, run **from a clone of this repo** against a
 target repo. None of them are copied into consuming repos — they are yours,
 not theirs.
 
@@ -11,6 +11,7 @@ on macOS is older than that — use `uv run python`).
 | Script | When |
 |---|---|
 | [`onboard.py`](#onboardpy) | bringing a new repo into release control |
+| [`sync.py`](#syncpy) | pulling template changes into a repo already onboarded |
 | [`fleet_status.py`](#fleet_statuspy) | routinely, to catch drift |
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly — the `verify-wheel` action calls it |
@@ -72,6 +73,63 @@ not left manual because forgetting it does not degrade gracefully:
 a workflow that is not `workflow_call`-able fails at **parse time**, so every
 push to `main` errors before a job starts. The inline `on: [push, ...]` form
 has too many shapes to rewrite safely, so that one is handed back to you.
+
+---
+
+## `sync.py`
+
+`onboard.py`'s copy is a snapshot taken once. Nothing else keeps it current --
+`templates/` in this repo can move on without an onboarded repo ever finding
+out, until something re-checks it. `sync.py` is that re-check, done for real:
+
+```bash
+uv run python scripts/sync.py --repo-path ../some-repo --dry-run
+```
+
+It three-way compares each `managed` template in
+[`templates/manifest.toml`](../templates/manifest.toml) (see
+[CONTRACT.md](../CONTRACT.md) for the manifest format and the `managed` /
+`seed-once` split):
+
+- **base** -- the version the repo last synced from, recorded as
+  `templates_version` in its `[tool.em-release]` block.
+- **ours** -- the repo's current copy of the file.
+- **theirs** -- this repo's current copy, in `templates/`.
+
+That third point, base, is why this is a three-way compare and not a diff:
+
+- Base and ours agree, theirs has moved -- the repo's copy is just **stale**.
+  Updated silently; there's no decision to surface.
+- Base and theirs agree, ours has moved -- the repo **deliberately edited**
+  its copy. Left alone, and reported so you know it's there.
+- All three differ -- a genuine **conflict**, both sides changed since the
+  last sync. Prompts, unless you already know which side should win.
+
+Without the base, "stale" and "deliberately customized" look identical from
+the outside -- both are just "differs from the template," and a check that
+can only see that difference has no way to tell which one it's looking at.
+That's what `fleet_status.py`'s `templates` check used to get wrong, before
+it had a `templates_version` stamp to compare against: it flagged every
+divergent file the same way, whether the repo's copy had simply gone stale
+or someone had knowingly customized it, because "differs" was all it could
+report. Recording what the repo last synced *from* is what turns "these
+differ" into "here's why" -- for both that check and this one.
+
+```
+sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
+```
+
+- `--dry-run` -- report what would change, write nothing.
+- `--ours` / `--theirs` -- resolve every conflict this run without prompting,
+  by keeping the repo's version or taking the template's. Mutually
+  exclusive.
+- `--only DEST` -- limit the run to the one entry whose `dest` matches, for
+  pulling in a single file's change without touching the rest.
+- `--json` -- machine-readable output, for scripting.
+
+`seed-once` entries (`ci.yml` today) are never touched -- not updated, not
+reported as drift. A repo's CI is its own from the moment `onboard.py` seeds
+it.
 
 ---
 

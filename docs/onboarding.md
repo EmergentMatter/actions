@@ -378,6 +378,13 @@ a `[tool.towncrier]` section (turns your `changelog.d/` notes into
 release workflow every place your version string lives besides
 `pyproject.toml` itself).
 
+`onboard.py` also stamps a `templates_version` into that `[tool.em-release]`
+block -- the version of `EmergentMatter/actions` your copies of `templates/`
+came from. It's how `scripts/sync.py` later tells a stale copy of a template
+apart from one you've deliberately edited, so it can pull in later template
+changes without clobbering your edits. See [tooling.md](tooling.md) for how
+to run it.
+
 That second section — `version_files` — is the part every repo gets
 slightly wrong the first time, so the rest of this doc is the worked
 example.
@@ -776,3 +783,7 @@ what you just copied into the repo, and it's what every future contributor
 skip its section on the release PR's checks showing as "not run" — that's
 expected, not broken, and the fix (close, then immediately reopen the PR)
 is easy to miss if you haven't seen it before.
+
+Onboarding copies `templates/` in as a snapshot; it does not stay current on
+its own. When something in `templates/` changes later, run `scripts/sync.py`
+against this repo to pull the change in -- see [tooling.md](tooling.md#syncpy).

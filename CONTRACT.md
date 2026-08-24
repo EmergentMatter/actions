@@ -61,6 +61,69 @@ Writes the version into every location the repo declares, and nothing else.
 - `[project] version` in pyproject is handled by `uv version --bump` in the workflow, NOT by this
   script. Do not write pyproject's own version here.
 
+### sync.py
+
+    sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
+
+Brings an already-onboarded repo's `managed` templates forward. `onboard.py`'s copy is a
+snapshot taken once; nothing else keeps it current until this runs. See "templates/manifest.toml"
+below for what `managed` means and where the entries it reads come from.
+
+- Three-way compare per entry, not two-way: **base** = the `templates_version` recorded in the
+  target repo's `[tool.em-release]` block (written by `onboard.py`, updated here on every run
+  that changes something); **ours** = the file currently in the target repo; **theirs** = the
+  file currently in this repo's `templates/`.
+- `ours == theirs` -- nothing to do.
+- `ours == base`, `theirs != base` -- the repo's copy hasn't moved since its last sync; the
+  template has. That is staleness, not a choice someone made. **Updated silently.**
+- `ours != base`, `theirs == base` -- the repo's copy has moved and the template hasn't. That is a
+  **deliberate local edit**. **Left alone, and reported** -- never silently overwritten.
+- `ours != base`, `theirs != base`, `ours != theirs` -- both sides moved since the last sync. A
+  genuine **conflict**. Prompts, unless `--ours` or `--theirs` says which side wins outright.
+- **Why base matters**: comparing only ours vs. theirs can't tell "stale" from "deliberately
+  customized" -- both just look like "differs from the template." `fleet_status.py`'s `templates`
+  check used to make exactly that mistake, before it had a `templates_version` stamp to compare
+  against: every divergent file was flagged the same way, stale copy or knowing edit alike. A
+  repo with no `templates_version` stamp at all (onboarded before this existed) still has no base
+  to compare against, so every diff there is treated as a possible edit and reported, never
+  overwritten.
+- `--dry-run` reports what would change and writes nothing.
+- `--ours` / `--theirs` resolve every conflict for this run without prompting; mutually
+  exclusive.
+- `--only DEST` restricts the run to the one entry whose `dest` matches, for pulling in a single
+  file's change without touching the rest.
+- `--json` for scripted/CI use, same semantics as the interactive run.
+- Never touches `seed-once` entries. Those are the repo's own from the moment `onboard.py` seeds
+  them; this script has no opinion about them at all, not even to report drift.
+
+## templates/manifest.toml
+
+One `[[template]]` entry per file `templates/` ships, read by both `sync.py` and
+`fleet_status.py` -- not itself something a consuming repo copies:
+
+```toml
+[[template]]
+source = "SECURITY.md"      # path relative to templates/
+dest = "SECURITY.md"        # path relative to the target repo root
+policy = "managed"          # optional; "managed" is the default
+
+[[template]]
+source = "ci.yml"
+dest = ".github/workflows/ci.yml"
+policy = "seed-once"
+```
+
+Two policies, and they mean opposite things:
+
+- **`managed`** -- the target repo's copy should always equal this repo's `templates/` copy. A
+  difference is either staleness or a local edit, distinguished the way `sync.py` above
+  describes. This is every entry except `ci.yml` today, and the default when `policy` is
+  omitted.
+- **`seed-once`** -- written once, at onboarding, only if the target file doesn't already exist.
+  Nothing in this repo ever touches it again. `ci.yml` is the only `seed-once` entry: a repo's CI
+  is legitimately its own to shape, so neither `sync.py` nor `fleet_status.py`'s drift check
+  treats a difference there as a finding.
+
 ## Workflow `workflow_call` inputs (.github/workflows/)
 
 | Workflow | Inputs (all optional unless noted, with defaults) |
@@ -247,8 +310,12 @@ block comes out when the dependency ships to an index.
 | `.github/workflows/version.yml` | The release-PR loop and tagging (R1–R5, S1) |
 | `changelog-check/action.yml` | The PR gate (E2, E4, E5, E6) |
 | `.github/workflows/build-release.yml` | Build, GitHub Release, opt-in publish (S2, S3, S4) |
-| `templates/` | What gets copied into consuming repos — changes here propagate by hand |
+| `templates/` | What gets copied into consuming repos at onboarding, and (for `managed` entries) pulled forward later by `scripts/sync.py` |
 
-Changing `templates/` is the expensive one: those files are copied into each repo rather than
-referenced, so a fix does not reach repos already onboarded. Prefer putting behaviour in the
-reusable workflows, which every repo picks up from `@v1` automatically.
+Changing `templates/` is still the expensive one relative to the reusable workflows: a fix here
+does not reach an onboarded repo the moment it merges, the way a change to `version.yml` does
+just by every repo pinning `@v1`. `sync.py` closes most of that gap for `managed` entries, but
+someone still has to run it (or `fleet_status.py`'s `templates`/`stamp` checks have to flag that
+they should) -- it is not automatic. `seed-once` entries (`ci.yml`) never propagate after
+onboarding, deliberately. Prefer putting behaviour in the reusable workflows when the choice
+exists; reach for `templates/` when the repo genuinely needs its own copy.

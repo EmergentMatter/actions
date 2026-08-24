@@ -42,6 +42,79 @@ jobs:
       - name: ruff check
         run: uv run ruff check .
 
+      - name: Scope block parity (templates/SECURITY.md / templates/SUPPORT.md)
+        # These two files state the same security/support scope in nearly
+        # identical documents, and nothing else enforces that they agree.
+        # Ported from the retired EmergentMatter/.github repo's
+        # .github/scripts/validate.py, which proved this check catches a
+        # one-character edit -- only its scope-block assertion belongs here;
+        # its other checks (license text, issue-form schema, actionlint,
+        # URL resolution) were specific to that repo's own inheritance model
+        # and don't apply to templates/ being copied into consuming repos.
+        run: |
+          uv run python - <<'EOF'
+          import difflib
+          import sys
+          from pathlib import Path
+
+          def extract_scope_block(path: Path) -> str | None:
+              """Text from the `## Scope` heading (inclusive) up to the next
+              `## ` heading (exclusive), or end of file. None if no `## Scope`
+              heading is present."""
+              lines = path.read_text().splitlines(keepends=True)
+              start = next(
+                  (i for i, line in enumerate(lines) if line.rstrip("\r\n") == "## Scope"),
+                  None,
+              )
+              if start is None:
+                  return None
+              end = len(lines)
+              for i in range(start + 1, len(lines)):
+                  if lines[i].startswith("## "):
+                      end = i
+                      break
+              return "".join(lines[start:end])
+
+          security_path = Path("templates/SECURITY.md")
+          support_path = Path("templates/SUPPORT.md")
+
+          for path in (security_path, support_path):
+              if not path.exists():
+                  print(f"::error::{path} does not exist")
+                  sys.exit(1)
+
+          security_block = extract_scope_block(security_path)
+          support_block = extract_scope_block(support_path)
+
+          if security_block is None:
+              print(f"::error::{security_path} has no '## Scope' heading")
+              sys.exit(1)
+          if support_block is None:
+              print(f"::error::{support_path} has no '## Scope' heading")
+              sys.exit(1)
+
+          if security_block != support_block:
+              diff = "\n".join(
+                  difflib.unified_diff(
+                      support_block.splitlines(),
+                      security_block.splitlines(),
+                      fromfile=str(support_path),
+                      tofile=str(security_path),
+                      lineterm="",
+                  )
+              )
+              print(
+                  "::error::templates/SECURITY.md and templates/SUPPORT.md disagree on "
+                  "the '## Scope' block. These must say the same thing, byte-for-byte -- "
+                  "copy the block from one file into the other verbatim (the '## Scope' "
+                  "heading through the line before the next '## ' heading) and re-run.\n"
+                  + diff
+              )
+              sys.exit(1)
+
+          print("OK  templates/SECURITY.md and templates/SUPPORT.md agree on '## Scope'")
+          EOF
+
   test:
     name: test
     runs-on: ubuntu-latest
