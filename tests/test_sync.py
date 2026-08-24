@@ -416,6 +416,12 @@ def test_v1_stamp_does_not_hide_genuine_staleness(actions_repo, tmp_path):
 
 
 def test_v1_stamp_degrades_to_the_no_stamp_two_way_path(actions_repo, tmp_path):
+    """A no-false-positive check, not a guard on the degrade path itself
+    (that's `test_v1_stamp_does_not_hide_genuine_staleness`): confirms the
+    fix doesn't over-trigger by flagging a file that's identical on both
+    sides just because the stamp is untrusted. Passes with or without
+    `usable_stamp` in place -- ours == theirs short-circuits before the
+    (missing) base is ever consulted either way."""
     repo = _make_target_repo(tmp_path, stamp="v1")
     _seed(repo, "ROW1.md", "same\n")  # identical on both sides regardless of base
     result = _sync_one(repo, actions_repo, "ROW1.md", dry_run=True)
@@ -430,6 +436,48 @@ def test_v1_stamp_is_never_silently_used_even_when_side_is_given(actions_repo, t
     _seed(repo, "ROW2.md", "a\nb\nc\n")
     result = _sync_one(repo, actions_repo, "ROW2.md", side="theirs")
     assert result.detail == "no recorded base version -- cannot tell stale copy from local edit"
+
+
+def test_v1_stamp_self_repairs_via_the_advance_on_clean_sync_mechanism(actions_repo, tmp_path):
+    """Verifies the actual repair: a completed full sync advances
+    `templates_version` via `current_templates_version()`, which (per
+    onboard.py's fix) can never emit `v1`. So the one clean run this test
+    performs is what turns a `"v1"`-stamped repo into one stamped a real
+    point release or SHA -- that's what makes it self-heal, without
+    `sync.py` ever having trusted the bad value along the way.
+
+    This test is insensitive to `usable_stamp` being broken: on a clean
+    run (nothing pending), whether the stamp was trusted makes no
+    observable difference here, since every file already matches the
+    template regardless of which base gets used. It does NOT cover the
+    refusing-to-trust half -- see `test_v1_stamp_does_not_hide_genuine_staleness`
+    for the test that actually depends on `usable_stamp` rejecting "v1"."""
+    repo = _make_target_repo(tmp_path, stamp="v1")
+    # Every managed file already matches the current template exactly, so
+    # the run completes cleanly regardless of which base path is taken --
+    # this isn't testing conflict resolution, just that a completed run is
+    # what triggers the stamp to be rewritten.
+    _seed(repo, "ROW1.md", "same\n")
+    _seed(repo, "ROW2.md", "a\nb\nc\nd\n")
+    _seed(repo, "ROW3.md", "x\ny\nz\n")
+    _seed(repo, "ROW4.md", "line1\nline2\nline3-theirs\nline4\nline5\n")
+
+    code = sync.main(["--repo-path", str(repo)])
+    assert code == 0
+
+    stamp_after = _stamp(repo)
+    assert stamp_after != "v1"
+    assert sync.usable_stamp(stamp_after) == stamp_after, "repaired stamp must itself be trusted"
+
+    # Sanity check only, not evidence of the mechanism above: by this point
+    # the stamp is already an ordinary trusted value, so a local edit made
+    # afterward reads as 'local-edit' the same way it would for any
+    # freshly-onboarded repo -- this doesn't distinguish repaired from
+    # never-broken.
+    _seed(repo, "ROW3.md", "x\ny\nz\nlocal-addition\n")
+    result = _sync_one(repo, actions_repo, "ROW3.md", dry_run=True)
+    assert result.action == "local-edit"
+    assert result.detail == "local edit only -- left alone"
 
 
 # ------------------------------------------------------------------ seed-once
