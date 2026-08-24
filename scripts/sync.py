@@ -96,6 +96,31 @@ def read_stamp(repo: Path) -> str | None:
     return data.get("tool", {}).get("em-release", {}).get("templates_version")
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def usable_stamp(stamp: str | None) -> str | None:
+    """A stamp is only a trustworthy merge base if it names an immutable
+    ref: a vX.Y.Z point release, or the short/full commit SHA
+    `current_templates_version` falls back to when HEAD isn't tagged (both
+    are what onboard.py can ever write -- see there). Anything else --
+    concretely, the moving `v1` alias, see .github/RELEASING.md, but also
+    any other tag-shaped stamp that isn't a point release -- is untrusted
+    entirely, not just deprioritised: `git show <ref>:templates/<path>`
+    against a moving ref can silently resolve a DIFFERENT, newer commit
+    than the one this repo actually synced from, which would make `base`
+    collapse toward `theirs` and stop sync.py from ever detecting
+    staleness again -- the exact silent-no-op failure this whole tool
+    exists to prevent. A wrong base is worse than no base, so an untrusted
+    stamp degrades to the no-stamp two-way path (see decide_and_apply)
+    rather than being used."""
+    if stamp is None:
+        return None
+    if onboard.parse_point_release(stamp) is not None or _SHA_RE.match(stamp):
+        return stamp
+    return None
+
+
 def write_templates_version(repo: Path, version: str) -> None:
     p = repo / "pyproject.toml"
     text = p.read_text()
@@ -293,7 +318,7 @@ def sync_repo(
             )
         entries = [e for e in entries if e.dest in wanted]
 
-    stamp = read_stamp(repo)
+    stamp = usable_stamp(read_stamp(repo))
     return [
         decide_and_apply(repo, actions_repo, e, stamp=stamp, dry_run=dry_run, side=side)
         for e in entries

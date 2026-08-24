@@ -62,12 +62,18 @@ def _make_actions_repo(tmp_path: Path) -> Path:
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "v1.0.0")
     _git(repo, "tag", "v1.0.0")
+    _git(repo, "tag", "v1")  # the moving alias, pointing at v1.0.0 for now
 
     (templates / "ROW2.md").write_text("a\nb\nc\nd\n")  # upstream changes this one
     (templates / "ROW4.md").write_text("line1\nline2\nline3-theirs\nline4\nline5\n")  # + this one
     (templates / "SEEDED.md").write_text("seed v2 -- must never reach a consumer\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "HEAD")
+    # Mirrors .github/RELEASING.md: `v1` is force-moved to the newest
+    # release on every cut. HEAD here is deliberately untagged with a real
+    # point release (there's no vX.Y.Z at HEAD in this fixture) -- only the
+    # alias follows it, exactly the shape that made the original bug happen.
+    _git(repo, "tag", "-f", "v1", "HEAD")
 
     return repo
 
@@ -370,6 +376,60 @@ def test_uncommitted_template_error_hints_at_the_working_tree(actions_repo, tmp_
     )
     assert result.action == "error"
     assert "not committed" in result.detail
+
+
+# --------------------------------------------------------------- untrusted stamp
+
+
+def test_usable_stamp_rejects_the_moving_v1_alias():
+    assert sync.usable_stamp("v1") is None
+
+
+def test_usable_stamp_accepts_point_releases_and_commit_shas():
+    assert sync.usable_stamp("v1.5.0") == "v1.5.0"
+    assert sync.usable_stamp("32ed6e0") == "32ed6e0"  # short SHA fallback
+    assert sync.usable_stamp("32ed6e0e1a4cff2f6c3542c030c305dc9ed4c00a") is not None
+
+
+def test_usable_stamp_passes_through_none():
+    assert sync.usable_stamp(None) is None
+
+
+def test_v1_stamp_does_not_hide_genuine_staleness(actions_repo, tmp_path):
+    """The exact failure this guards against: `v1` was force-moved to HEAD
+    after this repo synced (see `_make_actions_repo` -- it mirrors
+    .github/RELEASING.md). If a `v1` stamp were trusted as a base,
+    `git show v1:templates/ROW2.md` would now resolve HEAD's content --
+    identical to `theirs` -- so `theirs_changed` would read False and a
+    file that is genuinely still on the old v1.0.0 content would land in
+    'local-edit -- left alone' (ours differs from that wrong base) instead
+    of ever being flagged for an update. Non-blocking, so it would never
+    resurface. `pending` must be True here -- that's the signal that
+    actually distinguishes the fixed behaviour from the bug; the untrusted
+    stamp degrades to the no-stamp two-way path instead, which always
+    treats a real difference as a decision."""
+    repo = _make_target_repo(tmp_path, stamp="v1")
+    _seed(repo, "ROW2.md", "a\nb\nc\n")  # the real v1.0.0 content -- genuinely stale
+    result = _sync_one(repo, actions_repo, "ROW2.md", dry_run=True)
+    assert result.action not in ("up-to-date", "local-edit"), "a v1 stamp must never be a base"
+    assert result.pending
+
+
+def test_v1_stamp_degrades_to_the_no_stamp_two_way_path(actions_repo, tmp_path):
+    repo = _make_target_repo(tmp_path, stamp="v1")
+    _seed(repo, "ROW1.md", "same\n")  # identical on both sides regardless of base
+    result = _sync_one(repo, actions_repo, "ROW1.md", dry_run=True)
+    assert result.action == "up-to-date", "identical content is fine to report even without a base"
+
+
+def test_v1_stamp_is_never_silently_used_even_when_side_is_given(actions_repo, tmp_path):
+    """--theirs must still resolve via the (missing) base, not quietly treat
+    `v1` as valid and skip straight to a clean 'updated' -- the two-way
+    detail wording ('no recorded base version') must be what's reported."""
+    repo = _make_target_repo(tmp_path, stamp="v1")
+    _seed(repo, "ROW2.md", "a\nb\nc\n")
+    result = _sync_one(repo, actions_repo, "ROW2.md", side="theirs")
+    assert result.detail == "no recorded base version -- cannot tell stale copy from local edit"
 
 
 # ------------------------------------------------------------------ seed-once

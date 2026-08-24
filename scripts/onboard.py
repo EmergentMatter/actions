@@ -87,17 +87,47 @@ def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
     return entries
 
 
+POINT_RELEASE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+def parse_point_release(tag: str) -> tuple[int, int, int] | None:
+    """A `vX.Y.Z` point release's numbers, or None. Deliberately excludes
+    the moving `v1` alias (force-moved to the newest release on every cut,
+    per .github/RELEASING.md) -- only a point release is an immutable ref."""
+    m = POINT_RELEASE_RE.match(tag)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
 def current_templates_version(actions_repo: Path | None = None) -> str:
-    """The actions repo's own version, right now: the exact tag at HEAD if
-    there is one, else the short commit SHA. Both are valid refs for
-    `git show <ref>:templates/<path>`, which is how sync.py retrieves a
-    historical template later -- see CONTRACT.md."""
+    """The actions repo's own version, right now: the highest vX.Y.Z point
+    release tagged exactly at HEAD, or the short commit SHA if none is.
+
+    Never the moving `v1` alias, even when it also points at HEAD --a
+    stamp naming it would silently stop meaning anything the moment the
+    next release force-moves it, so `git show v1:templates/<path>` in
+    sync.py would drift to resolve a different, newer commit than the one
+    this repo actually synced from.
+
+    `git describe --tags --exact-match`'s tie-break when several tags point
+    at the same commit is unspecified -- it depends on ref packing, not on
+    anything this code controls, so it must not be trusted to prefer the
+    point release over the alias. `git tag --points-at HEAD` enumerates
+    every tag there instead, so the choice is made explicitly.
+    """
     repo = actions_repo if actions_repo is not None else Path(__file__).resolve().parent.parent
     p = subprocess.run(
-        ["git", "describe", "--tags", "--exact-match"], cwd=repo, capture_output=True, text=True
+        ["git", "tag", "--points-at", "HEAD"], cwd=repo, capture_output=True, text=True
     )
-    if p.returncode == 0:
-        return p.stdout.strip()
+    if p.returncode != 0:
+        raise OnboardError(f"could not list tags at HEAD for {repo}: {p.stderr.strip()}")
+    candidates = []
+    for tag in p.stdout.split():
+        version = parse_point_release(tag)
+        if version is not None:
+            candidates.append((version, tag))
+    if candidates:
+        return max(candidates)[1]
+
     p = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
     )

@@ -308,6 +308,45 @@ def test_current_templates_version_falls_back_to_short_sha(tmp_path):
     assert full_sha.startswith(version)
 
 
+# ------------------------- current_templates_version never returns a moving alias
+
+
+@pytest.mark.parametrize("order", ["alias_first", "point_release_first"])
+def test_current_templates_version_never_returns_the_moving_v1_alias(tmp_path, order):
+    """Regression: `git describe --tags --exact-match`'s tie-break between
+    several tags on the same commit depends on ref packing, not on
+    anything this code controls -- it must not decide this. Proven both
+    ways: the answer must be the point release regardless of which tag was
+    created first."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    if order == "alias_first":
+        _git(repo, "tag", "v1")
+        _git(repo, "tag", "v1.5.0")
+    else:
+        _git(repo, "tag", "v1.5.0")
+        _git(repo, "tag", "v1")
+    assert onboard.current_templates_version(repo) == "v1.5.0"
+
+
+def test_current_templates_version_picks_the_highest_point_release_at_head(tmp_path):
+    """Not strictly the reported bug, but the same enumerate-and-choose
+    logic must break ties among several *real* point releases sensibly,
+    not by tag-creation order either."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    _git(repo, "tag", "v1.5.0")
+    _git(repo, "tag", "v1.10.0")  # lexicographically < v1.5.0, numerically greater
+    _git(repo, "tag", "v1.9.0")
+    assert onboard.current_templates_version(repo) == "v1.10.0"
+
+
+def test_parse_point_release_excludes_the_moving_alias():
+    assert onboard.parse_point_release("v1") is None
+    assert onboard.parse_point_release("v1.5.0") == (1, 5, 0)
+    assert onboard.parse_point_release("latest") is None
+
+
 # ------------------------------------------------------- manifest-driven plan
 
 
