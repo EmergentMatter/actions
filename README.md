@@ -78,7 +78,10 @@ it lands, often not the same name as the source) and a `policy`:
 | `stub-build-release.yml` | `.github/workflows/build-release.yml` | Not the automatic path. Only fires for a human-pushed tag or a manual rebuild via `workflow_dispatch` | managed |
 | `changeset.py` | `scripts/changeset.py` | Interactive tool contributors run to write a changelog note; must stay outside the package, or it ships in the built wheel | managed |
 | `CONTRIBUTING.md` | `CONTRIBUTING.md` | Contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat | managed |
-| `ci.yml` | `.github/workflows/ci.yml` | Starter CI (lint, test, build) for a repo with none; `version.yml`'s own `needs: ci` depends on it | seed-once |
+| `ci.yml` | `.github/workflows/ci.yml` | Starter CI (lint, format, typecheck, test, build) for a repo with none; `version.yml`'s own `needs: ci` depends on it | seed-once |
+| `STYLE.md` | `STYLE.md` | The org's style guide: Python and TypeScript conventions, naming, docstrings, typing, testing, documentation, open-source hygiene | managed |
+| `ruff-base.toml` | `ruff-base.toml` | The shared ruff lint and format ruleset | managed |
+| `ruff.toml` | `ruff.toml` | `extend`s `ruff-base.toml`, plus room for this repo's own additions | seed-once |
 
 **Community-health files**, about being a decent citizen of the org:
 
