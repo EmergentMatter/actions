@@ -2,16 +2,9 @@
 
 ## Scope
 
-This policy covers software authored by EmergentMatter: the
+This policy covers software published by EmergentMatter: the
 `emergent-matter-*` packages, `EmergentMatter/actions`, and the
 SDM toolchain.
-
-This organization also hosts forks of third-party open-source
-projects, for example `optax`, `diffrax`, `equinox`, `jax-fem`
-and `numpyro`. These are frozen snapshots kept for
-reproducibility. EmergentMatter does not maintain them. Please
-report issues and vulnerabilities in those projects to their
-upstream maintainers.
 
 ## Reporting a vulnerability
 
