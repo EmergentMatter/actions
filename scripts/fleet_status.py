@@ -13,7 +13,9 @@ predates provenance tracking. See `templates` and `stamp` below.
 
 Checks, per repo:
 
-  gate        the lint gate's two halves agree (see lint_gate.py)
+  gate            the lint gate's two halves agree (see lint_gate.py)
+  format_gate     same, for the `format` job (ruff format --check)
+  typecheck_gate  same, for the `typecheck` job (mypy)
   stub        the changelog stub uses the composite action, not the
               `workflow_call` path removed in v1.1.0. A repo still on
               that path is BROKEN right now, not merely stale.
@@ -22,14 +24,22 @@ Checks, per repo:
   naming      ci.yml declares `name:`, so checks read `CI / lint` rather
               than `.github/workflows/ci.yml / lint`
   templates   every `managed` file in templates/manifest.toml matches its
-              live copy. (`seed-once` files, e.g. ci.yml, are skipped:
-              repos legitimately customise those.)
+              live copy. (`seed-once` files, e.g. ci.yml and ruff.toml,
+              are skipped: repos legitimately customise those.) STYLE.md
+              and ruff-base.toml (both managed) are covered here for free
+              -- adding them to the manifest was the only change needed.
   stamp       the `templates_version` provenance stamp against this repo's
               newest release tag
   security    if SECURITY.md documents private vulnerability reporting,
               the repo actually has it turned on. It's a per-repo setting
               nothing inherits, so a public repo can carry a policy
               promising a route it doesn't have. (Private repos: N/A.)
+  tooling     pyproject.toml declares [tool.mypy] and
+              [tool.pytest.ini_options]. Existence only, not exact
+              content -- mypy and pytest have no config-inheritance
+              mechanism the way ruff's `extend` gives lint/format, so
+              uniformity there comes from review, and this is what makes
+              an outright-missing block visible.
 
 Reads everything over the API. No clones. Stdlib only; GitHub access
 shells out to `gh`.
@@ -55,47 +65,69 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-_spec = importlib.util.spec_from_file_location(
-    "lint_gate", Path(__file__).resolve().parent / "lint_gate.py"
-)
-lint_gate = importlib.util.module_from_spec(_spec)
-# Must be registered before exec: @dataclass resolves cls.__module__ through
-# sys.modules, and a module loaded this way isn't there by default.
-sys.modules["lint_gate"] = lint_gate
-_spec.loader.exec_module(lint_gate)
+if TYPE_CHECKING:
+    # This repo ships no installed package (scripts/ is stdlib-only, run in
+    # place -- see CLAUDE.md), so a plain `import lint_gate` / `onboard` /
+    # `sync` has nothing to resolve to at runtime; that's what the
+    # importlib.util dynamic loads in the `else` branch are for. mypy can't
+    # see through those on its own, so this branch (never taken at runtime:
+    # TYPE_CHECKING is always False there) gives it the real modules to
+    # check attribute access and type annotations against instead.
+    import lint_gate
+    import onboard
+    import sync
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "lint_gate", Path(__file__).resolve().parent / "lint_gate.py"
+    )
+    # Both narrow a real path on disk to a concrete ModuleSpec/loader;
+    # spec_from_file_location only returns None for an import kind this
+    # isn't (namespace packages, frozen/built-in modules), never a plain
+    # file path.
+    assert _spec is not None and _spec.loader is not None
+    lint_gate = importlib.util.module_from_spec(_spec)
+    # Must be registered before exec: @dataclass resolves cls.__module__
+    # through sys.modules, and a module loaded this way isn't there by
+    # default.
+    sys.modules["lint_gate"] = lint_gate
+    _spec.loader.exec_module(lint_gate)
 
-# Import templates/manifest.toml's one parser (onboard.py's) rather than
-# redefining TemplateEntry/load_manifest here, the same way sync.py does.
-# A redefinition here could drift from the other two tools' notion of the
-# manifest. That already happened once: this file used to default a
-# missing `policy` key to "managed" instead of raising, which
-# under-reported drift on exactly the seed-once files that default was
-# supposed to protect.
-_spec = importlib.util.spec_from_file_location(
-    "onboard", Path(__file__).resolve().parent / "onboard.py"
-)
-onboard = importlib.util.module_from_spec(_spec)
-sys.modules["onboard"] = onboard
-_spec.loader.exec_module(onboard)
+    # Import templates/manifest.toml's one parser (onboard.py's) rather than
+    # redefining TemplateEntry/load_manifest here, the same way sync.py does.
+    # A redefinition here could drift from the other two tools' notion of the
+    # manifest. That already happened once: this file used to default a
+    # missing `policy` key to "managed" instead of raising, which
+    # under-reported drift on exactly the seed-once files that default was
+    # supposed to protect.
+    _spec = importlib.util.spec_from_file_location(
+        "onboard", Path(__file__).resolve().parent / "onboard.py"
+    )
+    assert _spec is not None and _spec.loader is not None
+    onboard = importlib.util.module_from_spec(_spec)
+    sys.modules["onboard"] = onboard
+    _spec.loader.exec_module(onboard)
+
+    # Same reasoning for what counts as a *valid* templates_version stamp:
+    # sync.py's usable_stamp() is the one place that already knows the two
+    # shapes onboard.py can ever write it in (a vX.Y.Z point release, or the
+    # short commit SHA current_templates_version() falls back to when HEAD
+    # isn't tagged -- every repo synced off an unmerged branch gets this
+    # one). Redefining that notion here risked exactly the bug it just
+    # caused: this check used to warn "not a recognised release tag" on a
+    # SHA stamp that onboard.py wrote correctly, permanently, on every repo
+    # synced during development.
+    _spec = importlib.util.spec_from_file_location(
+        "sync", Path(__file__).resolve().parent / "sync.py"
+    )
+    assert _spec is not None and _spec.loader is not None
+    sync = importlib.util.module_from_spec(_spec)
+    sys.modules["sync"] = sync
+    _spec.loader.exec_module(sync)
+
 TemplateEntry = onboard.TemplateEntry
 load_manifest = onboard.load_manifest
-
-# Same reasoning for what counts as a *valid* templates_version stamp:
-# sync.py's usable_stamp() is the one place that already knows the two
-# shapes onboard.py can ever write it in (a vX.Y.Z point release, or the
-# short commit SHA current_templates_version() falls back to when HEAD
-# isn't tagged -- every repo synced off an unmerged branch gets this one).
-# Redefining that notion here risked exactly the bug it just caused: this
-# check used to warn "not a recognised release tag" on a SHA stamp that
-# onboard.py wrote correctly, permanently, on every repo synced during
-# development.
-_spec = importlib.util.spec_from_file_location(
-    "sync", Path(__file__).resolve().parent / "sync.py"
-)
-sync = importlib.util.module_from_spec(_spec)
-sys.modules["sync"] = sync
-_spec.loader.exec_module(sync)
 usable_stamp = sync.usable_stamp
 
 ACTIONS_REPO = "EmergentMatter/actions"
@@ -151,9 +183,7 @@ class RepoReport:
 
 def check_stub(text: str | None) -> list[Finding]:
     if text is None:
-        return [
-            Finding("stub", "warn", f"no {CHANGELOG_STUB} -- changelog gate not installed")
-        ]
+        return [Finding("stub", "warn", f"no {CHANGELOG_STUB} -- changelog gate not installed")]
     if REMOVED_WORKFLOW_PATH in text:
         return [
             Finding(
@@ -436,6 +466,73 @@ def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]
     return [Finding("gate", "info", state.name)]
 
 
+def _check_staged_job_gate(
+    job: str, check_name: str, ci_text: str | None, contexts: list[str] | None
+) -> list[Finding]:
+    """Shared body behind check_format_gate and check_typecheck_gate.
+
+    Same two-halves-must-agree logic as check_gate above, generalised via
+    lint_gate.py's own `job` parameter (see its module docstring). Kept as
+    a private helper rather than folding into check_gate itself, so
+    check_gate's signature -- and every existing call site and test -- is
+    untouched by this repo's two newer staged jobs.
+    """
+    if ci_text is None or contexts is None:
+        return []
+    try:
+        has_line = lint_gate.has_continue_on_error(ci_text, job)
+    except lint_gate.LintGateError:
+        # Unlike lint, format/typecheck are new jobs that ci.yml is
+        # seed-once about: most repos onboarded before this PR simply
+        # haven't adopted them into their own copy yet. That is the
+        # expected, staged-rollout-not-started state, not a defect.
+        return [Finding(check_name, "info", f"no `{job}:` job; not yet adopted")]
+    state = lint_gate.State(has_line, job in contexts, job)
+    if state.name == "INCONSISTENT":
+        first = state.detail.strip().split("\n")[0]
+        return [Finding(check_name, "broken", f"INCONSISTENT -- {first}")]
+    return [Finding(check_name, "info", state.name)]
+
+
+def check_format_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
+    return _check_staged_job_gate("format", "format_gate", ci_text, contexts)
+
+
+def check_typecheck_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
+    return _check_staged_job_gate("typecheck", "typecheck_gate", ci_text, contexts)
+
+
+def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
+    """The mypy and pytest config blocks STYLE.md's Typing/Testing sections
+    describe actually exist in the repo's pyproject.toml.
+
+    Existence only, not exact content: repos are expected to relax mypy
+    per-module for JAX/bpy code, and pytest's addopts can reasonably vary.
+    Neither tool has ruff's `extend` mechanism, so templates/manifest.toml
+    can't keep these current the way it does STYLE.md or ruff-base.toml --
+    the config block is copy-pasted at onboarding (see
+    templates/pyproject-snippet.toml) and never synced. Uniformity beyond
+    "does it exist at all" comes from review, not this check.
+    """
+    if pyproject_text is None:
+        return [
+            Finding("tooling", "warn", "no pyproject.toml -- cannot check for mypy/pytest config")
+        ]
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return [Finding("tooling", "warn", "pyproject.toml does not parse as TOML")]
+    tool = data.get("tool", {})
+    out = []
+    if "mypy" not in tool:
+        out.append(Finding("tooling", "warn", "pyproject.toml has no [tool.mypy] block"))
+    if "ini_options" not in tool.get("pytest", {}):
+        out.append(
+            Finding("tooling", "warn", "pyproject.toml has no [tool.pytest.ini_options] block")
+        )
+    return out
+
+
 def check_contexts(contexts: list[str] | None) -> list[Finding]:
     if contexts is None:
         return [Finding("contexts", "warn", "no required status checks on the default branch")]
@@ -459,6 +556,7 @@ def evaluate(
     tags: list[str] | None = None,
     security_text: str | None = None,
     pvr_status: str = "unknown",
+    pyproject_text: str | None = None,
 ) -> list[Finding]:
     manifest = manifest or []
     dest_texts = dest_texts or {}
@@ -467,11 +565,14 @@ def evaluate(
         *check_stub(stub_text),
         *check_workflow_call(ci_text),
         *check_gate(ci_text, contexts),
+        *check_format_gate(ci_text, contexts),
+        *check_typecheck_gate(ci_text, contexts),
         *check_contexts(contexts),
         *check_verify_wheel(ci_text),
         *check_templates(manifest, dest_texts, _stamp_status(stamp, tags)),
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
+        *check_pyproject_tooling(pyproject_text),
         *check_pins(ci_text),
         *check_naming(ci_text),
     ]
@@ -521,7 +622,7 @@ def fetch_local_tags() -> list[str]:
 
 
 def fetch_private_vuln_reporting(repo: str) -> str:
-    """"enabled" | "disabled" | "not-applicable" (private repo) | "unknown".
+    """ "enabled" | "disabled" | "not-applicable" (private repo) | "unknown".
 
     Visibility is checked FIRST, deliberately: the reporting endpoint 404s
     for a private repo, for no access, and for "feature unavailable" alike,
@@ -585,6 +686,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         stamp = fetch_stamp(repo)
         contexts = fetch_contexts(repo)
         security = fetch_file(repo, SECURITY_FILE)
+        pyproject = fetch_file(repo, "pyproject.toml")
         # Only spend the two extra `gh api` calls when there's actually a
         # promise to verify -- most repos won't have SECURITY.md yet.
         pvr_status = (
@@ -604,6 +706,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
                 tags=tags,
                 security_text=security,
                 pvr_status=pvr_status,
+                pyproject_text=pyproject,
             ),
         )
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep
@@ -618,7 +721,7 @@ MARK = {"broken": "BROKEN", "warn": "warn", "info": "ok", None: "ok"}
 
 def render(reports: list[RepoReport], *, show_info: bool) -> str:
     lines = []
-    for r in sorted(reports, key=lambda r: (SEVERITY_ORDER.get(r.worst, 3), r.repo)):
+    for r in sorted(reports, key=lambda r: (SEVERITY_ORDER.get(r.worst or "", 3), r.repo)):
         shown = [f for f in r.findings if show_info or f.severity != "info"]
         lines.append(f"{MARK[r.worst]:>6}  {r.repo}")
         if r.error:
