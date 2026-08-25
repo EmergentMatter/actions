@@ -50,6 +50,10 @@ How to write, test, and document code in EmergentMatter repos.
 
 ## Naming
 
+The typed-prefix convention below applies to engineering quantities:
+geometry, physics, catalog data. Generic tooling and infrastructure code
+uses plain descriptive names instead.
+
 - **Use the typed-prefix convention on primitive scalars**: `d_` for
   `float`, `n_` for `int`, `b_` for `bool`, `s_` for `str`. It keeps a
   variable's type visible at every call site. Applies to scalars only;
