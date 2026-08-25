@@ -7,7 +7,11 @@ this repository.
 
 ## Reporting a vulnerability
 
-Report it privately on the repository it affects:
+Email **security@emergentmatter.com** with the details. This is the
+primary route, and it works no matter which repository is affected.
+
+If the affected repository's **Security** tab has a **Report a
+vulnerability** button, that is also a fine way to report it:
 
 1. Go to that repository on GitHub.
 2. Open the **Security** tab.
@@ -18,17 +22,10 @@ That opens a private conversation with the maintainers. Nothing is
 visible to anyone else, and nothing becomes public until a fix is ready
 and an advisory is published.
 
-**If that repository has no "Report a vulnerability" button**, it has
-not turned private reporting on yet. Use
-[EmergentMatter/actions' security advisories](https://github.com/EmergentMatter/actions/security/advisories/new)
-instead, following the same steps there, and name the affected
-repository in your report.
-
 **Do not open a public issue for a security report**, on either route.
 A public issue tells everyone about the problem before there is a fix.
 
-We aim to acknowledge within five business days. Private reports reach
-the maintainers of the repository they are filed on.
+We aim to acknowledge within five business days.
 
 ### What to include
 

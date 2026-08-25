@@ -87,7 +87,7 @@ it lands, often not the same name as the source) and a `policy`:
 
 | File | Lands at | What it's for | Policy |
 |---|---|---|---|
-| `SECURITY.md` | `SECURITY.md` | Vulnerability reporting policy, pointing at the repo's own Security tab | managed |
+| `SECURITY.md` | `SECURITY.md` | Vulnerability reporting policy: email security@emergentmatter.com, or the repo's own Security tab | managed |
 | `SUPPORT.md` | `SUPPORT.md` | Where to ask questions versus where to file a bug | managed |
 | `CODE_OF_CONDUCT.md` | `CODE_OF_CONDUCT.md` | Contributor Covenant v2.1 | managed |
 | `NOTICE` | `NOTICE` | Copyright and third-party attribution (credits the Contributor Covenant text) | managed |
@@ -97,7 +97,7 @@ it lands, often not the same name as the source) and a `policy`:
 | `PULL_REQUEST_TEMPLATE.md` | `.github/PULL_REQUEST_TEMPLATE.md` | What changed and why, linked issue, test plan, checklist | managed |
 | `ISSUE_TEMPLATE/bug_report.yml` | `.github/ISSUE_TEMPLATE/bug_report.yml` | Structured bug report form | managed |
 | `ISSUE_TEMPLATE/feature_request.yml` | `.github/ISSUE_TEMPLATE/feature_request.yml` | Structured feature request form | managed |
-| `ISSUE_TEMPLATE/config.yml` | `.github/ISSUE_TEMPLATE/config.yml` | Disables blank issues; links to Discussions and the org-wide security-advisory fallback | managed |
+| `ISSUE_TEMPLATE/config.yml` | `.github/ISSUE_TEMPLATE/config.yml` | Disables blank issues; links to Discussions and the security policy | managed |
 
 ## Architecture
 

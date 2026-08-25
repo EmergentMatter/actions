@@ -3,9 +3,9 @@ contact_links:
   - name: Question or usage help
     url: https://github.com/EmergentMatter/actions/discussions
     about: Ask in Discussions rather than opening an issue.
-  - name: Report a vulnerability (org-wide fallback)
-    url: https://github.com/EmergentMatter/actions/security/advisories/new
+  - name: Report a vulnerability
+    url: https://github.com/EmergentMatter/emergent-matter-sdm/security/policy
     about: >-
-      Prefer this repository's own Security -> Report a vulnerability button,
-      if it has one. Otherwise use this link and name the affected package or
-      repository in the report. Never open a public issue.
+      Email security@emergentmatter.com, or use this repository's own
+      Security -> Report a vulnerability button if it has one. Never open
+      a public issue.
