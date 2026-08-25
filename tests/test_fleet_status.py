@@ -112,6 +112,193 @@ def test_repo_without_a_lint_job_is_not_flagged_as_broken():
     assert severities(fleet_status.check_gate(ci, HEALTHY_CONTEXTS), "gate") == ["info"]
 
 
+# ------------------------------------------------------ format/typecheck gates
+
+CI_FORMAT_TYPECHECK_OFF = """\
+name: CI
+on:
+  pull_request:
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - run: uv run mypy src
+"""
+
+CI_FORMAT_TYPECHECK_ON = CI_FORMAT_TYPECHECK_OFF.replace("    continue-on-error: true\n", "")
+
+
+def test_a_repo_that_has_not_adopted_format_or_typecheck_yet_is_only_info():
+    """ci.yml is seed-once -- a repo onboarded before this PR simply lacks
+    these jobs, which is the expected not-yet-rolled-out state, not a defect."""
+    ci = "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
+    assert severities(fleet_status.check_format_gate(ci, HEALTHY_CONTEXTS), "format_gate") == [
+        "info"
+    ]
+    assert severities(
+        fleet_status.check_typecheck_gate(ci, HEALTHY_CONTEXTS), "typecheck_gate"
+    ) == ["info"]
+
+
+def test_inconsistent_format_gate_is_broken():
+    findings = fleet_status.check_format_gate(
+        CI_FORMAT_TYPECHECK_OFF, ["format", *HEALTHY_CONTEXTS]
+    )
+    assert severities(findings, "format_gate") == ["broken"]
+    assert "INCONSISTENT" in messages(findings, "format_gate")
+
+
+def test_inconsistent_typecheck_gate_is_broken():
+    findings = fleet_status.check_typecheck_gate(
+        CI_FORMAT_TYPECHECK_OFF, ["typecheck", *HEALTHY_CONTEXTS]
+    )
+    assert severities(findings, "typecheck_gate") == ["broken"]
+    assert "INCONSISTENT" in messages(findings, "typecheck_gate")
+
+
+@pytest.mark.parametrize(
+    ("ci", "contexts", "expected"),
+    [
+        (CI_FORMAT_TYPECHECK_OFF, HEALTHY_CONTEXTS, "OFF"),
+        (CI_FORMAT_TYPECHECK_ON, ["format", "typecheck", *HEALTHY_CONTEXTS], "ON"),
+    ],
+)
+def test_consistent_format_and_typecheck_gates_report_their_state_as_info(ci, contexts, expected):
+    format_findings = fleet_status.check_format_gate(ci, contexts)
+    typecheck_findings = fleet_status.check_typecheck_gate(ci, contexts)
+    assert severities(format_findings, "format_gate") == ["info"]
+    assert expected in messages(format_findings, "format_gate")
+    assert severities(typecheck_findings, "typecheck_gate") == ["info"]
+    assert expected in messages(typecheck_findings, "typecheck_gate")
+
+
+def test_format_and_typecheck_gates_are_independent_of_the_lint_gate():
+    """A repo could have lint enforced while format/typecheck are still
+    advisory -- the staged-job gates must not be able to shadow one another."""
+    ci = CI_FORMAT_TYPECHECK_OFF.replace(
+        "jobs:\n",
+        "jobs:\n  lint:\n    name: lint\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - run: uv run ruff check .\n\n",
+    )
+    contexts = ["lint", *HEALTHY_CONTEXTS]
+    assert severities(fleet_status.check_gate(ci, contexts), "gate") == ["info"]
+    assert "ON" in messages(fleet_status.check_gate(ci, contexts), "gate")
+    assert "OFF" in messages(fleet_status.check_format_gate(ci, contexts), "format_gate")
+    assert "OFF" in messages(fleet_status.check_typecheck_gate(ci, contexts), "typecheck_gate")
+
+
+# ------------------------------------------------------------------ tooling
+
+
+def test_pyproject_missing_both_blocks_is_flagged_twice():
+    findings = fleet_status.check_pyproject_tooling("[project]\nname = 'x'\n")
+    assert severities(findings, "tooling") == ["warn", "warn"]
+    assert "[tool.mypy]" in messages(findings, "tooling")
+    assert "[tool.pytest.ini_options]" in messages(findings, "tooling")
+
+
+def test_pyproject_with_both_blocks_is_clean():
+    text = (
+        "[tool.mypy]\ndisallow_untyped_defs = true\n\n"
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
+    )
+    assert fleet_status.check_pyproject_tooling(text) == []
+
+
+def test_pyproject_missing_only_mypy_is_flagged_once():
+    text = '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
+    findings = fleet_status.check_pyproject_tooling(text)
+    assert severities(findings, "tooling") == ["warn"]
+    assert "[tool.mypy]" in messages(findings, "tooling")
+
+
+def test_pytest_section_without_ini_options_still_counts_as_missing():
+    """[tool.pytest] alone (no .ini_options table) is not the same thing."""
+    text = "[tool.pytest]\nsomething_else = true\n"
+    findings = fleet_status.check_pyproject_tooling(text)
+    assert "[tool.pytest.ini_options]" in messages(findings, "tooling")
+
+
+def test_no_pyproject_is_flagged_not_crashed_on():
+    assert severities(fleet_status.check_pyproject_tooling(None), "tooling") == ["warn"]
+
+
+def test_unparseable_pyproject_is_flagged_not_crashed_on():
+    findings = fleet_status.check_pyproject_tooling("this is not [ valid toml")
+    assert severities(findings, "tooling") == ["warn"]
+
+
+# ------------------------------------------------------------- ruff config
+
+
+def test_no_ruff_base_is_never_flagged():
+    assert fleet_status.check_ruff_config_adoption(False, False, None) == []
+
+
+def test_ruff_base_without_ruff_toml_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(True, False, None)
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "no ruff.toml" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_with_ruff_toml_and_no_inline_section_is_clean():
+    assert fleet_status.check_ruff_config_adoption(True, True, "[project]\nname = 'x'\n") == []
+
+
+def test_ruff_base_with_a_lingering_inline_ruff_section_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(
+        True, True, "[tool.ruff]\nline-length = 88\n"
+    )
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "[tool.ruff]" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_missing_both_ruff_toml_and_still_inline_is_flagged_twice():
+    findings = fleet_status.check_ruff_config_adoption(True, False, "[tool.ruff]\nfoo = 1\n")
+    assert severities(findings, "ruff_config") == ["warn", "warn"]
+
+
+def test_ruff_config_check_never_crashes_on_unparseable_pyproject():
+    findings = fleet_status.check_ruff_config_adoption(True, True, "this is not [ valid")
+    assert findings == []
+
+
+# ------------------------------------------------------------------ ts job
+
+CI_WITH_TS_JOB = "name: CI\njobs:\n  ts:\n    runs-on: ubuntu-latest\n"
+CI_WITH_TS_COMMENTED_OUT = (
+    "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n  # ts:\n  #   runs-on: ubuntu-latest\n"
+)
+
+
+def test_no_bun_lock_is_never_flagged():
+    assert fleet_status.check_ts_job(False, None) == []
+    assert fleet_status.check_ts_job(False, CI_WITH_TS_COMMENTED_OUT) == []
+
+
+def test_bun_lock_without_an_uncommented_ts_job_is_info():
+    findings = fleet_status.check_ts_job(True, CI_WITH_TS_COMMENTED_OUT)
+    assert severities(findings, "ts_job") == ["info"]
+    assert "ui/bun.lock" in messages(findings, "ts_job")
+
+
+def test_bun_lock_with_the_ts_job_present_is_clean():
+    assert fleet_status.check_ts_job(True, CI_WITH_TS_JOB) == []
+
+
+def test_bun_lock_with_no_ci_yml_at_all_is_still_flagged():
+    assert severities(fleet_status.check_ts_job(True, None), "ts_job") == ["info"]
+
+
 # ------------------------------------------------------------------ the rest
 
 
@@ -430,15 +617,29 @@ def test_ambiguous_api_response_is_never_read_as_disabled():
 # ------------------------------------------------------------- roll-up logic
 
 
+HEALTHY_PYPROJECT = """\
+[tool.mypy]
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+"""
+
+
 def test_a_healthy_repo_has_no_actionable_findings():
     """A genuinely healthy repo: workflow_call-able CI, composite-action stub,
-    the three required contexts, and an unmodified changeset.py.
+    the three required contexts, an unmodified changeset.py, and both the
+    mypy and pytest config blocks.
 
     No manifest/stamp is passed -- that's the "onboarded before provenance
-    tracking existed" state, which is `info`, not actionable.
+    tracking existed" state, which is `info`, not actionable. format/typecheck
+    not being adopted yet is likewise `info`, not actionable -- they're new,
+    seed-once jobs most repos won't have rolled out on day one.
     """
     ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
-    findings = fleet_status.evaluate(ci, GOOD_STUB, HEALTHY_CONTEXTS)
+    findings = fleet_status.evaluate(
+        ci, GOOD_STUB, HEALTHY_CONTEXTS, pyproject_text=HEALTHY_PYPROJECT
+    )
     actionable = [f for f in findings if f.severity != "info"]
     assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
 

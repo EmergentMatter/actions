@@ -59,15 +59,21 @@ import tempfile
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 ACTIONS_REPO = Path(__file__).resolve().parent.parent
 
-_spec = importlib.util.spec_from_file_location(
-    "onboard", Path(__file__).resolve().parent / "onboard.py"
-)
-onboard = importlib.util.module_from_spec(_spec)
-sys.modules["onboard"] = onboard
-_spec.loader.exec_module(onboard)
+if TYPE_CHECKING:
+    # Never runs; gives mypy the real module for onboard.* attribute checks.
+    import onboard
+else:
+    _spec = importlib.util.spec_from_file_location(
+        "onboard", Path(__file__).resolve().parent / "onboard.py"
+    )
+    assert _spec is not None and _spec.loader is not None  # always true for a real file path
+    onboard = importlib.util.module_from_spec(_spec)
+    sys.modules["onboard"] = onboard
+    _spec.loader.exec_module(onboard)
 
 
 class SyncError(RuntimeError):
@@ -143,9 +149,7 @@ def write_templates_version(repo: Path, version: str) -> None:
     p = repo / "pyproject.toml"
     text = p.read_text()
 
-    new_text, n = _TEMPLATES_VERSION_RE.subn(
-        f'templates_version = "{version}"', text, count=1
-    )
+    new_text, n = _TEMPLATES_VERSION_RE.subn(f'templates_version = "{version}"', text, count=1)
     if n > 0:
         p.write_text(new_text)
         return
@@ -223,7 +227,13 @@ _PENDING_ACTION = {
 
 
 def _resolve_undecided(
-    dest_path: Path, dest: str, theirs: bytes, detail: str, *, kind: str, dry_run: bool,
+    dest_path: Path,
+    dest: str,
+    theirs: bytes,
+    detail: str,
+    *,
+    kind: str,
+    dry_run: bool,
     side: str | None,
 ) -> EntryResult:
     """Shared resolution for a no-base two-way diff, an unresolved
@@ -278,8 +288,13 @@ def decide_and_apply(
         # describe an incomplete onboarding differently. Never auto-create:
         # that's onboard.py's job, not sync.py's.
         return _resolve_undecided(
-            dest_path, entry.dest, theirs, f"no {entry.dest}; not installed",
-            kind="Missing", dry_run=dry_run, side=side,
+            dest_path,
+            entry.dest,
+            theirs,
+            f"no {entry.dest}; not installed",
+            kind="Missing",
+            dry_run=dry_run,
+            side=side,
         )
 
     base = read_template_at(actions_repo, stamp, entry.source) if stamp else None
@@ -291,9 +306,13 @@ def decide_and_apply(
         if ours == theirs:
             return EntryResult(entry.dest, "up-to-date")
         return _resolve_undecided(
-            dest_path, entry.dest, theirs,
+            dest_path,
+            entry.dest,
+            theirs,
             "no recorded base version -- cannot tell stale copy from local edit",
-            kind="Undecided difference", dry_run=dry_run, side=side,
+            kind="Undecided difference",
+            dry_run=dry_run,
+            side=side,
         )
 
     ours_changed = ours != base
@@ -304,9 +323,7 @@ def decide_and_apply(
     if not ours_changed and theirs_changed:
         if not dry_run:
             _write(dest_path, theirs)
-        return EntryResult(
-            entry.dest, "would-update" if dry_run else "updated", "clean update"
-        )
+        return EntryResult(entry.dest, "would-update" if dry_run else "updated", "clean update")
     if ours_changed and not theirs_changed:
         return EntryResult(entry.dest, "local-edit", "local edit only -- left alone")
 
@@ -320,9 +337,13 @@ def decide_and_apply(
             entry.dest, "would-merge" if dry_run else "merged", "clean three-way merge"
         )
     return _resolve_undecided(
-        dest_path, entry.dest, theirs,
+        dest_path,
+        entry.dest,
+        theirs,
         "real conflict -- three-way merge did not resolve cleanly",
-        kind="Conflict", dry_run=dry_run, side=side,
+        kind="Conflict",
+        dry_run=dry_run,
+        side=side,
     )
 
 
@@ -384,7 +405,10 @@ def main(argv: list[str]) -> int:
     side_group.add_argument("--ours", action="store_true", help="Keep local content on conflict")
     side_group.add_argument("--theirs", action="store_true", help="Take upstream on conflict")
     ap.add_argument(
-        "--only", action="append", default=None, metavar="DEST",
+        "--only",
+        action="append",
+        default=None,
+        metavar="DEST",
         help="Sync only this dest path (relative to the target repo root). Repeatable.",
     )
     ap.add_argument("--json", action="store_true", dest="as_json")

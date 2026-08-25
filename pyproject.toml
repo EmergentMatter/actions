@@ -16,6 +16,7 @@ dependencies = []
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "mypy>=1.14",
 ]
 
 [tool.ruff]
@@ -25,5 +26,20 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PTH"]
 
+[tool.ruff.format]
+
+# This repo ships scripts/, not a src/ package (see the header comment
+# above: no [build-system], it's a virtual project) -- so it's the one
+# place in the org where `mypy scripts` is the right invocation, not the
+# `mypy src` that STYLE.md/templates/ci.yml's typecheck job runs for a
+# consuming repo's own src-layout package.
+[tool.mypy]
+python_version = "3.13"
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]

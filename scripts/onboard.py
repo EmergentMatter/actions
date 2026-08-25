@@ -27,8 +27,8 @@ It deliberately does NOT do three things:
 What gets copied and under what policy is declared once, in
 templates/manifest.toml (see load_manifest below) -- shared with sync.py,
 which is what keeps a "managed" template current after onboarding. A
-"seed-once" template (currently only ci.yml) is written here if absent and
-never touched again by either script.
+"seed-once" template is written here if absent and never touched again
+by either script.
 
 Stdlib only. GitHub access shells out to `gh`.
 
@@ -57,6 +57,11 @@ PVR_PATH = "private-vulnerability-reporting"
 PVR_NAME = "private vulnerability reporting"
 
 _VALID_POLICIES = {"managed", "seed-once"}
+
+# The independent, appendable blocks templates/pyproject-snippet.toml is
+# made of, in file order. Each is written only if the target repo doesn't
+# already declare it -- see missing_config_sections and render_config_block.
+SNIPPET_SECTIONS = ("towncrier", "em-release", "mypy", "pytest")
 
 
 class OnboardError(RuntimeError):
@@ -156,6 +161,7 @@ class Plan:
     ci_needs_workflow_call: bool = False
     ci_job_names: list[str] = field(default_factory=list)
     ci_is_ours: bool = False
+    missing_config_sections: set[str] = field(default_factory=lambda: set(SNIPPET_SECTIONS))
 
 
 # ------------------------------------------------------------------ detection
@@ -353,12 +359,17 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
             Action("create", "CHANGELOG.md", "insert the towncrier marker above existing history")
         )
 
-    has_towncrier = "towncrier" in data.get("tool", {})
-    has_emrelease = "em-release" in data.get("tool", {})
-    if has_towncrier and has_emrelease:
+    missing = missing_config_sections(data)
+    plan.missing_config_sections = missing
+    if not missing:
         plan.actions.append(Action("skip", "pyproject.toml", "config block already present"))
     else:
-        plan.actions.append(Action("create", "pyproject.toml", "append the config block"))
+        to_append = [s for s in SNIPPET_SECTIONS if s in missing]
+        present = [s for s in SNIPPET_SECTIONS if s not in missing]
+        note = f"append missing section(s): {', '.join(to_append)}"
+        if present:
+            note += f"; already present, left alone: {', '.join(present)}"
+        plan.actions.append(Action("create", "pyproject.toml", note))
 
     if not declared:
         plan.candidates = propose_version_files(repo, version)
@@ -368,22 +379,85 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
 
 # -------------------------------------------------------------------- writing
 
+# The comment header each section of pyproject-snippet.toml opens with.
+# _split_snippet_sections anchors on these rather than parsing TOML
+# structure -- the snippet's shape is small and fixed, and a marker that
+# goes missing (the wording changed without updating this list) raises
+# loudly instead of silently keeping stale, unsplit text.
+_SNIPPET_SECTION_MARKERS = (
+    ("towncrier", "# ── towncrier"),
+    ("em-release", "# ── em-release"),
+    ("mypy", "# ── mypy"),
+    ("pytest", "# ── pytest"),
+    ("dev-group", "# ── dev dependency group additions"),
+)
 
-def render_config_block(version_files: list[str], templates_version: str) -> str:
-    snippet = (TEMPLATES / "pyproject-snippet.toml").read_text()
+
+def _split_snippet_sections(snippet: str) -> dict[str, str]:
+    """Split pyproject-snippet.toml into its independent, appendable
+    blocks, each running up to the next marker (or EOF for the last)."""
+    offsets = []
+    for name, marker in _SNIPPET_SECTION_MARKERS:
+        idx = snippet.find(marker)
+        if idx == -1:
+            raise OnboardError(
+                f"pyproject-snippet.toml: no {marker!r} marker for the {name!r} "
+                "section -- update _SNIPPET_SECTION_MARKERS to match its shape."
+            )
+        offsets.append((name, idx))
+    offsets.sort(key=lambda pair: pair[1])
+    return {
+        name: snippet[start : (offsets[i + 1][1] if i + 1 < len(offsets) else len(snippet))]
+        for i, (name, start) in enumerate(offsets)
+    }
+
+
+def missing_config_sections(pyproject_data: dict) -> set[str]:
+    """Which of SNIPPET_SECTIONS the target pyproject.toml doesn't already
+    declare. Only these get appended: writing a section that already
+    exists produces a duplicate TOML table, which neither `tomllib` nor
+    `uv sync` will load."""
+    tool = pyproject_data.get("tool", {})
+    missing = set()
+    if "towncrier" not in tool:
+        missing.add("towncrier")
+    if "em-release" not in tool:
+        missing.add("em-release")
+    if "mypy" not in tool:
+        missing.add("mypy")
+    if "ini_options" not in tool.get("pytest", {}):
+        missing.add("pytest")
+    return missing
+
+
+def render_config_block(
+    version_files: list[str], templates_version: str, missing: set[str] | None = None
+) -> str:
+    """Render only the sections absent from the target repo (see
+    missing_config_sections). `missing=None` renders every section, for
+    callers that just want the full block (e.g. a standalone preview)."""
+    if missing is None:
+        missing = set(SNIPPET_SECTIONS)
+    sections = _split_snippet_sections((TEMPLATES / "pyproject-snippet.toml").read_text())
+
     entries = "\n".join(f'  "{v}",' for v in version_files)
-    block = re.sub(
+    em_release = re.sub(
         r"(?ms)^\[tool\.em-release\].*?^version_files\s*=\s*\[.*?^\]",
         f'[tool.em-release]\ntemplates_version = "{templates_version}"\n'
         "version_files = [\n" + entries + "\n]",
-        snippet,
+        sections["em-release"],
     )
-    if "[tool.em-release]" not in block:
-        block += (
+    if "[tool.em-release]" not in em_release:
+        em_release += (
             f'\n[tool.em-release]\ntemplates_version = "{templates_version}"\n'
             "version_files = [\n" + entries + "\n]\n"
         )
-    return block
+    sections["em-release"] = em_release
+
+    parts = [sections[name] for name in SNIPPET_SECTIONS if name in missing]
+    if "mypy" in missing or "pytest" in missing:
+        parts.append(sections["dev-group"])
+    return "".join(parts)
 
 
 def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> list[str]:
@@ -406,7 +480,10 @@ def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> 
         elif action.target == "pyproject.toml":
             existing = dest.read_text()
             sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
-            dest.write_text(existing + sep + render_config_block(version_files, templates_version))
+            block = render_config_block(
+                version_files, templates_version, plan.missing_config_sections
+            )
+            dest.write_text(existing + sep + block)
         elif action.target == CI_DEST:
             if dest.exists():
                 updated = add_workflow_call(dest.read_text())
@@ -436,10 +513,15 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
         return f"would ensure label `{LABEL}` exists"
     code, _, err = _gh(
         [
-            "label", "create", LABEL,
-            "--repo", repo_slug,
-            "--description", LABEL_DESC,
-            "--color", LABEL_COLOR,
+            "label",
+            "create",
+            LABEL,
+            "--repo",
+            repo_slug,
+            "--description",
+            LABEL_DESC,
+            "--color",
+            LABEL_COLOR,
             "--force",
         ]
     )
@@ -447,7 +529,7 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
 
 
 def repo_visibility(repo_slug: str) -> str | None:
-    """"public" / "private" / "internal", or None if it couldn't be read."""
+    """ "public" / "private" / "internal", or None if it couldn't be read."""
     code, out, _ = _gh(["api", f"repos/{repo_slug}", "-q", ".visibility"])
     return out.strip() if code == 0 else None
 
@@ -559,8 +641,11 @@ def main(argv: list[str]) -> int:
         metavar="PATH:SYMBOL",
         help="A location whose version must move on every release. Repeatable.",
     )
-    ap.add_argument("--no-version-files", action="store_true",
-                    help="This repo has no version string outside pyproject.toml")
+    ap.add_argument(
+        "--no-version-files",
+        action="store_true",
+        help="This repo has no version string outside pyproject.toml",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -586,7 +671,7 @@ def main(argv: list[str]) -> int:
             print(f"\nerror: --version-file path not found: {path}", file=sys.stderr)
             return 1
         text = (repo / path).read_text(errors="replace")
-        if not re.search(rf'^{re.escape(symbol)}\s*=', text, re.MULTILINE):
+        if not re.search(rf"^{re.escape(symbol)}\s*=", text, re.MULTILINE):
             print(f"\nerror: no `{symbol} = ...` assignment in {path}", file=sys.stderr)
             return 1
 

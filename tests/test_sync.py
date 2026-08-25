@@ -205,9 +205,7 @@ def test_row4_conflicting_edits_resolved_with_ours(actions_repo, tmp_path):
 def test_non_overlapping_changes_merge_cleanly_without_a_side(actions_repo, tmp_path):
     """Both sides changed, but not the same line -- a real three-way merge,
     not a coin flip, resolves it without needing --ours/--theirs."""
-    repo = _row_target(
-        tmp_path, actions_repo, row4_ours="line1-ours\nline2\nline3\nline4\nline5\n"
-    )
+    repo = _row_target(tmp_path, actions_repo, row4_ours="line1-ours\nline2\nline3\nline4\nline5\n")
     result = _sync_one(repo, actions_repo, "ROW4.md")
     assert result.action == "merged"
     assert not result.pending
