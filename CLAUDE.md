@@ -61,13 +61,40 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   and so its check name is two segments rather than three.
 - `.github/workflows/{version,build-release}.yml` — the two reusable
   `workflow_call` workflows consuming repos pin to `@v1`.
-- `templates/` — everything a consuming repo copies in at onboarding time:
-  the three workflow stubs, `changeset.py` (→ `scripts/changeset.py` at
-  the consumer's root, **not** inside their package), `CONTRIBUTING.md`,
-  and `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`
-  config block).
-- `docs/tooling.md` — how to run the four maintenance scripts above
-  against a target repo, and what each check means.
+- `verify-wheel/action.yml` and `scripts/verify_wheel.py` — the composite
+  action that installs the built wheel in a clean venv and imports it, so a
+  repo that is green on tests but broken to install fails before release.
+  Never invoked directly; the action calls the script.
+- `templates/manifest.toml` — the single declaration of what a consuming
+  repo receives: 17 entries, each giving a source under `templates/`, the
+  `dest` it lands at, and a policy. `managed` means it should always match
+  the template; `seed-once` means written at onboarding if absent and never
+  touched again. `ci.yml` is the only `seed-once` entry, because repos
+  legitimately customise their own CI. Read by `onboard.py`, `sync.py` and
+  `fleet_status.py`, so adding a template is one entry in one file.
+- `templates/` — the files themselves: the three workflow stubs,
+  `changeset.py` (→ `scripts/changeset.py` at the consumer's root,
+  **not** inside their package), `CONTRIBUTING.md`, `ci.yml`,
+  `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`
+  block, copy-pasted rather than synced, so not in the manifest), and the
+  community-health set: `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`,
+  `NOTICE`, `LICENSE`, `CODEOWNERS`, `dependabot.yml`, a PR template and
+  three issue templates.
+- `scripts/onboard.py` — installs everything in the manifest into a repo,
+  writes the config block, creates the `skip-changelog` label, and on a
+  public repo enables private vulnerability reporting (because it just
+  installed a `SECURITY.md` promising that route). Records
+  `templates_version` so later syncs have a merge base.
+- `scripts/sync.py` — re-syncs an already-onboarded repo. A copied file
+  that differs from its template is either stale or deliberately edited,
+  and a two-way diff cannot tell those apart, so it three-way compares
+  against the template as it was at the repo's recorded
+  `templates_version`. Stale copies update silently, deliberate edits are
+  left alone and reported, and only a real conflict asks a human. The
+  stamp must name an immutable ref: the moving `v1` alias would collapse
+  `base` toward `theirs` and silently stop detecting staleness.
+- `docs/tooling.md` — how to run the maintenance scripts above against a
+  target repo, and what each check means.
 - `docs/onboarding.md` — the human walkthrough for onboarding a repo,
   worked through `emergent-matter-materials`'s three-version-strings case.
 
@@ -178,9 +205,14 @@ actually carries, and its workflow-inputs table wrongly listing
 
 ## Current Work
 
-`v1` is tagged and ready to onboard production repos.
-`v1.0.0` and `v1.0.1` have both shipped through the full cycle: PR →
-note check → release PR → (close/reopen to force checks under branch
-protection) → approve → merge → tag → build → GitHub Release. No
-production repo consumes this yet; `emergent-matter-materials` is the
-intended first pilot, then `emergent-matter-sdm-core`.
+In production. `v1.5.0` is the newest tag, and
+`emergent-matter-materials` is genuinely onboarded: real `[tool.em-release]`
+block with two declared `version_files`, all four stubs installed, releasing
+through this system since August and currently at `v1.11.0`.
+`emergent-matter-sdm-core` is next.
+
+`em-release-control-test` remains the rehearsal repo. It is a real consumer
+with four releases of its own, and it is where template changes get proven
+against real GitHub behaviour before production repos receive them. Issue
+forms only render from a default branch, so that repo is the only way to see
+them before they ship.
