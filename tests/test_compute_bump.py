@@ -125,9 +125,10 @@ def test_towncrier_issue_numbered_fragment_also_parses(tmp_path: Path) -> None:
 
 def test_dotfile_md_fragment_is_rejected_loudly(tmp_path: Path) -> None:
     """A leading-dot ".md" fragment (e.g. ".foo.major.md") must never be
-    silently skipped alongside true non-fragment dotfiles like .gitkeep --
+    silently skipped alongside true non-fragment dotfiles like .gitkeep.
     towncrier's own fragment discovery might pick it up even though
-    compute_bump.py's count didn't, which is a silent-wrong-version path.
+    compute_bump.py's count didn't. That mismatch is a silent-wrong-version
+    path.
     """
     write_pyproject(tmp_path, "1.0.0")
     notes_dir = tmp_path / "changelog.d"

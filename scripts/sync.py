@@ -5,18 +5,18 @@ onboard.py copies templates in once. Nothing re-syncs them afterwards, so a
 consumer's copy drifts from the day it lands -- that's the gap fleet_status.py
 reports and this script closes.
 
-The hard part isn't copying files; it's telling "this repo's copy is just
-stale" apart from "this repo deliberately customised this file". A two-way
-diff cannot make that distinction -- both look identical: the file differs
-from the current template. This script uses a three-way compare instead,
-exactly like git:
+The hard part isn't copying files. It's telling "this repo's copy is just
+stale" apart from "this repo deliberately customised this file". A
+two-way diff cannot make that distinction: both cases look identical,
+since the file simply differs from the current template. This script
+uses a three-way compare instead, exactly like git:
 
     base    = the template as it was at the version this repo last synced
-              from (`[tool.em-release] templates_version` in its
-              pyproject.toml, written by onboard.py / advanced by this
-              script -- retrieved via `git show <tag>:templates/<path>`)
-    ours    = the repo's current file on disk
-    theirs  = the template at HEAD in this actions repo
+              from. That's `[tool.em-release] templates_version` in its
+              pyproject.toml, written by onboard.py and advanced by this
+              script, retrieved via `git show <tag>:templates/<path>`.
+    ours    = the repo's current file on disk.
+    theirs  = the template at HEAD in this actions repo.
 
     ours vs base | theirs vs base | result
     -------------+----------------+----------------------------------------
@@ -25,8 +25,8 @@ exactly like git:
     changed      | same           | local edit only -- leave alone, REPORT
     changed      | changed        | real conflict -- three-way merge
 
-Only "managed" templates (see templates/manifest.toml) are touched;
-"seed-once" templates are never re-synced, same as onboard.py never
+Only "managed" templates (see templates/manifest.toml) are touched.
+"Seed-once" templates are never re-synced, the same way onboard.py never
 overwrites one that already exists.
 
 If the repo has no recorded `templates_version` (onboarded before this
@@ -101,19 +101,23 @@ _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 def usable_stamp(stamp: str | None) -> str | None:
     """A stamp is only a trustworthy merge base if it names an immutable
-    ref: a vX.Y.Z point release, or the short/full commit SHA
-    `current_templates_version` falls back to when HEAD isn't tagged (both
-    are what onboard.py can ever write -- see there). Anything else --
-    concretely, the moving `v1` alias, see .github/RELEASING.md, but also
-    any other tag-shaped stamp that isn't a point release -- is untrusted
-    entirely, not just deprioritised: `git show <ref>:templates/<path>`
-    against a moving ref can silently resolve a DIFFERENT, newer commit
-    than the one this repo actually synced from, which would make `base`
-    collapse toward `theirs` and stop sync.py from ever detecting
-    staleness again -- the exact silent-no-op failure this whole tool
-    exists to prevent. A wrong base is worse than no base, so an untrusted
-    stamp degrades to the no-stamp two-way path (see decide_and_apply)
-    rather than being used."""
+    ref. That means a vX.Y.Z point release, or the short/full commit SHA
+    `current_templates_version` falls back to when HEAD isn't tagged; both
+    are what onboard.py can ever write (see there).
+
+    Anything else is untrusted entirely, not just deprioritised.
+    Concretely, that's the moving `v1` alias (see .github/RELEASING.md),
+    or any other tag-shaped stamp that isn't a point release.
+
+    The reason: `git show <ref>:templates/<path>` against a moving ref
+    can silently resolve a DIFFERENT, newer commit than the one this repo
+    actually synced from. That would make `base` collapse toward `theirs`
+    and stop sync.py from ever detecting staleness again -- the exact
+    silent-no-op failure this whole tool exists to prevent.
+
+    A wrong base is worse than no base. So an untrusted stamp degrades to
+    the no-stamp two-way path (see decide_and_apply) rather than being
+    used."""
     if stamp is None:
         return None
     if onboard.parse_point_release(stamp) is not None or _SHA_RE.match(stamp):
@@ -127,13 +131,15 @@ _EM_RELEASE_HEADER_RE = re.compile(r"(?m)^\[tool\.em-release\][ \t]*$")
 
 def write_templates_version(repo: Path, version: str) -> None:
     """Advance the `templates_version` stamp, or add it if the repo's
-    `[tool.em-release]` block predates that field -- onboarded before this
-    provenance tracking existed, but a clean full sync has just
-    demonstrably brought it to `version`, so stamping it is accurate, not
-    a guess. Never creates the `[tool.em-release]` block itself: its
-    absence means the repo was never onboarded at all, and inventing the
-    block would fake an onboarding that didn't happen -- that case still
-    errors, pointing at onboard.py."""
+    `[tool.em-release]` block predates that field. That happens when a
+    repo was onboarded before this provenance tracking existed. Stamping
+    it is still accurate, not a guess: a clean full sync has just
+    demonstrably brought the repo to `version`.
+
+    Never creates the `[tool.em-release]` block itself. Its absence means
+    the repo was never onboarded at all, and inventing the block would
+    fake an onboarding that didn't happen. That case still errors,
+    pointing at onboard.py."""
     p = repo / "pyproject.toml"
     text = p.read_text()
 

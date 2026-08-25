@@ -104,17 +104,17 @@ def current_templates_version(actions_repo: Path | None = None) -> str:
     """The actions repo's own version, right now: the highest vX.Y.Z point
     release tagged exactly at HEAD, or the short commit SHA if none is.
 
-    Never the moving `v1` alias, even when it also points at HEAD --a
-    stamp naming it would silently stop meaning anything the moment the
-    next release force-moves it, so `git show v1:templates/<path>` in
-    sync.py would drift to resolve a different, newer commit than the one
-    this repo actually synced from.
+    Never the moving `v1` alias, even when it also points at HEAD. A stamp
+    naming it would silently stop meaning anything the moment the next
+    release force-moves it. `git show v1:templates/<path>` in sync.py
+    would then resolve a different, newer commit than the one this repo
+    actually synced from.
 
-    `git describe --tags --exact-match`'s tie-break when several tags point
-    at the same commit is unspecified -- it depends on ref packing, not on
-    anything this code controls, so it must not be trusted to prefer the
-    point release over the alias. `git tag --points-at HEAD` enumerates
-    every tag there instead, so the choice is made explicitly.
+    `git describe --tags --exact-match`'s tie-break when several tags
+    point at the same commit is unspecified. It depends on ref packing,
+    not on anything this code controls, so it must not be trusted to
+    prefer the point release over the alias. `git tag --points-at HEAD`
+    enumerates every tag there instead, so the choice is made explicitly.
     """
     repo = actions_repo if actions_repo is not None else Path(__file__).resolve().parent.parent
     p = subprocess.run(
@@ -219,11 +219,12 @@ TOWNCRIER_MARKER = "<!-- towncrier release notes start -->"
 def add_workflow_call(text: str) -> str | None:
     """Add `workflow_call:` to an existing CI workflow's triggers.
 
-    Purely additive -- every existing trigger is preserved. Done rather than
-    left as a manual step because forgetting it doesn't degrade gracefully:
-    `version.yml` reaches this file with `uses: ./.github/workflows/ci.yml`,
-    and a workflow that isn't `workflow_call`-able fails at PARSE time, so
-    every push to main errors before a single job starts.
+    Purely additive: every existing trigger is preserved. This is done
+    automatically, not left as a manual step, because forgetting it
+    doesn't degrade gracefully. `version.yml` reaches this file with
+    `uses: ./.github/workflows/ci.yml`, and a workflow that isn't
+    `workflow_call`-able fails at PARSE time. That means every push to
+    main errors before a single job starts.
 
     Returns None if it is already there.
     """
@@ -250,10 +251,11 @@ def add_workflow_call(text: str) -> str | None:
 def insert_marker(text: str) -> str | None:
     """Put the towncrier marker above the existing history.
 
-    Returns None if it is already there. `towncrier build` writes each new
-    release directly BELOW this marker and never touches anything beneath,
-    so it has to sit above the newest existing entry -- placing it at the
-    bottom would bury every future release under the hand-written history.
+    Returns None if it is already there. It has to sit above the newest
+    existing entry: `towncrier build` writes each new release directly
+    BELOW this marker and never touches anything beneath it. Placing the
+    marker at the bottom would bury every future release under the
+    hand-written history.
     """
     if TOWNCRIER_MARKER in text:
         return None
@@ -454,17 +456,17 @@ def ensure_pvr(repo_slug: str, visibility: str | None, *, dry_run: bool) -> str:
     """Enable GitHub's private vulnerability reporting.
 
     templates/SECURITY.md tells a researcher to use it on whatever repo
-    they found the bug in, but it's a per-repo setting nothing turns on by
-    default -- checked live: on for EmergentMatter/actions, off on every
-    other repo in the org, and there's no org-level default enabling it
+    they found the bug in. But it's a per-repo setting that nothing turns
+    on by default. Checked live: on for EmergentMatter/actions, off on
+    every other repo in the org, with no org-level default enabling it
     for new repos. Without this, onboarding installs a doc pointing at a
     button that doesn't exist.
 
     Public-repo-only: the endpoint 404s on a private repo, and PVR is a
     public-repo feature outright. Most repos are onboarded private and go
-    public later, so "skipped, repo is private" is the expected path here,
-    not a failure -- see print_next_steps for the reminder to flip it on
-    when that happens.
+    public later, so "skipped, repo is private" is the expected path
+    here, not a failure. See print_next_steps for the reminder to flip
+    it on when that happens.
     """
     if visibility != "public":
         if visibility is None:

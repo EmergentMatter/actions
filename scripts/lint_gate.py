@@ -6,8 +6,8 @@ The gate has TWO halves that must agree, and they live in different places:
   1. `continue-on-error: true` on ci.yml's lint job   -- a file in the repo
   2. `lint` in the branch's required status checks    -- a GitHub setting
 
-Flipping one without the other is not a half-measure, it is a broken state,
-and the two broken states fail in opposite directions:
+Flipping one without the other creates a broken state, not a half-measure.
+The two broken states fail in opposite directions:
 
   line removed, context absent  -> lint gates nothing on PRs, but a lint
                                    failure now fails the run and can stall
@@ -15,8 +15,8 @@ and the two broken states fail in opposite directions:
   context added, line present   -> lint gates PRs, but a lint failure still
                                    sails through the release path
 
-`continue-on-error` does NOT stop a lint failure from blocking a PR -- only
-whether `lint` is a required context decides that. Verified on a real run:
+Only whether `lint` is a required context decides whether a lint failure
+blocks a PR. `continue-on-error` does NOT stop that. Verified on a real run:
 the job's conclusion is `failure`, the workflow RUN's conclusion is
 `success`, and branch protection reads the CHECK RUN, which is `failure`.
 See docs/onboarding.md, "Staging the lint rollout".

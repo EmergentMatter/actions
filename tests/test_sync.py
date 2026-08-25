@@ -296,11 +296,11 @@ def test_absent_file_unchanged_upstream_is_reported_as_absent_not_local_edit(
 ):
     """Regression: a managed file that was never installed must not be
     mistaken for `ours_changed and not theirs_changed` just because
-    `ours is None` differs from `base`. ROW1 never changes upstream between
-    v1.0.0 and HEAD, so before the fix this fell straight into
-    'local-edit -- left alone' at non-blocking severity, which is wrong on
-    two counts: there is no local edit, and a missing required file must
-    not be silently non-blocking."""
+    `ours is None` differs from `base`. ROW1 never changes upstream
+    between v1.0.0 and HEAD. Before the fix, that made it fall straight
+    into 'local-edit -- left alone' at non-blocking severity. That was
+    wrong on two counts: there is no local edit, and a missing required
+    file must not be silently non-blocking."""
     repo = _make_target_repo(tmp_path, stamp="v1.0.0")
     result = _sync_one(repo, actions_repo, "ROW1.md", dry_run=True)
     assert result.action == "absent-pending"
@@ -325,9 +325,10 @@ def test_absent_file_changed_upstream_is_still_reported_as_absent_not_conflict(
 def test_absent_file_matches_fleet_status_vocabulary():
     """fleet_status.py's check_templates() reports the same condition as
     `f"no {entry.dest}; not installed"` at warn severity. sync.py must not
-    describe the same repo state differently -- checked at the source-text
-    level rather than importing fleet_status.py, so this doesn't couple to
-    its unrelated import chain (it dynamically loads lint_gate.py)."""
+    describe the same repo state differently. This check reads the source
+    text directly rather than importing fleet_status.py, so it doesn't
+    couple to that module's unrelated import chain (it dynamically loads
+    lint_gate.py)."""
     fleet_status_path = Path(__file__).resolve().parents[1] / "scripts" / "fleet_status.py"
     assert 'f"no {entry.dest}; not installed"' in fleet_status_path.read_text()
 
@@ -407,17 +408,21 @@ def test_usable_stamp_passes_through_none():
 
 def test_v1_stamp_does_not_hide_genuine_staleness(actions_repo, tmp_path):
     """The exact failure this guards against: `v1` was force-moved to HEAD
-    after this repo synced (see `_make_actions_repo` -- it mirrors
-    .github/RELEASING.md). If a `v1` stamp were trusted as a base,
-    `git show v1:templates/ROW2.md` would now resolve HEAD's content --
-    identical to `theirs` -- so `theirs_changed` would read False and a
-    file that is genuinely still on the old v1.0.0 content would land in
-    'local-edit -- left alone' (ours differs from that wrong base) instead
-    of ever being flagged for an update. Non-blocking, so it would never
-    resurface. `pending` must be True here -- that's the signal that
-    actually distinguishes the fixed behaviour from the bug; the untrusted
-    stamp degrades to the no-stamp two-way path instead, which always
-    treats a real difference as a decision."""
+    after this repo synced (see `_make_actions_repo`, which mirrors
+    .github/RELEASING.md).
+
+    If a `v1` stamp were trusted as a base, `git show
+    v1:templates/ROW2.md` would now resolve HEAD's content, identical to
+    `theirs`. `theirs_changed` would then read False. A file that is
+    genuinely still on the old v1.0.0 content would land in 'local-edit
+    -- left alone' (ours differs from that wrong base) instead of ever
+    being flagged for an update. That's non-blocking, so it would never
+    resurface.
+
+    `pending` must be True here. That's the signal that actually
+    distinguishes the fixed behaviour from the bug: the untrusted stamp
+    degrades to the no-stamp two-way path instead, which always treats a
+    real difference as a decision."""
     repo = _make_target_repo(tmp_path, stamp="v1")
     _seed(repo, "ROW2.md", "a\nb\nc\n")  # the real v1.0.0 content -- genuinely stale
     result = _sync_one(repo, actions_repo, "ROW2.md", dry_run=True)
@@ -426,12 +431,13 @@ def test_v1_stamp_does_not_hide_genuine_staleness(actions_repo, tmp_path):
 
 
 def test_v1_stamp_degrades_to_the_no_stamp_two_way_path(actions_repo, tmp_path):
-    """A no-false-positive check, not a guard on the degrade path itself
-    (that's `test_v1_stamp_does_not_hide_genuine_staleness`): confirms the
-    fix doesn't over-trigger by flagging a file that's identical on both
-    sides just because the stamp is untrusted. Passes with or without
-    `usable_stamp` in place -- ours == theirs short-circuits before the
-    (missing) base is ever consulted either way."""
+    """A no-false-positive check, not a guard on the degrade path itself.
+    (That's `test_v1_stamp_does_not_hide_genuine_staleness`.) This test
+    confirms the fix doesn't over-trigger by flagging a file that's
+    identical on both sides just because the stamp is untrusted. It
+    passes with or without `usable_stamp` in place: ours == theirs
+    short-circuits before the (missing) base is ever consulted either
+    way."""
     repo = _make_target_repo(tmp_path, stamp="v1")
     _seed(repo, "ROW1.md", "same\n")  # identical on both sides regardless of base
     result = _sync_one(repo, actions_repo, "ROW1.md", dry_run=True)
@@ -451,22 +457,23 @@ def test_v1_stamp_is_never_silently_used_even_when_side_is_given(actions_repo, t
 def test_v1_stamp_self_repairs_via_the_advance_on_clean_sync_mechanism(actions_repo, tmp_path):
     """Verifies the actual repair: a completed full sync advances
     `templates_version` via `current_templates_version()`, which (per
-    onboard.py's fix) can never emit `v1`. So the one clean run this test
+    onboard.py's fix) can never emit `v1`. The one clean run this test
     performs is what turns a `"v1"`-stamped repo into one stamped a real
-    point release or SHA -- that's what makes it self-heal, without
+    point release or SHA. That's what makes it self-heal, without
     `sync.py` ever having trusted the bad value along the way.
 
-    This test is insensitive to `usable_stamp` being broken: on a clean
+    This test is insensitive to `usable_stamp` being broken. On a clean
     run (nothing pending), whether the stamp was trusted makes no
     observable difference here, since every file already matches the
     template regardless of which base gets used. It does NOT cover the
-    refusing-to-trust half -- see `test_v1_stamp_does_not_hide_genuine_staleness`
-    for the test that actually depends on `usable_stamp` rejecting "v1"."""
+    refusing-to-trust half; see
+    `test_v1_stamp_does_not_hide_genuine_staleness` for the test that
+    actually depends on `usable_stamp` rejecting "v1"."""
     repo = _make_target_repo(tmp_path, stamp="v1")
     # Every managed file already matches the current template exactly, so
-    # the run completes cleanly regardless of which base path is taken --
-    # this isn't testing conflict resolution, just that a completed run is
-    # what triggers the stamp to be rewritten.
+    # the run completes cleanly regardless of which base path is taken.
+    # This isn't testing conflict resolution, just that a completed run
+    # is what triggers the stamp to be rewritten.
     _seed(repo, "ROW1.md", "same\n")
     _seed(repo, "ROW2.md", "a\nb\nc\nd\n")
     _seed(repo, "ROW3.md", "x\ny\nz\n")
@@ -479,10 +486,10 @@ def test_v1_stamp_self_repairs_via_the_advance_on_clean_sync_mechanism(actions_r
     assert stamp_after != "v1"
     assert sync.usable_stamp(stamp_after) == stamp_after, "repaired stamp must itself be trusted"
 
-    # Sanity check only, not evidence of the mechanism above: by this point
-    # the stamp is already an ordinary trusted value, so a local edit made
-    # afterward reads as 'local-edit' the same way it would for any
-    # freshly-onboarded repo -- this doesn't distinguish repaired from
+    # Sanity check only, not evidence of the mechanism above. By this
+    # point the stamp is already an ordinary trusted value. A local edit
+    # made afterward reads as 'local-edit' the same way it would for any
+    # freshly-onboarded repo. This doesn't distinguish repaired from
     # never-broken.
     _seed(repo, "ROW3.md", "x\ny\nz\nlocal-addition\n")
     result = _sync_one(repo, actions_repo, "ROW3.md", dry_run=True)
@@ -600,9 +607,9 @@ def test_clean_full_sync_adds_the_stamp_to_a_pre_stamp_repo(actions_repo, tmp_pa
     """Regression: sync.py used to have no way out of this state. Every
     managed template could sync correctly (0 pending, 0 errors) and the
     run would still exit 1, because write_templates_version only knew how
-    to advance an existing key, never add a missing one -- the exact state
-    every repo onboarded before this PR is in. Re-onboarding to pick up
-    one field is a heavy remedy that invites skipping it."""
+    to advance an existing key, never add a missing one. That's the exact
+    state every repo onboarded before this PR is in. Re-onboarding to
+    pick up one field is a heavy remedy that invites skipping it."""
     repo = _make_target_repo(tmp_path, stamp=None)
     _seed(repo, "ROW1.md", "same\n")
     _seed(repo, "ROW2.md", "a\nb\nc\n")  # stale -- cleanly resolved by --theirs below
@@ -619,10 +626,10 @@ def test_clean_full_sync_adds_the_stamp_to_a_pre_stamp_repo(actions_repo, tmp_pa
 
 def test_second_sync_of_a_repaired_pre_stamp_repo_uses_a_real_base(actions_repo, tmp_path):
     """The key added by the first run must actually function as a base on
-    the next run, not just silence the error: a genuine local edit made
-    afterward must be recognised as 'local-edit' (only reachable through
-    the three-way matrix with a real base), not degrade to the untrusted
-    two-way wording ('no recorded base version')."""
+    the next run, not just silence the error. A genuine local edit made
+    afterward must be recognised as 'local-edit', which is only reachable
+    through the three-way matrix with a real base. It must not degrade to
+    the untrusted two-way wording ('no recorded base version')."""
     repo = _make_target_repo(tmp_path, stamp=None)
     _seed(repo, "ROW1.md", "same\n")
     _seed(repo, "ROW2.md", "a\nb\nc\nd\n")

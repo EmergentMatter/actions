@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
 """Report the release-control state of every repo pinned to this one.
 
-Onboarding happens once per repo. Drift accumulates forever -- `templates/`
+Onboarding happens once per repo. Drift accumulates forever. `templates/`
 is COPIED at onboarding and never re-synced, so every consumer's copy
 diverges from the day it lands. Nothing else watches that.
 
-`templates_version` in a repo's `[tool.em-release]` block (written by
-onboard.py, updated by sync.py) turns "this repo's copy differs" from a
-guess into a fact: a stale stamp means an old copy, a current stamp plus a
-diff means a deliberate local edit, and no stamp at all means the repo
+`templates_version` in a repo's `[tool.em-release]` block turns "this
+repo's copy differs" from a guess into a fact. onboard.py writes it and
+sync.py updates it. A stale stamp means an old copy. A current stamp plus
+a diff means a deliberate local edit. No stamp at all means the repo
 predates provenance tracking. See `templates` and `stamp` below.
 
 Checks, per repo:
 
   gate        the lint gate's two halves agree (see lint_gate.py)
   stub        the changelog stub uses the composite action, not the
-              `workflow_call` path removed in v1.1.0 -- a repo still on
-              that path is BROKEN right now, not merely stale
+              `workflow_call` path removed in v1.1.0. A repo still on
+              that path is BROKEN right now, not merely stale.
   pins        no action pinned to a version targeting Node 20
   contexts    required status checks look like a recognised configuration
   naming      ci.yml declares `name:`, so checks read `CI / lint` rather
               than `.github/workflows/ci.yml / lint`
   templates   every `managed` file in templates/manifest.toml matches its
-              live copy (`seed-once` files, e.g. ci.yml, are skipped --
-              repos legitimately customise those)
+              live copy. (`seed-once` files, e.g. ci.yml, are skipped:
+              repos legitimately customise those.)
   stamp       the `templates_version` provenance stamp against this repo's
               newest release tag
   security    if SECURITY.md documents private vulnerability reporting,
-              the repo actually has it turned on -- a per-repo setting
+              the repo actually has it turned on. It's a per-repo setting
               nothing inherits, so a public repo can carry a policy
-              promising a route it doesn't have (private repos: N/A)
+              promising a route it doesn't have. (Private repos: N/A.)
 
-Reads everything over the API -- no clones. Stdlib only; GitHub access
+Reads everything over the API. No clones. Stdlib only; GitHub access
 shells out to `gh`.
 
     python3 fleet_status.py                    # discover consumers
@@ -65,13 +65,13 @@ lint_gate = importlib.util.module_from_spec(_spec)
 sys.modules["lint_gate"] = lint_gate
 _spec.loader.exec_module(lint_gate)
 
-# templates/manifest.toml has exactly one parser -- onboard.py's -- and
-# sync.py already imports it the same way. Redefining TemplateEntry/
-# load_manifest here would let this file's notion of the manifest drift
-# from the other two tools' (it did, briefly: this file used to default a
-# missing `policy` key to "managed" instead of raising, which would have
+# Import templates/manifest.toml's one parser (onboard.py's) rather than
+# redefining TemplateEntry/load_manifest here, the same way sync.py does.
+# A redefinition here could drift from the other two tools' notion of the
+# manifest. That already happened once: this file used to default a
+# missing `policy` key to "managed" instead of raising, which
 # under-reported drift on exactly the seed-once files that default was
-# supposed to protect).
+# supposed to protect.
 _spec = importlib.util.spec_from_file_location(
     "onboard", Path(__file__).resolve().parent / "onboard.py"
 )
@@ -189,21 +189,24 @@ def check_security_reporting(security_text: str | None, pvr_status: str) -> list
 
     templates/SECURITY.md tells a researcher to open the Security tab and
     click "Report a vulnerability". That button only appears when private
-    vulnerability reporting is enabled -- a per-repo setting nothing
-    inherits (verified live: on for this repo, off for every other public
-    repo in the org, no org default enabling it for new ones). A repo can
-    carry a policy promising a route it doesn't have; a researcher who
-    follows it and finds no button either gives up or discloses publicly.
+    vulnerability reporting is enabled. It's a per-repo setting that
+    nothing inherits. Verified live: on for this repo, off for every
+    other public repo in the org, with no org default enabling it for new
+    ones. A repo can carry a policy promising a route it doesn't have. A
+    researcher who follows it and finds no button either gives up or
+    discloses publicly.
 
     `pvr_status` is one of:
-      "enabled"         -- the button exists; nothing to report
-      "disabled"        -- the promise is broken; warn
-      "not-applicable"  -- private repo; the feature can't exist there, so
-                           this is never a finding regardless of the text
-      "unknown"         -- the API response was ambiguous (private repo,
-                           no access, and feature-unavailable all look like
-                           a 404). Never read as "disabled" -- that would be
-                           exactly the guess this check exists to replace.
+      "enabled"         -- the button exists; nothing to report.
+      "disabled"        -- the promise is broken; warn.
+      "not-applicable"  -- private repo. The feature can't exist there,
+                           so this is never a finding, regardless of the
+                           text.
+      "unknown"         -- the API response was ambiguous. Private repo,
+                           no access, and feature-unavailable all look
+                           like a 404. Never read this as "disabled":
+                           that would be exactly the guess this check
+                           exists to replace.
     """
     if security_text is None or SECURITY_PVR_MARKER not in security_text:
         return []
