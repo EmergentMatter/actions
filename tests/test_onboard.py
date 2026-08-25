@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -216,6 +217,87 @@ def test_config_block_stamp_survives_a_short_sha():
     assert 'templates_version = "32ed6e0"' in block
 
 
+# -------------------------------------------------- per-section duplication
+
+# CRITICAL bug this section pins: render_config_block used to append the
+# whole snippet verbatim, so a repo that already declared [tool.mypy] or
+# [tool.pytest.ini_options] got a second copy of that table appended --
+# invalid TOML, and `uv sync` failed with "Cannot declare (...) twice"
+# while onboard.py itself had already exited 0.
+
+
+def test_missing_config_sections_is_everything_for_a_bare_pyproject():
+    assert onboard.missing_config_sections({}) == set(onboard.SNIPPET_SECTIONS)
+
+
+def test_missing_config_sections_excludes_only_whats_declared():
+    data = {"tool": {"mypy": {}, "pytest": {"ini_options": {}}}}
+    assert onboard.missing_config_sections(data) == {"towncrier", "em-release"}
+
+
+def test_render_skips_mypy_when_it_already_exists():
+    missing = onboard.missing_config_sections({"tool": {"mypy": {"strict": True}}})
+    block = onboard.render_config_block(["x:y"], "v1", missing)
+    assert "[tool.mypy]" not in block
+
+
+def test_render_skips_pytest_when_it_already_exists():
+    missing = onboard.missing_config_sections(
+        {"tool": {"pytest": {"ini_options": {"testpaths": ["tests"]}}}}
+    )
+    block = onboard.render_config_block(["x:y"], "v1", missing)
+    assert "[tool.pytest.ini_options]" not in block
+
+
+def test_render_skips_both_when_both_already_exist():
+    data = {"tool": {"mypy": {}, "pytest": {"ini_options": {}}}}
+    block = onboard.render_config_block(["x:y"], "v1", onboard.missing_config_sections(data))
+    assert "[tool.mypy]" not in block
+    assert "[tool.pytest.ini_options]" not in block
+    # towncrier/em-release weren't declared, so those still get written.
+    assert "[tool.towncrier]" in block
+    assert "[tool.em-release]" in block
+
+
+def test_render_writes_every_section_when_none_already_exist():
+    block = onboard.render_config_block(["x:y"], "v1", onboard.missing_config_sections({}))
+    for header in (
+        "[tool.towncrier]",
+        "[tool.em-release]",
+        "[tool.mypy]",
+        "[tool.pytest.ini_options]",
+    ):
+        assert header in block
+
+
+def test_full_apply_never_produces_a_toml_file_with_a_duplicate_table(tmp_path):
+    """End-to-end repro of the live failure from review: onboard a repo
+    whose pyproject.toml already has [tool.mypy], then confirm the result
+    still parses -- a duplicate table raises on tomllib.loads, the same
+    way `uv sync` refused it."""
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "p"\nversion = "1.0.0"\n\n[tool.mypy]\ndisallow_untyped_defs = true\n'
+    )
+    plan = onboard.build_plan(repo, ["x:y"])
+    onboard.apply_plan(plan, ["x:y"], "v1")
+    data = tomllib.loads((repo / "pyproject.toml").read_text())
+    assert data["tool"]["mypy"] == {"disallow_untyped_defs": True}
+
+
+def test_plan_note_names_both_the_skipped_and_appended_sections(tmp_path):
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "p"\nversion = "1.0.0"\n\n[tool.mypy]\ndisallow_untyped_defs = true\n'
+    )
+    plan = onboard.build_plan(repo, ["x:y"])
+    note = next(a.note for a in plan.actions if a.target == "pyproject.toml")
+    assert "mypy" in note and "already present" in note
+    assert "towncrier" in note
+
+
 # ------------------------------------------------------------------ manifest
 
 
@@ -367,10 +449,18 @@ def _write_fixture_templates(dir_: Path):
         "name: CI\non:\n  workflow_call:\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
     )
     (dir_ / "pyproject-snippet.toml").write_text(
+        "# ── towncrier ──\n"
         "[tool.towncrier]\n"
         'directory = "changelog.d"\n'
         'start_string = "<!-- towncrier release notes start -->\\n"\n\n'
-        "[tool.em-release]\nversion_files = [\n]\n"
+        "# ── em-release ──\n"
+        "[tool.em-release]\nversion_files = [\n]\n\n"
+        "# ── mypy ──\n"
+        "[tool.mypy]\ndisallow_untyped_defs = true\n\n"
+        "# ── pytest ──\n"
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n\n'
+        "# ── dev dependency group additions ──\n"
+        "# pytest>=8.0, ruff>=0.16, mypy>=1.14\n"
     )
 
 
