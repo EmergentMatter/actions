@@ -53,6 +53,8 @@ CI_DEST = ".github/workflows/ci.yml"
 LABEL = "skip-changelog"
 LABEL_DESC = "Exempts this PR from the changelog note requirement"
 LABEL_COLOR = "cfd3d7"
+PVR_PATH = "private-vulnerability-reporting"
+PVR_NAME = "private vulnerability reporting"
 
 _VALID_POLICIES = {"managed", "seed-once"}
 
@@ -442,6 +444,45 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
     return f"label `{LABEL}` ready" if code == 0 else f"label create failed: {err.strip()}"
 
 
+def repo_visibility(repo_slug: str) -> str | None:
+    """"public" / "private" / "internal", or None if it couldn't be read."""
+    code, out, _ = _gh(["api", f"repos/{repo_slug}", "-q", ".visibility"])
+    return out.strip() if code == 0 else None
+
+
+def ensure_pvr(repo_slug: str, visibility: str | None, *, dry_run: bool) -> str:
+    """Enable GitHub's private vulnerability reporting.
+
+    templates/SECURITY.md tells a researcher to use it on whatever repo
+    they found the bug in, but it's a per-repo setting nothing turns on by
+    default -- checked live: on for EmergentMatter/actions, off on every
+    other repo in the org, and there's no org-level default enabling it
+    for new repos. Without this, onboarding installs a doc pointing at a
+    button that doesn't exist.
+
+    Public-repo-only: the endpoint 404s on a private repo, and PVR is a
+    public-repo feature outright. Most repos are onboarded private and go
+    public later, so "skipped, repo is private" is the expected path here,
+    not a failure -- see print_next_steps for the reminder to flip it on
+    when that happens.
+    """
+    if visibility != "public":
+        if visibility is None:
+            return f"could not check visibility of {repo_slug}"
+        return f"{PVR_NAME} skipped -- repo is private (enable once it's public)"
+
+    code, out, _ = _gh(["api", f"repos/{repo_slug}/{PVR_PATH}", "-q", ".enabled"])
+    if code != 0:
+        return f"could not check {PVR_NAME} on {repo_slug}"
+    if out.strip() == "true":
+        return f"{PVR_NAME} already enabled"
+    if dry_run:
+        return f"would enable {PVR_NAME}"
+
+    code, _, err = _gh(["api", "-X", "PUT", f"repos/{repo_slug}/{PVR_PATH}"])
+    return f"{PVR_NAME} enabled" if code == 0 else f"{PVR_NAME} enable failed: {err.strip()}"
+
+
 def _gh(args: list[str]) -> tuple[int, str, str]:
     p = subprocess.run(["gh", *args], capture_output=True, text=True)
     return p.returncode, p.stdout, p.stderr
@@ -469,7 +510,7 @@ def print_plan(plan: Plan) -> None:
         print(f"  {mark}  {a.target:<42} {a.note}")
 
 
-def print_next_steps(plan: Plan, version_files: list[str]) -> None:
+def print_next_steps(plan: Plan, version_files: list[str], *, private_repo: bool = False) -> None:
     contexts = [*plan.ci_job_names, "changelog"]
     if plan.ci_is_ours:
         contexts = ["test", "build", "changelog"]  # lint is opt-in later
@@ -498,6 +539,12 @@ def print_next_steps(plan: Plan, version_files: list[str]) -> None:
         print("     (`lint` is deliberately absent; enable later with lint_gate.py)")
     n += 1
     print(f"  {n}. Verify from outside: fleet_status.py --repo <owner>/<name>")
+    if private_repo:
+        n += 1
+        print(f"  {n}. This repo is private, so {PVR_NAME} was NOT enabled -- SECURITY.md")
+        print("     points researchers at a button that doesn't exist yet. Turn it on the")
+        print("     day this repo goes public: Settings -> Code security -> Private")
+        print(f"     vulnerability reporting, or `gh api -X PUT repos/<owner>/<name>/{PVR_PATH}`.")
 
 
 def main(argv: list[str]) -> int:
@@ -577,12 +624,16 @@ def main(argv: list[str]) -> int:
         print(f"  wrote {w}")
 
     slug = detect_slug(repo)
+    visibility = None
     if slug:
+        visibility = repo_visibility(slug)
         print(f"  {ensure_label(slug, dry_run=False)}")
+        print(f"  {ensure_pvr(slug, visibility, dry_run=False)}")
     else:
         print(f"  could not detect owner/name -- create the `{LABEL}` label by hand")
+        print(f"  could not detect owner/name -- enable {PVR_NAME} by hand")
 
-    print_next_steps(plan, args.version_file)
+    print_next_steps(plan, args.version_file, private_repo=(visibility == "private"))
     return 0
 
 

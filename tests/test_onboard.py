@@ -411,3 +411,120 @@ def test_second_onboard_run_is_idempotent(tmp_path, monkeypatch):
     kinds = {a.target: a.kind for a in plan2.actions}
     assert kinds["MANAGED.md"] == "skip"
     assert kinds["pyproject.toml"] == "skip"
+
+
+# ---------------------------------------------------- private vulnerability reporting
+
+
+def _fake_gh_pvr(*, enabled: bool, put_ok: bool = True):
+    """A stand-in for onboard._gh that answers the PVR "is it enabled"
+    check and the enabling PUT, distinguished by whether -X/PUT is in the
+    args -- mirrors how ensure_label's own `gh` calls are shaped."""
+
+    def fake(args: list[str]) -> tuple[int, str, str]:
+        if "-X" in args and "PUT" in args:
+            return (0, "", "") if put_ok else (1, "", "insufficient scope")
+        return (0, "true\n" if enabled else "false\n", "")
+
+    return fake
+
+
+def test_ensure_pvr_skips_a_private_repo_without_calling_gh(monkeypatch):
+    """Private is the normal path (most repos onboard private, go public
+    later), not an error -- and needs no gh call at all, since the caller
+    already resolved visibility before calling this."""
+
+    def exploding_gh(args):
+        raise AssertionError("must not call gh for a private repo")
+
+    monkeypatch.setattr(onboard, "_gh", exploding_gh)
+    msg = onboard.ensure_pvr("o/r", "private", dry_run=False)
+    assert "skipped" in msg
+    assert "private" in msg
+
+
+def test_ensure_pvr_reports_when_visibility_is_unknown(monkeypatch):
+    def exploding_gh(args):
+        raise AssertionError("must not call gh when visibility couldn't be read")
+
+    monkeypatch.setattr(onboard, "_gh", exploding_gh)
+    msg = onboard.ensure_pvr("o/r", None, dry_run=False)
+    assert "could not check visibility" in msg
+
+
+def test_ensure_pvr_is_idempotent_when_already_enabled(monkeypatch):
+    calls = []
+    already_enabled = _fake_gh_pvr(enabled=True)
+
+    def fake(args):
+        calls.append(args)
+        return already_enabled(args)
+
+    monkeypatch.setattr(onboard, "_gh", fake)
+    msg = onboard.ensure_pvr("o/r", "public", dry_run=False)
+    assert "already enabled" in msg
+    assert not any("-X" in c for c in calls), "already-enabled must not attempt a PUT"
+
+
+def test_ensure_pvr_dry_run_reports_without_enabling(monkeypatch):
+    calls = []
+
+    def fake(args):
+        calls.append(args)
+        if "-X" in args:
+            raise AssertionError("dry-run must never PUT")
+        return (0, "false\n", "")
+
+    monkeypatch.setattr(onboard, "_gh", fake)
+    msg = onboard.ensure_pvr("o/r", "public", dry_run=True)
+    assert "would enable" in msg
+    assert calls, "the check itself should still run under dry-run, just not the write"
+
+
+def test_ensure_pvr_enables_a_public_repo_that_lacks_it(monkeypatch):
+    monkeypatch.setattr(onboard, "_gh", _fake_gh_pvr(enabled=False, put_ok=True))
+    msg = onboard.ensure_pvr("o/r", "public", dry_run=False)
+    assert msg == f"{onboard.PVR_NAME} enabled"
+
+
+def test_ensure_pvr_reports_failure_without_raising(monkeypatch):
+    """Requirement: a failed enable (no admin on the target repo, most
+    commonly) must not abort onboarding -- it's reported like a failed
+    label create, and the caller keeps going."""
+    monkeypatch.setattr(onboard, "_gh", _fake_gh_pvr(enabled=False, put_ok=False))
+    msg = onboard.ensure_pvr("o/r", "public", dry_run=False)
+    assert "failed" in msg
+    assert "insufficient scope" in msg
+
+
+def test_ensure_pvr_reports_when_the_enabled_check_itself_fails(monkeypatch):
+    monkeypatch.setattr(onboard, "_gh", lambda args: (1, "", "not found"))
+    msg = onboard.ensure_pvr("o/r", "public", dry_run=False)
+    assert "could not check" in msg
+
+
+def test_repo_visibility_reads_the_gh_response(monkeypatch):
+    monkeypatch.setattr(onboard, "_gh", lambda args: (0, "public\n", ""))
+    assert onboard.repo_visibility("o/r") == "public"
+
+
+def test_repo_visibility_returns_none_when_gh_fails(monkeypatch):
+    monkeypatch.setattr(onboard, "_gh", lambda args: (1, "", "not found"))
+    assert onboard.repo_visibility("o/r") is None
+
+
+def _blank_plan() -> onboard.Plan:
+    return onboard.Plan(repo_path=Path(), package_name="p", version="1.0.0")
+
+
+def test_print_next_steps_reminds_about_pvr_for_a_private_repo(capsys):
+    onboard.print_next_steps(_blank_plan(), [], private_repo=True)
+    out = capsys.readouterr().out
+    assert onboard.PVR_NAME in out
+    assert "private" in out.lower()
+
+
+def test_print_next_steps_is_silent_about_pvr_by_default(capsys):
+    onboard.print_next_steps(_blank_plan(), [])
+    out = capsys.readouterr().out
+    assert onboard.PVR_NAME not in out
