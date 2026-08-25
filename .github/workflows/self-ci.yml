@@ -124,10 +124,9 @@ jobs:
         # the same drift the rest of this PR exists to catch, so it gets the
         # same treatment: the copies must be byte-identical to their source.
         #
-        # Only files that genuinely apply here are copied. NOTICE is an
-        # Apache-2.0 artifact and this repo is MIT; the issue forms require a
-        # `pip show` package version and this repo ships no package; and
-        # .github/CODEOWNERS is richer here than the template. Those three are
+        # Only files that genuinely apply here are copied. The issue forms
+        # require a `pip show` package version and this repo ships no package,
+        # and .github/CODEOWNERS is richer here than the template. Those are
         # deliberately absent, not forgotten.
         run: |
           uv run python - <<'EOF'
@@ -138,6 +137,8 @@ jobs:
               "SECURITY.md": "templates/SECURITY.md",
               "SUPPORT.md": "templates/SUPPORT.md",
               "CODE_OF_CONDUCT.md": "templates/CODE_OF_CONDUCT.md",
+              "LICENSE": "templates/LICENSE",
+              "NOTICE": "templates/NOTICE",
               ".github/PULL_REQUEST_TEMPLATE.md": "templates/PULL_REQUEST_TEMPLATE.md",
           }
 

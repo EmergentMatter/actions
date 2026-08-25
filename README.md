@@ -66,7 +66,7 @@ it lands, often not the same name as the source) and a `policy`:
   silently when it's merely stale, and leaves it alone, reporting it,
   when the repo has deliberately edited it.
 - **`seed-once`**: written at onboarding if absent, never touched again.
-  Exactly one entry is `seed-once`, `ci.yml`, because repos legitimately
+  Only `ci.yml` is `seed-once`, because repos legitimately
   customize their own CI, and syncing it would fight them.
 
 **Release-control plumbing**, the files that make the system itself work:
@@ -112,7 +112,7 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
  ├── changelog-check/action.yml              composite action, the PR gate
  ├── scripts/{compute_bump,sync_version}.py     stdlib-only, called by the above
- └── templates/                              17 files a consumer's copy starts from
+ └── templates/                              what a consumer's copy starts from
         ▲                                        (templates/manifest.toml: dest + policy)
         │ uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1
         │ uses: EmergentMatter/actions/changelog-check@v1
@@ -150,7 +150,7 @@ Full CLIs, flags, and exit codes are in
 
 ## Opting a repo in
 
-Onboarding a repo is **six files, a config block, and a label**, plus the
+Onboarding a repo is **the release-control files, a config block, and a label**, plus the
 community-health files above, which need no repo-specific decisions. The
 full walkthrough, using `emergent-matter-materials`'s three-version-strings
 case as the worked example, is [`docs/onboarding.md`](docs/onboarding.md).

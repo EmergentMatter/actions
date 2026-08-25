@@ -66,7 +66,7 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   repo that is green on tests but broken to install fails before release.
   Never invoked directly; the action calls the script.
 - `templates/manifest.toml` — the single declaration of what a consuming
-  repo receives: 17 entries, each giving a source under `templates/`, the
+  repo receives: one entry per file, each giving a source under `templates/`, the
   `dest` it lands at, and a policy. `managed` means it should always match
   the template; `seed-once` means written at onboarding if absent and never
   touched again. `ci.yml` is the only `seed-once` entry, because repos

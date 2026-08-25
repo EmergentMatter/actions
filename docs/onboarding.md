@@ -1,6 +1,6 @@
 # Onboarding a repo
 
-Onboarding a repo into release control means installing **six files that
+Onboarding a repo into release control means installing **the files that
 carry real behavior, a config block, and a label**. It also seeds a set
 of standard repo-hygiene files that need no decisions from you. This doc
 walks through all of it, using
@@ -27,7 +27,7 @@ it covers, not front-to-back.
 
 - [Quick path](#quick-path)
 - [Before you start](#before-you-start)
-- [The six files](#the-six-files)
+- [The files](#the-files)
 - [A private sibling your package depends on (optional)](#a-private-sibling-your-package-depends-on-optional)
 - [Publishing to a package index (optional)](#publishing-to-a-package-index-optional)
 - [The config block](#the-config-block)
@@ -53,7 +53,7 @@ it covers, not front-to-back.
 2. It prints what it would do, then stops and asks you to decide one
    thing: which version strings must move on every release. Re-run with
    `--version-file PATH:SYMBOL` for each one, this time for real with no
-   `--dry-run`, and it writes everything, including the six files below,
+   `--dry-run`, and it writes everything, including the files below,
    the config block, and the `skip-changelog` label.
 3. Commit the result and open the onboarding PR.
 4. Work through the three things `onboard.py` cannot do for you (table
@@ -127,7 +127,7 @@ Two things to check, both easy to miss:
 Keeping your own CI is the expected choice for a repo that has one. The
 template exists for repos starting from nothing.
 
-## The six files
+## The files
 
 | # | File | What it does |
 |---|---|---|
@@ -650,7 +650,7 @@ tree, the same ordering applies to you, not just to this example.
 
 ## Setting up branch protection
 
-The six files and the label only *offer* the gate; a repo without
+Those files and the label only *offer* the gate; a repo without
 branch protection can still merge a PR with a failing (or missing)
 check, or push straight to `main` and skip every check entirely. Turn on
 protection for `main` (repo Settings -> Branches) with:
