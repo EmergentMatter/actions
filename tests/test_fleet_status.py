@@ -336,9 +336,32 @@ def test_missing_stamp_is_reported_as_its_own_state():
 
 
 def test_unrecognised_stamp_is_flagged():
-    findings = fleet_status.check_templates_version("v9.9.9", ALL_TAGS)
+    """`v1` is the moving alias (see .github/RELEASING.md) -- not something onboard.py
+    ever writes as a stamp, and sync.py's usable_stamp() deliberately rejects it too
+    (a moving ref could resolve to a different commit than what was actually synced).
+    This is the case the check exists for."""
+    findings = fleet_status.check_templates_version("v1", ALL_TAGS)
     assert severities(findings, "stamp") == ["warn"]
     assert "not a recognised release tag" in messages(findings, "stamp")
+
+
+def test_sha_stamp_produces_no_warning():
+    """onboard.py's current_templates_version() falls back to a short commit SHA
+    whenever HEAD isn't tagged -- true for every repo synced during development off
+    an unmerged branch. A SHA has no position in the tag sequence, so there is
+    nothing to report; it must NOT be treated as an unrecognised/invalid stamp."""
+    findings = fleet_status.check_templates_version("e39bbda", ALL_TAGS)
+    assert findings == []
+
+
+def test_well_formed_but_untagged_point_release_is_also_silent_not_warned():
+    """A vX.Y.Z-shaped stamp that isn't among this repo's local tags (e.g. an
+    incomplete shallow fetch) is still a usable ref per sync.py's usable_stamp() --
+    fleet_status.py must trust that same definition rather than re-deciding
+    "unrecognised" on its own, which is exactly the second-notion-of-validity bug
+    this check was rewritten to avoid."""
+    findings = fleet_status.check_templates_version("v9.9.9", ALL_TAGS)
+    assert findings == []
 
 
 def test_stamp_status_helper():

@@ -81,6 +81,23 @@ _spec.loader.exec_module(onboard)
 TemplateEntry = onboard.TemplateEntry
 load_manifest = onboard.load_manifest
 
+# Same reasoning for what counts as a *valid* templates_version stamp:
+# sync.py's usable_stamp() is the one place that already knows the two
+# shapes onboard.py can ever write it in (a vX.Y.Z point release, or the
+# short commit SHA current_templates_version() falls back to when HEAD
+# isn't tagged -- every repo synced off an unmerged branch gets this one).
+# Redefining that notion here risked exactly the bug it just caused: this
+# check used to warn "not a recognised release tag" on a SHA stamp that
+# onboard.py wrote correctly, permanently, on every repo synced during
+# development.
+_spec = importlib.util.spec_from_file_location(
+    "sync", Path(__file__).resolve().parent / "sync.py"
+)
+sync = importlib.util.module_from_spec(_spec)
+sys.modules["sync"] = sync
+_spec.loader.exec_module(sync)
+usable_stamp = sync.usable_stamp
+
 ACTIONS_REPO = "EmergentMatter/actions"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "templates"
@@ -292,7 +309,15 @@ def _sorted_versions(tags: list[str]) -> list[str]:
 
 
 def _stamp_status(stamp: str | None, tags: list[str]) -> str | None:
-    """'current', 'stale', or None (missing, or not a tag we recognise)."""
+    """'current', 'stale', or None (missing, a SHA, or a tag we don't recognise).
+
+    Deliberately returns None for a SHA-shaped stamp, not just an
+    unrecognised one: a SHA has no position in the tag sequence, so
+    "current" vs "stale" isn't knowable from it, and check_templates()
+    falls back to a neutral drift message rather than asserting a cause it
+    doesn't have evidence for. See check_templates_version() for the fuller
+    account of the two shapes a stamp can validly take.
+    """
     versions = _sorted_versions(tags)
     if stamp is None or stamp not in versions:
         return None
@@ -357,8 +382,19 @@ def check_templates(
 def check_templates_version(stamp: str | None, tags: list[str]) -> list[Finding]:
     """The `templates_version` provenance stamp against this repo's newest tag.
 
-    Three distinct states, not two -- collapsing "no stamp" into either
-    "up to date" or "stale" would be reporting something that isn't known.
+    A stamp onboard.py wrote is one of two shapes (see usable_stamp()): a
+    vX.Y.Z point release, or a commit SHA -- the fallback when HEAD wasn't
+    tagged at onboarding/sync time. Only the tag form has a position in the
+    release sequence to report "N versions behind" against. A SHA is a
+    valid, immutable stamp with no such position -- it is NOT unrecognised,
+    there is just nothing to say about it, so it's silent rather than
+    warned on. Anything that's neither a known tag nor a valid SHA-or-tag
+    ref (a moving alias like `v1`, or garbage) still warns -- that's the
+    case this check exists for.
+
+    Three distinct states for "no info to report", not two -- collapsing
+    "no stamp" into either "up to date" or "stale" would be reporting
+    something that isn't known.
     """
     if stamp is None:
         return [
@@ -370,19 +406,20 @@ def check_templates_version(stamp: str | None, tags: list[str]) -> list[Finding]
             )
         ]
     versions = _sorted_versions(tags)
-    if not versions:
+    if stamp in versions:
+        newest = versions[-1]
+        if stamp == newest:
+            return []
+        behind = len(versions) - 1 - versions.index(stamp)
+        plural = "s" if behind != 1 else ""
+        message = f"{behind} version{plural} behind ({stamp} -> {newest}); run sync.py"
+        return [Finding("stamp", "warn", message)]
+    if usable_stamp(stamp) is not None:
+        # a valid SHA (or a point release not in our local tag list) -- no position to report
         return []
-    if stamp not in versions:
-        return [
-            Finding("stamp", "warn", f"templates_version {stamp!r} is not a recognised release tag")
-        ]
-    newest = versions[-1]
-    if stamp == newest:
-        return []
-    behind = len(versions) - 1 - versions.index(stamp)
-    plural = "s" if behind != 1 else ""
-    message = f"{behind} version{plural} behind ({stamp} -> {newest}); run sync.py"
-    return [Finding("stamp", "warn", message)]
+    return [
+        Finding("stamp", "warn", f"templates_version {stamp!r} is not a recognised release tag")
+    ]
 
 
 def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
