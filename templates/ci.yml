@@ -2,27 +2,37 @@
 # `.github/workflows/ci.yml` and adjust as the repo needs.
 #
 # Most repos in the org currently run no automated checks at all; this is
-# the floor every repo gets on day one, not the ceiling. Three stages,
+# the floor every repo gets on day one, not the ceiling. Five stages,
 # consistent names across every repo that copies this (C4), so "the lint
 # job" and "the build job" mean the same thing everywhere:
 #
-#   lint  - advisory during rollout; see the staged-rollout note on the
-#           lint job below. Turning a linter on across an established
-#           codebase produces a pile of findings unrelated to whatever PR
-#           happens to trip the check first, and a check people learn to
-#           click past is worse than no check. Clear the backlog in its own
-#           dedicated PR before enforcing. Don't skip straight to blocking.
-#   test  - runs the repo's test suite. If there isn't one yet, it still
-#           runs (and passes) rather than being skipped outright — see the
-#           "no tests" branch below. The floor is never zero (C5).
-#   build - `uv build`, then install the built wheel into a clean
-#           environment and import it, then keep the artifacts. A green
-#           test suite only proves the source tree works; tests run
-#           against source, but users install the built package, so a
-#           repo can be fully green on tests and still be broken to
-#           install. This stage is what actually catches that (C2) --
-#           and it takes the verify step to do it, because `uv build`
-#           alone reports success for a wheel containing nothing.
+#   lint      - advisory during rollout; see the staged-rollout note on the
+#               lint job below. Turning a linter on across an established
+#               codebase produces a pile of findings unrelated to whatever
+#               PR happens to trip the check first, and a check people
+#               learn to click past is worse than no check. Clear the
+#               backlog in its own dedicated PR before enforcing. Don't
+#               skip straight to blocking.
+#   format    - `ruff format --check .`; staged exactly like lint, via the
+#               same scripts/lint_gate.py (`--job format`). Ruff owns
+#               formatting per STYLE.md, so this is what actually checks
+#               nobody hand-formats around it.
+#   typecheck - `mypy src`; staged exactly like lint (`--job typecheck`).
+#               See STYLE.md's "Typing" section for the strict-ish default
+#               and the per-module override shape for JAX/bpy code.
+#   test      - runs the repo's test suite. If there isn't one yet, it
+#               still runs (and passes) rather than being skipped outright
+#               — see the "no tests" branch below. The floor is never
+#               zero (C5).
+#   build     - `uv build`, then install the built wheel into a clean
+#               environment and import it, then keep the artifacts. A
+#               green test suite only proves the source tree works; tests
+#               run against source, but users install the built package,
+#               so a repo can be fully green on tests and still be broken
+#               to install. This stage is what actually catches that
+#               (C2) -- and it takes the verify step to do it, because
+#               `uv build` alone reports success for a wheel containing
+#               nothing.
 #
 # `uv sync --locked` in every job fails if uv.lock is out of date, so this
 # always runs on a clean, from-lockfile install rather than trusting
@@ -35,8 +45,8 @@
 # `name: CI` below is what makes checks display as `CI / lint` etc.
 # instead of falling back to the file path (`.github/workflows/ci.yml /
 # lint`). Safe to add: required-status-check contexts are job names
-# (`lint`, `test`, `build`), not the workflow name, so this doesn't touch
-# branch protection.
+# (`lint`, `format`, `typecheck`, `test`, `build`), not the workflow name,
+# so this doesn't touch branch protection.
 
 name: CI
 
@@ -93,6 +103,55 @@ jobs:
       - run: uv sync --locked
 
       - run: uv run ruff check .
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    # STAGED ROLLOUT. Same mechanics as the lint job above: `continue-on-error`
+    # does NOT make this job non-blocking on pull requests -- only leaving
+    # `format` out of required status checks does that. Stage 1 (onboarding):
+    # keep this line, leave `format` out of required contexts. Stage 2: clear
+    # the existing `ruff format` backlog in its own dedicated PR. Stage 3:
+    # delete this line AND add `format` to required contexts, both together.
+    # Managed by `scripts/lint_gate.py --job format`; see docs/onboarding.md.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: format
+
+      - run: uv sync --locked
+
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    # STAGED ROLLOUT. Same mechanics as the lint job above. Managed by
+    # `scripts/lint_gate.py --job typecheck`; see docs/onboarding.md.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: typecheck
+
+      - run: uv sync --locked
+
+      - name: mypy
+        run: |
+          if [ -d src ]; then
+            uv run mypy src
+          else
+            echo "No src/ directory yet -- nothing to typecheck."
+          fi
 
   test:
     name: test
