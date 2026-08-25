@@ -121,20 +121,38 @@ def usable_stamp(stamp: str | None) -> str | None:
     return None
 
 
+_TEMPLATES_VERSION_RE = re.compile(r'(?m)^templates_version\s*=\s*"[^"]*"\s*$')
+_EM_RELEASE_HEADER_RE = re.compile(r"(?m)^\[tool\.em-release\][ \t]*$")
+
+
 def write_templates_version(repo: Path, version: str) -> None:
+    """Advance the `templates_version` stamp, or add it if the repo's
+    `[tool.em-release]` block predates that field -- onboarded before this
+    provenance tracking existed, but a clean full sync has just
+    demonstrably brought it to `version`, so stamping it is accurate, not
+    a guess. Never creates the `[tool.em-release]` block itself: its
+    absence means the repo was never onboarded at all, and inventing the
+    block would fake an onboarding that didn't happen -- that case still
+    errors, pointing at onboard.py."""
     p = repo / "pyproject.toml"
     text = p.read_text()
-    new_text, n = re.subn(
-        r'(?m)^templates_version\s*=\s*"[^"]*"\s*$',
-        f'templates_version = "{version}"',
-        text,
-        count=1,
+
+    new_text, n = _TEMPLATES_VERSION_RE.subn(
+        f'templates_version = "{version}"', text, count=1
     )
-    if n == 0:
+    if n > 0:
+        p.write_text(new_text)
+        return
+
+    header = _EM_RELEASE_HEADER_RE.search(text)
+    if header is None:
         raise SyncError(
-            f"{p} has no `templates_version` field under [tool.em-release] to advance -- "
-            "this repo predates the provenance stamp; onboard it again to add it."
+            f"{p} has no [tool.em-release] block -- this repo has never been onboarded "
+            "to release control. Run onboard.py first."
         )
+
+    insert_at = header.end()
+    new_text = text[:insert_at] + f'\ntemplates_version = "{version}"' + text[insert_at:]
     p.write_text(new_text)
 
 

@@ -91,6 +91,16 @@ def _make_target_repo(
     return repo
 
 
+def _make_never_onboarded_target_repo(tmp_path: Path, *, name: str = "never_onboarded") -> Path:
+    """No [tool.em-release] block at all -- distinct from `_make_target_repo(
+    stamp=None)`, which is a genuinely onboarded repo that predates the
+    templates_version field. This one was never onboarded."""
+    repo = tmp_path / name
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
+    return repo
+
+
 def _seed(repo: Path, name: str, content: str) -> None:
     (repo / name).write_text(content)
 
@@ -555,6 +565,97 @@ def test_pending_decisions_do_not_advance_the_stamp(actions_repo, tmp_path):
     code = sync.main(["--repo-path", str(repo), "--dry-run"])
     assert code == 2
     assert _stamp(repo) == "v1.0.0"
+
+
+# --------------------------------------------------------------- pre-stamp repos
+
+
+def test_write_templates_version_adds_the_missing_key(tmp_path):
+    """`[tool.em-release]` present (genuinely onboarded) but predates the
+    templates_version field -- `_make_target_repo(stamp=None)` is exactly
+    that shape."""
+    repo = _make_target_repo(tmp_path, stamp=None)
+    sync.write_templates_version(repo, "v9.9.9")
+    assert _stamp(repo) == "v9.9.9"
+
+
+def test_write_templates_version_still_advances_when_the_key_already_exists(tmp_path):
+    """Not a regression risk on its own, but pins that adding and advancing
+    share one code path rather than the fix accidentally forking it."""
+    repo = _make_target_repo(tmp_path, stamp="v1.0.0")
+    sync.write_templates_version(repo, "v9.9.9")
+    assert _stamp(repo) == "v9.9.9"
+
+
+def test_write_templates_version_errors_when_em_release_block_is_missing_entirely(tmp_path):
+    """The one boundary that must still error: no `[tool.em-release]` block
+    at all means this repo was never onboarded, and adding the key would
+    fake an onboarding that didn't happen."""
+    repo = _make_never_onboarded_target_repo(tmp_path)
+    with pytest.raises(sync.SyncError, match="onboard.py"):
+        sync.write_templates_version(repo, "v9.9.9")
+
+
+def test_clean_full_sync_adds_the_stamp_to_a_pre_stamp_repo(actions_repo, tmp_path):
+    """Regression: sync.py used to have no way out of this state. Every
+    managed template could sync correctly (0 pending, 0 errors) and the
+    run would still exit 1, because write_templates_version only knew how
+    to advance an existing key, never add a missing one -- the exact state
+    every repo onboarded before this PR is in. Re-onboarding to pick up
+    one field is a heavy remedy that invites skipping it."""
+    repo = _make_target_repo(tmp_path, stamp=None)
+    _seed(repo, "ROW1.md", "same\n")
+    _seed(repo, "ROW2.md", "a\nb\nc\n")  # stale -- cleanly resolved by --theirs below
+    _seed(repo, "ROW3.md", "x\ny\nz\n")
+    _seed(repo, "ROW4.md", "line1\nline2\nline3\nline4\nline5\n")
+
+    code = sync.main(["--repo-path", str(repo), "--theirs"])
+    assert code == 0
+
+    stamp_after = _stamp(repo)
+    assert stamp_after is not None
+    assert sync.usable_stamp(stamp_after) == stamp_after, "the added stamp must itself be trusted"
+
+
+def test_second_sync_of_a_repaired_pre_stamp_repo_uses_a_real_base(actions_repo, tmp_path):
+    """The key added by the first run must actually function as a base on
+    the next run, not just silence the error: a genuine local edit made
+    afterward must be recognised as 'local-edit' (only reachable through
+    the three-way matrix with a real base), not degrade to the untrusted
+    two-way wording ('no recorded base version')."""
+    repo = _make_target_repo(tmp_path, stamp=None)
+    _seed(repo, "ROW1.md", "same\n")
+    _seed(repo, "ROW2.md", "a\nb\nc\nd\n")
+    _seed(repo, "ROW3.md", "x\ny\nz\n")
+    _seed(repo, "ROW4.md", "line1\nline2\nline3-theirs\nline4\nline5\n")
+
+    code = sync.main(["--repo-path", str(repo)])  # already matches theirs -- nothing to resolve
+    assert code == 0
+    assert _stamp(repo) is not None
+
+    _seed(repo, "ROW3.md", "x\ny\nz\nlocal-addition\n")
+    result = _sync_one(repo, actions_repo, "ROW3.md", dry_run=True)
+    assert result.action == "local-edit"
+    assert result.detail == "local edit only -- left alone"
+
+
+def test_pending_decisions_on_a_pre_stamp_repo_do_not_add_the_key(actions_repo, tmp_path):
+    repo = _row_target(tmp_path, actions_repo, stamp=None)
+    code = sync.main(["--repo-path", str(repo), "--dry-run"])
+    assert code == 2
+    assert _stamp(repo) is None
+
+
+def test_never_onboarded_repo_still_errors_and_points_at_onboard(actions_repo, tmp_path, capsys):
+    repo = _make_never_onboarded_target_repo(tmp_path)
+    _seed(repo, "ROW1.md", "same\n")
+    _seed(repo, "ROW2.md", "a\nb\nc\nd\n")
+    _seed(repo, "ROW3.md", "x\ny\nz\n")
+    _seed(repo, "ROW4.md", "line1\nline2\nline3-theirs\nline4\nline5\n")
+
+    code = sync.main(["--repo-path", str(repo)])  # clean, but nothing to add the key to
+    assert code == 1
+    assert "onboard.py" in capsys.readouterr().err
 
 
 # -------------------------------------------------------------------- CLI exit codes
