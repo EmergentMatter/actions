@@ -217,16 +217,15 @@ redundant leftover you can skip copying.
 
 ### Why `scripts/changeset.py` must live outside the package
 
-Put `changeset.py` inside `src/<package>/`, or wire it up as a
-`[project.scripts]` console-script entry, and it **ships inside the
-wheel**, putting a `changeset` command on the PATH of anyone who installs
-the library. `changeset.py` is a contributor-only tool. It has no business
-in a package your users install.
+**NEVER** put `changeset.py` inside `src/<package>/`, and **NEVER** wire
+it up as a `[project.scripts]` console-script entry. Do either and it
+**ships inside the wheel**, putting a `changeset` command on the PATH of
+anyone who installs the library. `changeset.py` is a contributor-only
+tool. It has no business in a package your users install.
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
-root, and invoke it as `uv run scripts/changeset.py`. That's a longer
-command than `uv run changeset` would be, on purpose. Don't "tidy" it
-back into a console-script entry to shorten it.
+root, and invoke it as `uv run scripts/changeset.py`. Do not shorten
+that invocation with a console-script entry.
 
 The `version.yml` stub is the one to get exactly right, because it's the
 one that wires your own CI in as a gate. This is its exact shape:
@@ -594,10 +593,11 @@ is safe; explaining what the directory is for belongs in this doc and in
 
 The notes themselves are named `+<8 hex characters>.<level>.md`, e.g.
 `+a1b2c3d4.minor.md`. `compute_bump.py` also parses the standard
-towncrier issue-numbered form (`123.minor.md`), but `uv run changeset`
-always generates the random `+hex` form; that's the one you'll actually
-see, and it exists specifically so contributors never have to make a
-naming decision or worry about a collision.
+towncrier issue-numbered form (`123.minor.md`), but
+`uv run scripts/changeset.py` always generates the random `+hex` form;
+that's the one you'll actually see, and it exists specifically so
+contributors never have to make a naming decision or worry about a
+collision.
 
 Anything in `changelog.d/` that isn't a properly-named note (a stray
 file, a typo'd extension, an unrecognized level) fails the release job
