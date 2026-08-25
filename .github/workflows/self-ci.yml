@@ -1,10 +1,16 @@
 name: Self CI
 
-# This repo's own checks — not reusable, not workflow_call. Ruff + pytest
-# over scripts/ and tests/, matching CLAUDE.md's documented "Build & Run"
-# commands exactly (uv sync / uv run ruff check . / uv run pytest) so local
-# reproduction is identical to CI. Ruleset and line-length live in this
-# repo's own pyproject.toml [tool.ruff] — not duplicated here as CLI flags.
+# This repo's own checks — not reusable, not workflow_call. Ruff + mypy +
+# pytest over scripts/ and tests/, matching CLAUDE.md's documented "Build &
+# Run" commands exactly (uv sync / uv run ruff check . / uv run pytest) so
+# local reproduction is identical to CI. Ruleset, line-length, and the
+# mypy/pytest config all live in this repo's own pyproject.toml -- not
+# duplicated here as CLI flags.
+#
+# format/typecheck run enforced (no continue-on-error), matching lint here:
+# this repo's own code has no backlog to stage around. templates/ci.yml
+# ships format/typecheck staged (continue-on-error, per STYLE.md's staged
+# rollout) for consuming repos that do.
 
 on:
   pull_request:
@@ -238,6 +244,50 @@ jobs:
 
           print(f"OK  {len(form_files)} issue-template file(s) valid")
           EOF
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: format
+
+      - name: uv sync
+        run: uv sync --locked
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: typecheck
+
+      - name: uv sync
+        run: uv sync --locked
+
+      - name: mypy
+        # This repo ships scripts/, not a src/ package (see pyproject.toml's
+        # header comment: no [build-system], it's a virtual project) -- so
+        # `mypy scripts` is the right invocation here, not the `mypy src`
+        # that templates/ci.yml's typecheck job runs for a consuming repo.
+        run: uv run mypy scripts
 
   test:
     name: test

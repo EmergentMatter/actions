@@ -102,8 +102,7 @@ def prompt_level() -> str:
             # Deliberately broad: `import termios` itself fails on Windows,
             # and this path must degrade to the numbered prompt on ANY
             # platform quirk rather than take the script down.
-            print(f"interactive prompt unavailable ({exc}); using numbered prompt",
-                  file=sys.stderr)
+            print(f"interactive prompt unavailable ({exc}); using numbered prompt", file=sys.stderr)
     return prompt_level_numbered()
 
 

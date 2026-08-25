@@ -436,10 +436,15 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
         return f"would ensure label `{LABEL}` exists"
     code, _, err = _gh(
         [
-            "label", "create", LABEL,
-            "--repo", repo_slug,
-            "--description", LABEL_DESC,
-            "--color", LABEL_COLOR,
+            "label",
+            "create",
+            LABEL,
+            "--repo",
+            repo_slug,
+            "--description",
+            LABEL_DESC,
+            "--color",
+            LABEL_COLOR,
             "--force",
         ]
     )
@@ -447,7 +452,7 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
 
 
 def repo_visibility(repo_slug: str) -> str | None:
-    """"public" / "private" / "internal", or None if it couldn't be read."""
+    """ "public" / "private" / "internal", or None if it couldn't be read."""
     code, out, _ = _gh(["api", f"repos/{repo_slug}", "-q", ".visibility"])
     return out.strip() if code == 0 else None
 
@@ -559,8 +564,11 @@ def main(argv: list[str]) -> int:
         metavar="PATH:SYMBOL",
         help="A location whose version must move on every release. Repeatable.",
     )
-    ap.add_argument("--no-version-files", action="store_true",
-                    help="This repo has no version string outside pyproject.toml")
+    ap.add_argument(
+        "--no-version-files",
+        action="store_true",
+        help="This repo has no version string outside pyproject.toml",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -586,7 +594,7 @@ def main(argv: list[str]) -> int:
             print(f"\nerror: --version-file path not found: {path}", file=sys.stderr)
             return 1
         text = (repo / path).read_text(errors="replace")
-        if not re.search(rf'^{re.escape(symbol)}\s*=', text, re.MULTILINE):
+        if not re.search(rf"^{re.escape(symbol)}\s*=", text, re.MULTILINE):
             print(f"\nerror: no `{symbol} = ...` assignment in {path}", file=sys.stderr)
             return 1
 
