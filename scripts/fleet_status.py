@@ -34,6 +34,8 @@ Checks, per repo:
               promising a route it doesn't have. (Private repos: N/A.)
   tooling     pyproject.toml declares [tool.mypy] and
               [tool.pytest.ini_options] (existence only)
+  ts_job      a `ui/bun.lock` exists but the `ts` job in ci.yml is still
+              commented out
 
 Reads everything over the API. No clones. Stdlib only; GitHub access
 shells out to `gh`.
@@ -120,6 +122,7 @@ TEMPLATES = REPO_ROOT / "templates"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
 SECURITY_FILE = "SECURITY.md"
+BUN_LOCK_FILE = "ui/bun.lock"  # the conventional path; a package elsewhere isn't detected
 
 # The literal button label templates/SECURITY.md tells a researcher to click.
 # Its presence is how we know the policy is *promising* the private-reporting
@@ -500,6 +503,22 @@ def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
     return out
 
 
+def check_ts_job(bun_lock_present: bool, ci_text: str | None) -> list[Finding]:
+    """A repo with a Bun package at the conventional `ui/bun.lock` path
+    should have uncommented the `ts` job in templates/ci.yml."""
+    if not bun_lock_present:
+        return []
+    if ci_text is not None and re.search(r"^\s*ts:\s*(#.*)?$", ci_text, re.MULTILINE):
+        return []
+    return [
+        Finding(
+            "ts_job",
+            "info",
+            f"{BUN_LOCK_FILE} present but no `ts:` job in ci.yml -- see templates/ci.yml",
+        )
+    ]
+
+
 def check_contexts(contexts: list[str] | None) -> list[Finding]:
     if contexts is None:
         return [Finding("contexts", "warn", "no required status checks on the default branch")]
@@ -524,6 +543,7 @@ def evaluate(
     security_text: str | None = None,
     pvr_status: str = "unknown",
     pyproject_text: str | None = None,
+    bun_lock_present: bool = False,
 ) -> list[Finding]:
     manifest = manifest or []
     dest_texts = dest_texts or {}
@@ -540,6 +560,7 @@ def evaluate(
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
         *check_pyproject_tooling(pyproject_text),
+        *check_ts_job(bun_lock_present, ci_text),
         *check_pins(ci_text),
         *check_naming(ci_text),
     ]
@@ -654,6 +675,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         contexts = fetch_contexts(repo)
         security = fetch_file(repo, SECURITY_FILE)
         pyproject = fetch_file(repo, "pyproject.toml")
+        bun_lock_present = fetch_file(repo, BUN_LOCK_FILE) is not None
         # Only spend the two extra `gh api` calls when there's actually a
         # promise to verify -- most repos won't have SECURITY.md yet.
         pvr_status = (
@@ -674,6 +696,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
                 security_text=security,
                 pvr_status=pvr_status,
                 pyproject_text=pyproject,
+                bun_lock_present=bun_lock_present,
             ),
         )
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep

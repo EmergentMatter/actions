@@ -237,6 +237,33 @@ def test_unparseable_pyproject_is_flagged_not_crashed_on():
     assert severities(findings, "tooling") == ["warn"]
 
 
+# ------------------------------------------------------------------ ts job
+
+CI_WITH_TS_JOB = "name: CI\njobs:\n  ts:\n    runs-on: ubuntu-latest\n"
+CI_WITH_TS_COMMENTED_OUT = (
+    "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n  # ts:\n  #   runs-on: ubuntu-latest\n"
+)
+
+
+def test_no_bun_lock_is_never_flagged():
+    assert fleet_status.check_ts_job(False, None) == []
+    assert fleet_status.check_ts_job(False, CI_WITH_TS_COMMENTED_OUT) == []
+
+
+def test_bun_lock_without_an_uncommented_ts_job_is_info():
+    findings = fleet_status.check_ts_job(True, CI_WITH_TS_COMMENTED_OUT)
+    assert severities(findings, "ts_job") == ["info"]
+    assert "ui/bun.lock" in messages(findings, "ts_job")
+
+
+def test_bun_lock_with_the_ts_job_present_is_clean():
+    assert fleet_status.check_ts_job(True, CI_WITH_TS_JOB) == []
+
+
+def test_bun_lock_with_no_ci_yml_at_all_is_still_flagged():
+    assert severities(fleet_status.check_ts_job(True, None), "ts_job") == ["info"]
+
+
 # ------------------------------------------------------------------ the rest
 
 

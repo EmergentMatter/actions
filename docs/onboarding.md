@@ -702,6 +702,10 @@ your own CI and it's already clean on all of them, you can skip straight
 to that step; the staging exists for repos turning a check on over an
 established codebase, not for repos that are already clean.
 
+A repo that uncommented the optional `ts` job stages it the same way,
+but `lint_gate.py` doesn't manage it (see the staged-rollout section
+below); flip its `continue-on-error` line and required context by hand.
+
 ### Staging the lint / format / typecheck rollout
 
 `templates/ci.yml` ships each staged job with `continue-on-error: true`.
@@ -771,6 +775,11 @@ Doing step 3 by halves is worse than not doing it. Removing the line
 without adding the context leaves lint unenforced on PRs while newly able
 to stall a release; adding the context without removing the line enforces
 on PRs but still lets a lint failure sail through the release path.
+
+The optional `ts` job in `templates/ci.yml` follows the same steps, but
+`lint_gate.py` doesn't manage it: its working directory isn't the repo
+root, which is what the script assumes. Edit `continue-on-error` and the
+required contexts by hand for that one.
 
 ### The name you see is not the name you type
 

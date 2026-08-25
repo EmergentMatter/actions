@@ -142,8 +142,32 @@ Keep out of code:
 
 ## TypeScript
 
-For repos with a TypeScript surface:
+For repos with a TypeScript package:
 
+- **Use Bun as the package manager and script runner.** Run every tool
+  through `bun run <script>`. Declare the bundler and test runner in
+  `package.json`'s scripts; never invoke them by another route.
+- **Commit the text-format Bun lockfile.** Never commit a second
+  lockfile alongside it.
+- **Pin the toolchain.** Record the Bun version in `package.json`'s
+  `engines` field, and pin the same version in CI. Never install Bun
+  from an unversioned script in CI.
+- **Install with `bun install --frozen-lockfile`** in CI. Give any local
+  script that installs as a side effect the same flag, so a launch can't
+  mutate the lockfile.
+- **Write runner-agnostic tests.** Import test primitives from the
+  package's harness module, never from the runner package directly.
+  Never use `it.each`; write a `for` loop over a table instead.
+- **Run `format:check` in CI, never `format`.** `format` mutates files.
+- **Let a cross-language or parity test skip locally when a runtime is
+  missing.** In CI, install every runtime the suite needs so those tests
+  run instead of skipping. A skip in CI is a misconfiguration, not a
+  pass.
+- **Name the sanctioned toolchain in error and skip messages.** A
+  message telling someone how to regenerate a file or install a
+  dependency names the current package manager, never a retired one.
+- **Commit generated contract files** (an OpenAPI-generated `schema.ts`,
+  for example), so their diff shows contract changes in review.
 - **Set `tsconfig` to strict, plus**: `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noImplicitOverride`,
   `verbatimModuleSyntax`.

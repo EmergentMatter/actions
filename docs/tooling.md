@@ -204,7 +204,10 @@ correctly configured, not incomplete. See below.
 
 ## `lint_gate.py`
 
-Stages `lint`, `format`, or `typecheck` via `--job` (default: `lint`).
+Stages `lint`, `format`, or `typecheck` via `--job` (default: `lint`). The
+optional `ts` job in `templates/ci.yml` is staged the same way but isn't
+covered here: its working directory isn't the repo root, so it's flipped
+by hand.
 
 The gate is two settings in two places, and they must agree:
 
