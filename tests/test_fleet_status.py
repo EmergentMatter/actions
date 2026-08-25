@@ -1,6 +1,6 @@
 """Tests for scripts/fleet_status.py.
 
-Covers the pure evaluation logic. The `gh` wrappers aren't exercised — they
+Covers the pure evaluation logic. The `gh` wrappers aren't exercised: they
 are thin shells over the CLI, and the value here is that a repo in a bad
 state is reported as bad, with the right severity.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,193 @@ def test_repo_without_a_lint_job_is_not_flagged_as_broken():
     assert severities(fleet_status.check_gate(ci, HEALTHY_CONTEXTS), "gate") == ["info"]
 
 
+# ------------------------------------------------------ format/typecheck gates
+
+CI_FORMAT_TYPECHECK_OFF = """\
+name: CI
+on:
+  pull_request:
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - run: uv run mypy src
+"""
+
+CI_FORMAT_TYPECHECK_ON = CI_FORMAT_TYPECHECK_OFF.replace("    continue-on-error: true\n", "")
+
+
+def test_a_repo_that_has_not_adopted_format_or_typecheck_yet_is_only_info():
+    """ci.yml is seed-once -- a repo onboarded before this PR simply lacks
+    these jobs, which is the expected not-yet-rolled-out state, not a defect."""
+    ci = "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
+    assert severities(fleet_status.check_format_gate(ci, HEALTHY_CONTEXTS), "format_gate") == [
+        "info"
+    ]
+    assert severities(
+        fleet_status.check_typecheck_gate(ci, HEALTHY_CONTEXTS), "typecheck_gate"
+    ) == ["info"]
+
+
+def test_inconsistent_format_gate_is_broken():
+    findings = fleet_status.check_format_gate(
+        CI_FORMAT_TYPECHECK_OFF, ["format", *HEALTHY_CONTEXTS]
+    )
+    assert severities(findings, "format_gate") == ["broken"]
+    assert "INCONSISTENT" in messages(findings, "format_gate")
+
+
+def test_inconsistent_typecheck_gate_is_broken():
+    findings = fleet_status.check_typecheck_gate(
+        CI_FORMAT_TYPECHECK_OFF, ["typecheck", *HEALTHY_CONTEXTS]
+    )
+    assert severities(findings, "typecheck_gate") == ["broken"]
+    assert "INCONSISTENT" in messages(findings, "typecheck_gate")
+
+
+@pytest.mark.parametrize(
+    ("ci", "contexts", "expected"),
+    [
+        (CI_FORMAT_TYPECHECK_OFF, HEALTHY_CONTEXTS, "OFF"),
+        (CI_FORMAT_TYPECHECK_ON, ["format", "typecheck", *HEALTHY_CONTEXTS], "ON"),
+    ],
+)
+def test_consistent_format_and_typecheck_gates_report_their_state_as_info(ci, contexts, expected):
+    format_findings = fleet_status.check_format_gate(ci, contexts)
+    typecheck_findings = fleet_status.check_typecheck_gate(ci, contexts)
+    assert severities(format_findings, "format_gate") == ["info"]
+    assert expected in messages(format_findings, "format_gate")
+    assert severities(typecheck_findings, "typecheck_gate") == ["info"]
+    assert expected in messages(typecheck_findings, "typecheck_gate")
+
+
+def test_format_and_typecheck_gates_are_independent_of_the_lint_gate():
+    """A repo could have lint enforced while format/typecheck are still
+    advisory -- the staged-job gates must not be able to shadow one another."""
+    ci = CI_FORMAT_TYPECHECK_OFF.replace(
+        "jobs:\n",
+        "jobs:\n  lint:\n    name: lint\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - run: uv run ruff check .\n\n",
+    )
+    contexts = ["lint", *HEALTHY_CONTEXTS]
+    assert severities(fleet_status.check_gate(ci, contexts), "gate") == ["info"]
+    assert "ON" in messages(fleet_status.check_gate(ci, contexts), "gate")
+    assert "OFF" in messages(fleet_status.check_format_gate(ci, contexts), "format_gate")
+    assert "OFF" in messages(fleet_status.check_typecheck_gate(ci, contexts), "typecheck_gate")
+
+
+# ------------------------------------------------------------------ tooling
+
+
+def test_pyproject_missing_both_blocks_is_flagged_twice():
+    findings = fleet_status.check_pyproject_tooling("[project]\nname = 'x'\n")
+    assert severities(findings, "tooling") == ["warn", "warn"]
+    assert "[tool.mypy]" in messages(findings, "tooling")
+    assert "[tool.pytest.ini_options]" in messages(findings, "tooling")
+
+
+def test_pyproject_with_both_blocks_is_clean():
+    text = (
+        "[tool.mypy]\ndisallow_untyped_defs = true\n\n"
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
+    )
+    assert fleet_status.check_pyproject_tooling(text) == []
+
+
+def test_pyproject_missing_only_mypy_is_flagged_once():
+    text = '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
+    findings = fleet_status.check_pyproject_tooling(text)
+    assert severities(findings, "tooling") == ["warn"]
+    assert "[tool.mypy]" in messages(findings, "tooling")
+
+
+def test_pytest_section_without_ini_options_still_counts_as_missing():
+    """[tool.pytest] alone (no .ini_options table) is not the same thing."""
+    text = "[tool.pytest]\nsomething_else = true\n"
+    findings = fleet_status.check_pyproject_tooling(text)
+    assert "[tool.pytest.ini_options]" in messages(findings, "tooling")
+
+
+def test_no_pyproject_is_flagged_not_crashed_on():
+    assert severities(fleet_status.check_pyproject_tooling(None), "tooling") == ["warn"]
+
+
+def test_unparseable_pyproject_is_flagged_not_crashed_on():
+    findings = fleet_status.check_pyproject_tooling("this is not [ valid toml")
+    assert severities(findings, "tooling") == ["warn"]
+
+
+# ------------------------------------------------------------- ruff config
+
+
+def test_no_ruff_base_is_never_flagged():
+    assert fleet_status.check_ruff_config_adoption(False, False, None) == []
+
+
+def test_ruff_base_without_ruff_toml_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(True, False, None)
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "no ruff.toml" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_with_ruff_toml_and_no_inline_section_is_clean():
+    assert fleet_status.check_ruff_config_adoption(True, True, "[project]\nname = 'x'\n") == []
+
+
+def test_ruff_base_with_a_lingering_inline_ruff_section_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(
+        True, True, "[tool.ruff]\nline-length = 88\n"
+    )
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "[tool.ruff]" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_missing_both_ruff_toml_and_still_inline_is_flagged_twice():
+    findings = fleet_status.check_ruff_config_adoption(True, False, "[tool.ruff]\nfoo = 1\n")
+    assert severities(findings, "ruff_config") == ["warn", "warn"]
+
+
+def test_ruff_config_check_never_crashes_on_unparseable_pyproject():
+    findings = fleet_status.check_ruff_config_adoption(True, True, "this is not [ valid")
+    assert findings == []
+
+
+# ------------------------------------------------------------------ ts job
+
+CI_WITH_TS_JOB = "name: CI\njobs:\n  ts:\n    runs-on: ubuntu-latest\n"
+CI_WITH_TS_COMMENTED_OUT = (
+    "name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n  # ts:\n  #   runs-on: ubuntu-latest\n"
+)
+
+
+def test_no_bun_lock_is_never_flagged():
+    assert fleet_status.check_ts_job(False, None) == []
+    assert fleet_status.check_ts_job(False, CI_WITH_TS_COMMENTED_OUT) == []
+
+
+def test_bun_lock_without_an_uncommented_ts_job_is_info():
+    findings = fleet_status.check_ts_job(True, CI_WITH_TS_COMMENTED_OUT)
+    assert severities(findings, "ts_job") == ["info"]
+    assert "ui/bun.lock" in messages(findings, "ts_job")
+
+
+def test_bun_lock_with_the_ts_job_present_is_clean():
+    assert fleet_status.check_ts_job(True, CI_WITH_TS_JOB) == []
+
+
+def test_bun_lock_with_no_ci_yml_at_all_is_still_flagged():
+    assert severities(fleet_status.check_ts_job(True, None), "ts_job") == ["info"]
+
+
 # ------------------------------------------------------------------ the rest
 
 
@@ -187,36 +375,291 @@ def test_a_repo_with_no_build_job_is_not_nagged():
     assert fleet_status.check_verify_wheel(CI_MATERIALS_STYLE) == []
 
 
-# -------------------------------------------------------------- changeset
+# -------------------------------------------------------------- templates
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CHANGESET_TEMPLATE = (REPO_ROOT / "templates" / "changeset.py").read_text()
+
+MANAGED_ENTRY = fleet_status.TemplateEntry(
+    source="changeset.py", dest="scripts/changeset.py", policy="managed"
+)
+SEED_ONCE_ENTRY = fleet_status.TemplateEntry(
+    source="ci.yml", dest=".github/workflows/ci.yml", policy="seed-once"
+)
+
+# Matches the real releases tagged on this repo (see `git tag --list`); used
+# as a realistic, deterministic fixture -- the checks take tags as data, so
+# nothing here actually shells out to git.
+ALL_TAGS = ["v1", "v1.0.0", "v1.0.2", "v1.1.0", "v1.2.0", "v1.3.0", "v1.4.0", "v1.5.0"]
 
 
-def test_changeset_matching_the_template_is_clean():
-    template = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
-    assert fleet_status.check_changeset(template) == []
+def test_load_manifest_parses_the_documented_shape(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """\
+[[template]]
+source = "PULL_REQUEST_TEMPLATE.md"
+dest   = ".github/PULL_REQUEST_TEMPLATE.md"
+policy = "managed"
+"""
+    )
+    entries = fleet_status.load_manifest(manifest)
+    assert entries == [
+        fleet_status.TemplateEntry(
+            "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md", "managed"
+        )
+    ]
 
 
-def test_diverged_changeset_is_flagged():
-    """Unlike ci.yml, divergence here is always a mistake, never a choice."""
-    findings = fleet_status.check_changeset("# an older copy\n")
-    assert severities(findings, "changeset") == ["warn"]
-    assert "never re-synced" in messages(findings, "changeset")
+def test_missing_manifest_raises_loudly():
+    """A missing manifest.toml is a broken repo, not zero templates -- treating it as
+    empty would make every templates/stamp finding vanish while the sweep exits 0."""
+    with pytest.raises(OSError):
+        fleet_status.load_manifest(Path("/no/such/manifest.toml"))
 
 
-def test_missing_changeset_is_flagged():
-    assert severities(fleet_status.check_changeset(None), "changeset") == ["warn"]
+def test_malformed_manifest_raises_loudly(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text("this is not valid toml [[[")
+    with pytest.raises(tomllib.TOMLDecodeError):
+        fleet_status.load_manifest(manifest)
+
+
+def test_entry_with_no_policy_key_raises_loudly(tmp_path):
+    """onboard.py's loader requires `policy` -- fleet_status.py must use that same
+    loader (not its own), so the two tools can never quietly disagree on this again.
+    A typo'd/omitted `policy` must fail loudly, not default to "managed" and turn a
+    seed-once file (customisable on purpose) into a false-positive drift finding."""
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        """\
+[[template]]
+source = "PULL_REQUEST_TEMPLATE.md"
+dest   = ".github/PULL_REQUEST_TEMPLATE.md"
+"""
+    )
+    with pytest.raises(KeyError, match="policy"):
+        fleet_status.load_manifest(manifest)
+
+
+def test_managed_template_matching_is_clean():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": CHANGESET_TEMPLATE}, stamp_status=None
+    )
+    assert findings == []
+
+
+def test_managed_template_differing_is_flagged():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# an older copy\n"}, stamp_status=None
+    )
+    assert severities(findings, "templates") == ["warn"]
+    assert "scripts/changeset.py differs from templates/changeset.py" in messages(
+        findings, "templates"
+    )
+
+
+def test_seed_once_template_differing_produces_no_finding():
+    """ci.yml is legitimately customised per repo -- a diff there is not a finding."""
+    findings = fleet_status.check_templates(
+        [SEED_ONCE_ENTRY], {".github/workflows/ci.yml": "totally different\n"}, stamp_status=None
+    )
+    assert findings == []
+
+
+def test_missing_managed_template_is_flagged():
+    findings = fleet_status.check_templates([MANAGED_ENTRY], {}, stamp_status=None)
+    assert severities(findings, "templates") == ["warn"]
+    assert "not installed" in messages(findings, "templates")
+
+
+def test_declared_template_missing_from_this_repo_is_broken():
+    """A manifest entry whose source file doesn't exist under templates/ is a defect in
+    THIS repo -- onboard.py/sync.py will fail on it too -- not something to skip past."""
+    entry = fleet_status.TemplateEntry(
+        source="does-not-exist.md", dest="docs/DOES_NOT_EXIST.md", policy="managed"
+    )
+    findings = fleet_status.check_templates([entry], {"docs/DOES_NOT_EXIST.md": "anything"}, None)
+    assert severities(findings, "templates") == ["broken"]
+    assert "does-not-exist.md" in messages(findings, "templates")
+    assert "declared in manifest.toml but missing" in messages(findings, "templates")
+
+
+def test_diff_with_current_stamp_is_info_not_warn():
+    """A current stamp plus a diff is a deliberate edit -- surfaced, not flagged as a mistake."""
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# customised\n"}, stamp_status="current"
+    )
+    assert severities(findings, "templates") == ["info"]
+    assert "deliberate local edit" in messages(findings, "templates")
+
+
+def test_diff_with_stale_stamp_stays_a_warning():
+    findings = fleet_status.check_templates(
+        [MANAGED_ENTRY], {"scripts/changeset.py": "# old copy\n"}, stamp_status="stale"
+    )
+    assert severities(findings, "templates") == ["warn"]
+
+
+# ------------------------------------------------------------------ stamp
+
+
+def test_stale_stamp_reports_how_many_versions_behind():
+    findings = fleet_status.check_templates_version("v1.2.0", ALL_TAGS)
+    assert severities(findings, "stamp") == ["warn"]
+    assert "3 versions behind (v1.2.0 -> v1.5.0)" in messages(findings, "stamp")
+    assert "sync.py" in messages(findings, "stamp")
+
+
+def test_current_stamp_is_clean():
+    assert fleet_status.check_templates_version("v1.5.0", ALL_TAGS) == []
+
+
+def test_missing_stamp_is_reported_as_its_own_state():
+    """Not 'up to date', not 'stale' -- a repo onboarded before the stamp existed."""
+    findings = fleet_status.check_templates_version(None, ALL_TAGS)
+    assert severities(findings, "stamp") == ["info"]
+    assert "no templates_version stamp" in messages(findings, "stamp")
+
+
+def test_unrecognised_stamp_is_flagged():
+    """`v1` is the moving alias (see .github/RELEASING.md) -- not something onboard.py
+    ever writes as a stamp, and sync.py's usable_stamp() deliberately rejects it too
+    (a moving ref could resolve to a different commit than what was actually synced).
+    This is the case the check exists for."""
+    findings = fleet_status.check_templates_version("v1", ALL_TAGS)
+    assert severities(findings, "stamp") == ["warn"]
+    assert "not a recognised release tag" in messages(findings, "stamp")
+
+
+def test_sha_stamp_produces_no_warning():
+    """onboard.py's current_templates_version() falls back to a short commit SHA
+    whenever HEAD isn't tagged -- true for every repo synced during development off
+    an unmerged branch. A SHA has no position in the tag sequence, so there is
+    nothing to report; it must NOT be treated as an unrecognised/invalid stamp."""
+    findings = fleet_status.check_templates_version("e39bbda", ALL_TAGS)
+    assert findings == []
+
+
+def test_well_formed_but_untagged_point_release_is_also_silent_not_warned():
+    """A vX.Y.Z-shaped stamp that isn't among this repo's local tags (e.g. an
+    incomplete shallow fetch) is still a usable ref per sync.py's usable_stamp() --
+    fleet_status.py must trust that same definition rather than re-deciding
+    "unrecognised" on its own, which is exactly the second-notion-of-validity bug
+    this check was rewritten to avoid."""
+    findings = fleet_status.check_templates_version("v9.9.9", ALL_TAGS)
+    assert findings == []
+
+
+def test_stamp_status_helper():
+    assert fleet_status._stamp_status("v1.5.0", ALL_TAGS) == "current"
+    assert fleet_status._stamp_status("v1.2.0", ALL_TAGS) == "stale"
+    assert fleet_status._stamp_status(None, ALL_TAGS) is None
+    assert fleet_status._stamp_status("v9.9.9", ALL_TAGS) is None
+
+
+# --------------------------------------------------------------- security
+
+SECURITY_TEMPLATE = (REPO_ROOT / "templates" / "SECURITY.md").read_text()
+UNRELATED_SECURITY_MD = "# Security Policy\n\nEmail security@example.com.\n"
+
+
+def test_marker_matches_the_shipped_policy():
+    """SECURITY_PVR_MARKER anchors on the literal button label templates/SECURITY.md
+    tells a researcher to click. If that file gets reworded and stops containing the
+    marker verbatim, check_security_reporting() returns [] for every repo -- silently.
+    Nothing else would go red. This is the tripwire: reword the policy without updating
+    SECURITY_PVR_MARKER to match, and this test catches it instead of the check quietly
+    turning itself off."""
+    assert fleet_status.SECURITY_PVR_MARKER in SECURITY_TEMPLATE
+
+
+def test_public_repo_with_disabled_reporting_is_flagged():
+    """The exact failure mode this check exists for: the policy promises a button
+    the repo doesn't have."""
+    findings = fleet_status.check_security_reporting(SECURITY_TEMPLATE, "disabled")
+    assert severities(findings, "security") == ["warn"]
+    assert messages(findings, "security") == (
+        "SECURITY.md documents private vulnerability reporting but it is "
+        "disabled on this repo; enable it in Settings or re-run onboard.py"
+    )
+
+
+def test_public_repo_with_enabled_reporting_is_clean():
+    assert fleet_status.check_security_reporting(SECURITY_TEMPLATE, "enabled") == []
+
+
+def test_private_repo_is_never_flagged_regardless_of_policy_text():
+    """Private repos can't have the feature at all -- not-applicable, not a finding,
+    even though the text and the "disabled"-shaped API state would otherwise match."""
+    assert fleet_status.check_security_reporting(SECURITY_TEMPLATE, "not-applicable") == []
+
+
+def test_repo_with_no_security_md_is_never_flagged():
+    assert fleet_status.check_security_reporting(None, "disabled") == []
+
+
+def test_security_md_that_doesnt_promise_the_button_is_never_flagged():
+    """A different SECURITY.md (e.g. an email-based policy) makes no promise about
+    the Security tab, so a disabled setting there isn't a broken promise."""
+    assert fleet_status.check_security_reporting(UNRELATED_SECURITY_MD, "disabled") == []
+
+
+def test_ambiguous_api_response_is_never_read_as_disabled():
+    """A 404 covers private/no-access/unavailable alike -- guessing "disabled" from
+    it is exactly the failure mode this whole check exists to avoid."""
+    findings = fleet_status.check_security_reporting(SECURITY_TEMPLATE, "unknown")
+    assert severities(findings, "security") == ["info"]
+    assert "warn" not in [f.severity for f in findings]
+    assert "could not determine" in messages(findings, "security")
 
 
 # ------------------------------------------------------------- roll-up logic
 
 
+HEALTHY_PYPROJECT = """\
+[tool.mypy]
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+"""
+
+
 def test_a_healthy_repo_has_no_actionable_findings():
     """A genuinely healthy repo: workflow_call-able CI, composite-action stub,
-    the three required contexts, and an unmodified changeset.py."""
+    the three required contexts, an unmodified changeset.py, and both the
+    mypy and pytest config blocks.
+
+    No manifest/stamp is passed -- that's the "onboarded before provenance
+    tracking existed" state, which is `info`, not actionable. format/typecheck
+    not being adopted yet is likewise `info`, not actionable -- they're new,
+    seed-once jobs most repos won't have rolled out on day one.
+    """
     ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
-    changeset = (Path(__file__).resolve().parents[1] / "templates" / "changeset.py").read_text()
-    findings = fleet_status.evaluate(ci, GOOD_STUB, HEALTHY_CONTEXTS, changeset)
+    findings = fleet_status.evaluate(
+        ci, GOOD_STUB, HEALTHY_CONTEXTS, pyproject_text=HEALTHY_PYPROJECT
+    )
     actionable = [f for f in findings if f.severity != "info"]
     assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
+
+
+def test_evaluate_wires_templates_and_stamp_checks_together():
+    """A repo with a current stamp and a hand-edited managed template: the
+    `templates` finding reads as info (a choice), and there's no `stamp`
+    finding at all (nothing to flag when the stamp is current)."""
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    findings = fleet_status.evaluate(
+        ci,
+        GOOD_STUB,
+        HEALTHY_CONTEXTS,
+        manifest=[MANAGED_ENTRY],
+        dest_texts={"scripts/changeset.py": "# customised\n"},
+        stamp="v1.5.0",
+        tags=ALL_TAGS,
+    )
+    assert severities(findings, "templates") == ["info"]
+    assert severities(findings, "stamp") == []
 
 
 def test_broken_outranks_warn_in_the_roll_up():

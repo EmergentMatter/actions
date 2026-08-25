@@ -176,3 +176,153 @@ def test_the_shipped_template_is_in_the_off_state():
     """The template must onboard repos with lint advisory, per docs/onboarding.md."""
     template = (Path(__file__).resolve().parents[1] / "templates" / "ci.yml").read_text()
     assert lint_gate.has_continue_on_error(template) is True
+
+
+# --------------------------------------------------- generalized to --job
+
+CI_THREE_JOBS = """\
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking.
+    # Managed by scripts/lint_gate.py.
+    continue-on-error: true
+    steps:
+      - run: uv run ruff check .
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    # STAGED ROLLOUT. `continue-on-error` does NOT make format non-blocking.
+    # Managed by scripts/lint_gate.py.
+    continue-on-error: true
+    steps:
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    # STAGED ROLLOUT. `continue-on-error` does NOT make typecheck non-blocking.
+    # Managed by scripts/lint_gate.py.
+    continue-on-error: true
+    steps:
+      - run: uv run mypy src
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - run: uv run pytest
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: uv build
+"""
+
+
+def test_default_job_is_still_lint():
+    """Every pre-existing call site (no `job` argument) must keep behaving
+    exactly as it did before format/typecheck existed."""
+    assert lint_gate.find_lint_job_block(CI_THREE_JOBS) == lint_gate.find_lint_job_block(
+        CI_THREE_JOBS, "lint"
+    )
+    assert lint_gate.has_continue_on_error(CI_THREE_JOBS) is True
+
+
+@pytest.mark.parametrize("job", ["lint", "format", "typecheck"])
+def test_each_job_block_is_found_independently(job):
+    start, end = lint_gate.find_lint_job_block(CI_THREE_JOBS, job)
+    block = CI_THREE_JOBS.split("\n")[start:end]
+    assert block[0].strip() == f"{job}:"
+    others = {"lint", "format", "typecheck"} - {job}
+    for other in others:
+        assert f"{other}:" not in "\n".join(line.strip() for line in block[1:]), (
+            f"{job} block bled into {other}"
+        )
+
+
+@pytest.mark.parametrize("job", ["lint", "format", "typecheck"])
+def test_turning_a_job_on_only_touches_that_job(job):
+    on = lint_gate.strip_continue_on_error(CI_THREE_JOBS, job)
+    assert lint_gate.has_continue_on_error(on, job) is False
+    for other in {"lint", "format", "typecheck"} - {job}:
+        assert lint_gate.has_continue_on_error(on, other) is True
+    assert f"{lint_gate._job_label(job)} is ENFORCED" in on
+
+
+@pytest.mark.parametrize("job", ["format", "typecheck"])
+def test_non_lint_jobs_get_a_job_flagged_hint(job):
+    """format/typecheck aren't the default, so their restore hint must carry --job."""
+    on = lint_gate.strip_continue_on_error(CI_THREE_JOBS, job)
+    assert f"--job {job} off" in on
+
+
+def test_lint_restore_hint_has_no_job_flag():
+    """lint is the default job, so its hint must read exactly as it always has."""
+    on = lint_gate.strip_continue_on_error(CI_THREE_JOBS, "lint")
+    assert "run lint_gate.py off\n" in on
+    assert "--job lint" not in on
+
+
+@pytest.mark.parametrize("job", ["lint", "format", "typecheck"])
+def test_round_trip_is_stable_for_every_job(job):
+    on = lint_gate.strip_continue_on_error(CI_THREE_JOBS, job)
+    off = lint_gate.add_continue_on_error(on, lint_gate.default_off_comment(job), job)
+    assert lint_gate.has_continue_on_error(off, job) is True
+    again = lint_gate.strip_continue_on_error(off, job)
+    assert lint_gate.has_continue_on_error(again, job) is False
+
+
+def test_default_off_comment_for_lint_matches_the_original_constant():
+    """Byte-for-byte, so every repo already relying on DEFAULT_OFF_COMMENT sees
+    no change from this generalization."""
+    assert lint_gate.default_off_comment("lint") == lint_gate.DEFAULT_OFF_COMMENT
+
+
+def test_default_off_comment_names_the_job():
+    assert "make format non-blocking" in lint_gate.default_off_comment("format")
+    assert "make typecheck non-blocking" in lint_gate.default_off_comment("typecheck")
+
+
+@pytest.mark.parametrize(
+    ("job", "has_line", "required", "expected"),
+    [
+        ("format", True, False, "OFF"),
+        ("typecheck", False, True, "ON"),
+        ("format", False, False, "INCONSISTENT"),
+    ],
+)
+def test_state_derivation_is_job_agnostic(job, has_line, required, expected):
+    assert lint_gate.State(has_line, required, job).name == expected
+
+
+def test_state_detail_names_the_job_not_lint():
+    state = lint_gate.State(has_line=False, lint_required=True, job="typecheck")
+    assert "typecheck" in state.detail.lower()
+    assert "lint" not in state.detail.lower()
+
+
+def test_backlog_check_command_differs_per_job():
+    assert lint_gate.BACKLOG_CHECK_CMD["lint"] == ["uv", "run", "ruff", "check", "."]
+    assert lint_gate.BACKLOG_CHECK_CMD["format"] == ["uv", "run", "ruff", "format", "--check", "."]
+    assert lint_gate.BACKLOG_CHECK_CMD["typecheck"] == ["uv", "run", "mypy", "src"]
+
+
+def test_cli_job_flag_defaults_to_lint(capsys, monkeypatch):
+    """`--job` must default to `lint` so every existing invocation is unaffected."""
+    monkeypatch.setattr(lint_gate, "read_ci", lambda repo_path: (Path("ci.yml"), CI_THREE_JOBS))
+    monkeypatch.setattr(lint_gate, "detect_repo", lambda repo_path: "o/r")
+    monkeypatch.setattr(lint_gate, "default_branch", lambda repo: "main")
+    monkeypatch.setattr(lint_gate, "required_contexts", lambda repo, branch: ["test", "build"])
+    lint_gate.main(["status"])
+    out = capsys.readouterr().out
+    assert "job:               lint" in out

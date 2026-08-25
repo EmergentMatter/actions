@@ -5,6 +5,8 @@ that's exactly how the GitHub Actions workflow (and consumer CI) will
 invoke it.
 """
 
+from __future__ import annotations
+
 import subprocess
 import sys
 from pathlib import Path

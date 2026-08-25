@@ -4,10 +4,14 @@ Each test drives the CLI as a subprocess against a tmp_path fixture, since
 that's exactly how the GitHub Actions workflow will invoke it.
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "compute_bump.py"
 
@@ -32,34 +36,22 @@ def run_compute_bump(tmp_path: Path, *extra_args: str) -> subprocess.CompletedPr
     )
 
 
-class TestBumpMatrix:
-    """Each level against a known current version — standard semver, no
-    special-casing below 1.0 except the major transition (covered separately).
-    """
-
-    def test_patch_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.patch.md")
-        result = run_compute_bump(tmp_path)
-        assert result.returncode == 0
-        payload = json.loads(result.stdout)
-        assert payload == {"level": "patch", "current": "1.2.3", "next": "1.2.4", "count": 1}
-
-    def test_minor_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.minor.md")
-        result = run_compute_bump(tmp_path)
-        payload = json.loads(result.stdout)
-        assert payload["level"] == "minor"
-        assert payload["next"] == "1.3.0"
-
-    def test_major_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.major.md")
-        result = run_compute_bump(tmp_path)
-        payload = json.loads(result.stdout)
-        assert payload["level"] == "major"
-        assert payload["next"] == "2.0.0"
+@pytest.mark.parametrize(
+    ("level", "expected_next"),
+    [("patch", "1.2.4"), ("minor", "1.3.0"), ("major", "2.0.0")],
+    ids=["patch", "minor", "major"],
+)
+def test_each_level_bumps_a_known_version_correctly(
+    tmp_path: Path, level: str, expected_next: str
+) -> None:
+    """Standard semver, no special-casing below 1.0 (the major transition
+    below 1.0 is covered separately)."""
+    write_pyproject(tmp_path, "1.2.3")
+    write_note(tmp_path / "changelog.d", f"+aaaa1111.{level}.md")
+    result = run_compute_bump(tmp_path)
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload == {"level": level, "current": "1.2.3", "next": expected_next, "count": 1}
 
 
 def test_max_wins_across_mixed_pending_notes(tmp_path: Path) -> None:
@@ -87,7 +79,7 @@ def test_minor_beats_patch_but_not_major(tmp_path: Path) -> None:
 
 
 def test_below_1_0_major_transition(tmp_path: Path) -> None:
-    """V2: no special handling below 1.0 — major on 0.4.2 gives 1.0.0."""
+    """V2: no special handling below 1.0, so major on 0.4.2 gives 1.0.0."""
     write_pyproject(tmp_path, "0.4.2")
     write_note(tmp_path / "changelog.d", "+x.major.md")
     result = run_compute_bump(tmp_path)
@@ -125,9 +117,10 @@ def test_towncrier_issue_numbered_fragment_also_parses(tmp_path: Path) -> None:
 
 def test_dotfile_md_fragment_is_rejected_loudly(tmp_path: Path) -> None:
     """A leading-dot ".md" fragment (e.g. ".foo.major.md") must never be
-    silently skipped alongside true non-fragment dotfiles like .gitkeep --
+    silently skipped alongside true non-fragment dotfiles like .gitkeep.
     towncrier's own fragment discovery might pick it up even though
-    compute_bump.py's count didn't, which is a silent-wrong-version path.
+    compute_bump.py's count didn't. That mismatch is a silent-wrong-version
+    path.
     """
     write_pyproject(tmp_path, "1.0.0")
     notes_dir = tmp_path / "changelog.d"

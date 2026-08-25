@@ -48,13 +48,13 @@ def max_level(notes_dir: Path) -> tuple[str | None, int]:
             continue
         if path.name.startswith("."):
             # Dotfiles (.gitkeep, etc.) are conventionally not fragments and are
-            # silently ignored -- EXCEPT a dotfile ending in .md, which is never
-            # legitimate (changeset.py always writes "+<hex>.<level>.md", no
-            # leading dot) and must not be silently skipped: towncrier's own
-            # fragment discovery may or may not treat it the same way, and a
-            # mismatch there is a silent-wrong-version path, not a crash. Reject
-            # it loudly instead of guessing. Do not "simplify" this back to a
-            # plain dotfile skip.
+            # silently ignored. A dotfile ending in .md is the exception: it is
+            # never legitimate, since changeset.py always writes
+            # "+<hex>.<level>.md" with no leading dot. It must not be silently
+            # skipped, because towncrier's own fragment discovery may or may
+            # not treat it the same way, and a mismatch there is a
+            # silent-wrong-version path, not a crash. Reject it loudly instead
+            # of guessing. Do not "simplify" this back to a plain dotfile skip.
             if path.suffix == ".md":
                 print(
                     f"error: {path.name!r} in {notes_dir} looks like a changelog fragment "
@@ -67,7 +67,7 @@ def max_level(notes_dir: Path) -> tuple[str | None, int]:
         if path.suffix != ".md":
             continue
         count += 1
-        # Fragment grammar: <name>.<level>.md — take the part after the
+        # Fragment grammar is <name>.<level>.md: take the part after the
         # last "." before ".md".
         stem = path.stem  # strips ".md"
         level = stem.rsplit(".", 1)[-1]
@@ -83,7 +83,7 @@ def max_level(notes_dir: Path) -> tuple[str | None, int]:
     if count == 0:
         return None, 0
 
-    for level in LEVELS:  # major, minor, patch — highest first
+    for level in LEVELS:  # LEVELS is ordered major, minor, patch: highest first
         if level in found_levels:
             return level, count
 

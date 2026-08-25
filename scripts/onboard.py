@@ -24,6 +24,12 @@ It deliberately does NOT do three things:
                    "The name you see is not the name you type". Printed as a
                    next step instead.
 
+What gets copied and under what policy is declared once, in
+templates/manifest.toml (see load_manifest below) -- shared with sync.py,
+which is what keeps a "managed" template current after onboarding. A
+"seed-once" template is written here if absent and never touched again
+by either script.
+
 Stdlib only. GitHub access shells out to `gh`.
 
     python3 onboard.py --repo-path ../some-repo                 # propose
@@ -41,29 +47,123 @@ import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
+
+# This module is a CLI, but sync.py and fleet_status.py both import it
+# directly (dynamically, since this repo ships no installed package --
+# see their own module docstrings). __all__ is scoped to that cross-module
+# surface, not every name a human reading main() might need.
+__all__ = [
+    "OnboardError",
+    "TemplateEntry",
+    "load_manifest",
+    "parse_point_release",
+    "current_templates_version",
+]
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
+CI_DEST = ".github/workflows/ci.yml"
 LABEL = "skip-changelog"
 LABEL_DESC = "Exempts this PR from the changelog note requirement"
 LABEL_COLOR = "cfd3d7"
+PVR_PATH = "private-vulnerability-reporting"
+PVR_NAME = "private vulnerability reporting"
 
-# template -> destination, relative to the target repo root
-COPIES = {
-    "stub-changelog-check.yml": ".github/workflows/changelog-check.yml",
-    "stub-version.yml": ".github/workflows/version.yml",
-    "stub-build-release.yml": ".github/workflows/build-release.yml",
-    "changeset.py": "scripts/changeset.py",
-    "CONTRIBUTING.md": "CONTRIBUTING.md",
-}
-CI_DEST = ".github/workflows/ci.yml"
+_VALID_POLICIES = {"managed", "seed-once"}
+
+# The independent, appendable blocks templates/pyproject-snippet.toml is
+# made of, in file order. Each is written only if the target repo doesn't
+# already declare it -- see missing_config_sections and render_config_block.
+SNIPPET_SECTIONS = ("towncrier", "em-release", "mypy", "pytest")
 
 
 class OnboardError(RuntimeError):
-    pass
+    """Anything that should stop onboarding with a readable message."""
+
+
+@dataclass(frozen=True)
+class TemplateEntry:
+    """One row of templates/manifest.toml: a file this repo ships, where it
+    lands in a consuming repo, and whether sync.py may update it later."""
+
+    source: str  # relative to templates/
+    dest: str  # relative to the target repo root
+    policy: str  # "managed" | "seed-once"
+
+
+def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
+    """Read templates/manifest.toml -- the one declaration onboard.py and
+    sync.py both consume. `path` is resolved against TEMPLATES at call time
+    (not at import time), so tests can point it at a fixture directory by
+    monkeypatching the module-level TEMPLATES constant."""
+    manifest_path = path if path is not None else TEMPLATES / "manifest.toml"
+    with manifest_path.open("rb") as f:
+        data = tomllib.load(f)
+    entries = [
+        TemplateEntry(source=raw["source"], dest=raw["dest"], policy=raw["policy"])
+        for raw in data.get("template", [])
+    ]
+    bad = {e.policy for e in entries} - _VALID_POLICIES
+    if bad:
+        word = "policy" if len(bad) == 1 else "policies"
+        raise OnboardError(f"manifest.toml: unknown {word} {sorted(bad)!r}")
+    return entries
+
+
+POINT_RELEASE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+def parse_point_release(tag: str) -> tuple[int, int, int] | None:
+    """A `vX.Y.Z` point release's numbers, or None. Deliberately excludes
+    the moving `v1` alias (force-moved to the newest release on every cut,
+    per .github/RELEASING.md) -- only a point release is an immutable ref."""
+    m = POINT_RELEASE_RE.match(tag)
+    return (int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def current_templates_version(actions_repo: Path | None = None) -> str:
+    """The actions repo's own version, right now: the highest vX.Y.Z point
+    release tagged exactly at HEAD, or the short commit SHA if none is.
+
+    Never the moving `v1` alias, even when it also points at HEAD. A stamp
+    naming it would silently stop meaning anything the moment the next
+    release force-moves it. `git show v1:templates/<path>` in sync.py
+    would then resolve a different, newer commit than the one this repo
+    actually synced from.
+
+    `git describe --tags --exact-match`'s tie-break when several tags
+    point at the same commit is unspecified. It depends on ref packing,
+    not on anything this code controls, so it must not be trusted to
+    prefer the point release over the alias. `git tag --points-at HEAD`
+    enumerates every tag there instead, so the choice is made explicitly.
+    """
+    repo = actions_repo if actions_repo is not None else Path(__file__).resolve().parent.parent
+    p = subprocess.run(
+        ["git", "tag", "--points-at", "HEAD"], cwd=repo, capture_output=True, text=True
+    )
+    if p.returncode != 0:
+        raise OnboardError(f"could not list tags at HEAD for {repo}: {p.stderr.strip()}")
+    candidates = []
+    for tag in p.stdout.split():
+        version = parse_point_release(tag)
+        if version is not None:
+            candidates.append((version, tag))
+    if candidates:
+        return max(candidates)[1]
+
+    p = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
+    )
+    if p.returncode != 0:
+        raise OnboardError(f"could not resolve a git ref for {repo}: {p.stderr.strip()}")
+    return p.stdout.strip()
 
 
 @dataclass
 class Action:
+    """One line of the onboarding plan: what would happen to one target
+    file or resource, and why."""
+
     kind: str  # create | skip | manual
     target: str
     note: str = ""
@@ -71,20 +171,26 @@ class Action:
 
 @dataclass
 class Plan:
+    """Everything build_plan() worked out for a target repo, before
+    apply_plan() writes any of it."""
+
     repo_path: Path
     package_name: str
     version: str
     actions: list[Action] = field(default_factory=list)
     candidates: list[tuple[str, str]] = field(default_factory=list)
+    manifest: list[TemplateEntry] = field(default_factory=list)
     ci_needs_workflow_call: bool = False
     ci_job_names: list[str] = field(default_factory=list)
     ci_is_ours: bool = False
+    missing_config_sections: set[str] = field(default_factory=lambda: set(SNIPPET_SECTIONS))
 
 
 # ------------------------------------------------------------------ detection
 
 
 def read_pyproject(repo: Path) -> dict:
+    """Parse the target repo's pyproject.toml, or raise if it has none."""
     p = repo / "pyproject.toml"
     if not p.is_file():
         raise OnboardError(
@@ -94,8 +200,13 @@ def read_pyproject(repo: Path) -> dict:
         return tomllib.load(f)
 
 
-def parse_ci(text: str) -> tuple[bool, list[str]]:
-    """Return (has_workflow_call, job_names) from a CI workflow's text."""
+class ParsedCI(NamedTuple):
+    has_workflow_call: bool
+    job_names: list[str]
+
+
+def parse_ci(text: str) -> ParsedCI:
+    """Read whether a CI workflow is `workflow_call`-able, and its job names."""
     has_call = re.search(r"^\s{2,4}workflow_call:", text, re.MULTILINE) is not None
     jobs: list[str] = []
     in_jobs = False
@@ -109,7 +220,7 @@ def parse_ci(text: str) -> tuple[bool, list[str]]:
             m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
             if m:
                 jobs.append(m.group(1))
-    return has_call, jobs
+    return ParsedCI(has_call, jobs)
 
 
 def propose_version_files(repo: Path, version: str) -> list[tuple[str, str]]:
@@ -142,19 +253,20 @@ TOWNCRIER_MARKER = "<!-- towncrier release notes start -->"
 def add_workflow_call(text: str) -> str | None:
     """Add `workflow_call:` to an existing CI workflow's triggers.
 
-    Purely additive -- every existing trigger is preserved. Done rather than
-    left as a manual step because forgetting it doesn't degrade gracefully:
-    `version.yml` reaches this file with `uses: ./.github/workflows/ci.yml`,
-    and a workflow that isn't `workflow_call`-able fails at PARSE time, so
-    every push to main errors before a single job starts.
+    Purely additive: every existing trigger is preserved. This is done
+    automatically, not left as a manual step, because forgetting it
+    doesn't degrade gracefully. `version.yml` reaches this file with
+    `uses: ./.github/workflows/ci.yml`, and a workflow that isn't
+    `workflow_call`-able fails at PARSE time. That means every push to
+    main errors before a single job starts.
 
     Returns None if it is already there.
     """
     lines = text.split("\n")
     start = next((i for i, ln in enumerate(lines) if re.match(r"^on:\s*$", ln)), None)
     if start is None:
-        # `on: [push, pull_request]` inline form — too many shapes to rewrite
-        # safely, so leave it for a human.
+        # `on: [push, pull_request]` inline form has too many shapes to
+        # rewrite safely, so leave it for a human.
         return None
     end = len(lines)
     for i in range(start + 1, len(lines)):
@@ -173,10 +285,11 @@ def add_workflow_call(text: str) -> str | None:
 def insert_marker(text: str) -> str | None:
     """Put the towncrier marker above the existing history.
 
-    Returns None if it is already there. `towncrier build` writes each new
-    release directly BELOW this marker and never touches anything beneath,
-    so it has to sit above the newest existing entry -- placing it at the
-    bottom would bury every future release under the hand-written history.
+    Returns None if it is already there. It has to sit above the newest
+    existing entry: `towncrier build` writes each new release directly
+    BELOW this marker and never touches anything beneath it. Placing the
+    marker at the bottom would bury every future release under the
+    hand-written history.
     """
     if TOWNCRIER_MARKER in text:
         return None
@@ -194,6 +307,9 @@ def insert_marker(text: str) -> str | None:
 
 
 def build_plan(repo: Path, declared: list[str]) -> Plan:
+    """Work out everything onboarding a repo would do, without writing
+    anything. `declared` is the `--version-file` values already on the
+    command line; an empty list means propose candidates instead."""
     data = read_pyproject(repo)
     project = data.get("project", {})
     name = project.get("name")
@@ -207,19 +323,27 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
         )
 
     plan = Plan(repo, name, version)
+    manifest = load_manifest()
+    plan.manifest = manifest
+    try:
+        ci_entry = next(e for e in manifest if e.dest == CI_DEST)
+    except StopIteration:
+        raise OnboardError(f"manifest.toml has no entry for {CI_DEST}") from None
 
-    for template, dest in COPIES.items():
-        target = repo / dest
+    for entry in manifest:
+        if entry.dest == CI_DEST:
+            continue  # handled below -- it gets bespoke treatment, not a plain copy
+        target = repo / entry.dest
         if target.exists():
-            same = target.read_bytes() == (TEMPLATES / template).read_bytes()
+            same = target.read_bytes() == (TEMPLATES / entry.source).read_bytes()
             note = (
                 "already present and identical"
                 if same
                 else "already present, DIFFERS from template -- left alone"
             )
-            plan.actions.append(Action("skip", dest, note))
+            plan.actions.append(Action("skip", entry.dest, note))
         else:
-            plan.actions.append(Action("create", dest, f"from templates/{template}"))
+            plan.actions.append(Action("create", entry.dest, f"from templates/{entry.source}"))
 
     ci = repo / CI_DEST
     if ci.exists():
@@ -247,7 +371,9 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
     else:
         plan.ci_is_ours = True
         plan.ci_job_names = ["lint", "test", "build"]
-        plan.actions.append(Action("create", CI_DEST, "from templates/ci.yml (repo has no CI)"))
+        plan.actions.append(
+            Action("create", CI_DEST, f"from templates/{ci_entry.source} (repo has no CI)")
+        )
 
     if not (repo / "changelog.d" / ".gitkeep").exists():
         plan.actions.append(Action("create", "changelog.d/.gitkeep", "holds pending notes"))
@@ -264,12 +390,17 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
             Action("create", "CHANGELOG.md", "insert the towncrier marker above existing history")
         )
 
-    has_towncrier = "towncrier" in data.get("tool", {})
-    has_emrelease = "em-release" in data.get("tool", {})
-    if has_towncrier and has_emrelease:
+    missing = missing_config_sections(data)
+    plan.missing_config_sections = missing
+    if not missing:
         plan.actions.append(Action("skip", "pyproject.toml", "config block already present"))
     else:
-        plan.actions.append(Action("create", "pyproject.toml", "append the config block"))
+        to_append = [s for s in SNIPPET_SECTIONS if s in missing]
+        present = [s for s in SNIPPET_SECTIONS if s not in missing]
+        note = f"append missing section(s): {', '.join(to_append)}"
+        if present:
+            note += f"; already present, left alone: {', '.join(present)}"
+        plan.actions.append(Action("create", "pyproject.toml", note))
 
     if not declared:
         plan.candidates = propose_version_files(repo, version)
@@ -279,21 +410,89 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
 
 # -------------------------------------------------------------------- writing
 
+# The comment header each section of pyproject-snippet.toml opens with.
+# _split_snippet_sections anchors on these rather than parsing TOML
+# structure -- the snippet's shape is small and fixed, and a marker that
+# goes missing (the wording changed without updating this list) raises
+# loudly instead of silently keeping stale, unsplit text.
+_SNIPPET_SECTION_MARKERS = (
+    ("towncrier", "# ── towncrier"),
+    ("em-release", "# ── em-release"),
+    ("mypy", "# ── mypy"),
+    ("pytest", "# ── pytest"),
+    ("dev-group", "# ── dev dependency group additions"),
+)
 
-def render_config_block(version_files: list[str]) -> str:
-    snippet = (TEMPLATES / "pyproject-snippet.toml").read_text()
+
+def _split_snippet_sections(snippet: str) -> dict[str, str]:
+    """Split pyproject-snippet.toml into its independent, appendable
+    blocks, each running up to the next marker (or EOF for the last)."""
+    offsets = []
+    for name, marker in _SNIPPET_SECTION_MARKERS:
+        idx = snippet.find(marker)
+        if idx == -1:
+            raise OnboardError(
+                f"pyproject-snippet.toml: no {marker!r} marker for the {name!r} "
+                "section -- update _SNIPPET_SECTION_MARKERS to match its shape."
+            )
+        offsets.append((name, idx))
+    offsets.sort(key=lambda pair: pair[1])
+    return {
+        name: snippet[start : (offsets[i + 1][1] if i + 1 < len(offsets) else len(snippet))]
+        for i, (name, start) in enumerate(offsets)
+    }
+
+
+def missing_config_sections(pyproject_data: dict) -> set[str]:
+    """Which of SNIPPET_SECTIONS the target pyproject.toml doesn't already
+    declare. Only these get appended: writing a section that already
+    exists produces a duplicate TOML table, which neither `tomllib` nor
+    `uv sync` will load."""
+    tool = pyproject_data.get("tool", {})
+    missing = set()
+    if "towncrier" not in tool:
+        missing.add("towncrier")
+    if "em-release" not in tool:
+        missing.add("em-release")
+    if "mypy" not in tool:
+        missing.add("mypy")
+    if "ini_options" not in tool.get("pytest", {}):
+        missing.add("pytest")
+    return missing
+
+
+def render_config_block(
+    version_files: list[str], templates_version: str, missing: set[str] | None = None
+) -> str:
+    """Render only the sections absent from the target repo (see
+    missing_config_sections). `missing=None` renders every section, for
+    callers that just want the full block (e.g. a standalone preview)."""
+    if missing is None:
+        missing = set(SNIPPET_SECTIONS)
+    sections = _split_snippet_sections((TEMPLATES / "pyproject-snippet.toml").read_text())
+
     entries = "\n".join(f'  "{v}",' for v in version_files)
-    block = re.sub(
+    em_release = re.sub(
         r"(?ms)^\[tool\.em-release\].*?^version_files\s*=\s*\[.*?^\]",
-        "[tool.em-release]\nversion_files = [\n" + entries + "\n]",
-        snippet,
+        f'[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+        "version_files = [\n" + entries + "\n]",
+        sections["em-release"],
     )
-    if "[tool.em-release]" not in block:
-        block += "\n[tool.em-release]\nversion_files = [\n" + entries + "\n]\n"
-    return block
+    if "[tool.em-release]" not in em_release:
+        em_release += (
+            f'\n[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+            "version_files = [\n" + entries + "\n]\n"
+        )
+    sections["em-release"] = em_release
+
+    parts = [sections[name] for name in SNIPPET_SECTIONS if name in missing]
+    if "mypy" in missing or "pytest" in missing:
+        parts.append(sections["dev-group"])
+    return "".join(parts)
 
 
-def apply_plan(plan: Plan, version_files: list[str]) -> list[str]:
+def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> list[str]:
+    """Write every `create` action in `plan`. Returns the target paths written."""
     done = []
     for action in plan.actions:
         if action.kind != "create":
@@ -313,23 +512,26 @@ def apply_plan(plan: Plan, version_files: list[str]) -> list[str]:
         elif action.target == "pyproject.toml":
             existing = dest.read_text()
             sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
-            dest.write_text(existing + sep + render_config_block(version_files))
+            block = render_config_block(
+                version_files, templates_version, plan.missing_config_sections
+            )
+            dest.write_text(existing + sep + block)
         elif action.target == CI_DEST:
             if dest.exists():
                 updated = add_workflow_call(dest.read_text())
                 if updated is not None:
                     dest.write_text(updated)
             else:
+                ci_entry = next(e for e in plan.manifest if e.dest == CI_DEST)
                 # copy, not copyfile: copyfile drops permission bits, and
                 # templates/changeset.py is 100755 for its shebang (see below).
-                shutil.copy(TEMPLATES / "ci.yml", dest)
+                shutil.copy(TEMPLATES / ci_entry.source, dest)
         else:
-            template = next(t for t, d in COPIES.items() if d == action.target)
+            entry = next(e for e in plan.manifest if e.dest == action.target)
             # `shutil.copy` preserves the mode; `copyfile` does not. changeset.py
             # carries a shebang and is 100755 in templates/, and a copy that lands
-            # non-executable trips ruff's EXE001 in every repo onboarded -- which
-            # is exactly how it reached both consumers before this was fixed.
-            shutil.copy(TEMPLATES / template, dest)
+            # non-executable trips ruff's EXE001 in every repo onboarded with it.
+            shutil.copy(TEMPLATES / entry.source, dest)
         done.append(action.target)
     return done
 
@@ -342,14 +544,58 @@ def ensure_label(repo_slug: str, *, dry_run: bool) -> str:
         return f"would ensure label `{LABEL}` exists"
     code, _, err = _gh(
         [
-            "label", "create", LABEL,
-            "--repo", repo_slug,
-            "--description", LABEL_DESC,
-            "--color", LABEL_COLOR,
+            "label",
+            "create",
+            LABEL,
+            "--repo",
+            repo_slug,
+            "--description",
+            LABEL_DESC,
+            "--color",
+            LABEL_COLOR,
             "--force",
         ]
     )
     return f"label `{LABEL}` ready" if code == 0 else f"label create failed: {err.strip()}"
+
+
+def repo_visibility(repo_slug: str) -> str | None:
+    """ "public" / "private" / "internal", or None if it couldn't be read."""
+    code, out, _ = _gh(["api", f"repos/{repo_slug}", "-q", ".visibility"])
+    return out.strip() if code == 0 else None
+
+
+def ensure_pvr(repo_slug: str, visibility: str | None, *, dry_run: bool) -> str:
+    """Enable GitHub's private vulnerability reporting.
+
+    templates/SECURITY.md tells a researcher to use it on whatever repo
+    they found the bug in. But it's a per-repo setting that nothing turns
+    on by default. Checked live: on for EmergentMatter/actions, off on
+    every other repo in the org, with no org-level default enabling it
+    for new repos. Without this, onboarding installs a doc pointing at a
+    button that doesn't exist.
+
+    Public-repo-only: the endpoint 404s on a private repo, and PVR is a
+    public-repo feature outright. Most repos are onboarded private and go
+    public later, so "skipped, repo is private" is the expected path
+    here, not a failure. See print_next_steps for the reminder to flip
+    it on when that happens.
+    """
+    if visibility != "public":
+        if visibility is None:
+            return f"could not check visibility of {repo_slug}"
+        return f"{PVR_NAME} skipped -- repo is private (enable once it's public)"
+
+    code, out, _ = _gh(["api", f"repos/{repo_slug}/{PVR_PATH}", "-q", ".enabled"])
+    if code != 0:
+        return f"could not check {PVR_NAME} on {repo_slug}"
+    if out.strip() == "true":
+        return f"{PVR_NAME} already enabled"
+    if dry_run:
+        return f"would enable {PVR_NAME}"
+
+    code, _, err = _gh(["api", "-X", "PUT", f"repos/{repo_slug}/{PVR_PATH}"])
+    return f"{PVR_NAME} enabled" if code == 0 else f"{PVR_NAME} enable failed: {err.strip()}"
 
 
 def _gh(args: list[str]) -> tuple[int, str, str]:
@@ -379,7 +625,7 @@ def print_plan(plan: Plan) -> None:
         print(f"  {mark}  {a.target:<42} {a.note}")
 
 
-def print_next_steps(plan: Plan, version_files: list[str]) -> None:
+def print_next_steps(plan: Plan, version_files: list[str], *, private_repo: bool = False) -> None:
     contexts = [*plan.ci_job_names, "changelog"]
     if plan.ci_is_ours:
         contexts = ["test", "build", "changelog"]  # lint is opt-in later
@@ -402,12 +648,18 @@ def print_next_steps(plan: Plan, version_files: list[str]) -> None:
     print("     gate is not wired up, not that you got away with it. Then add a")
     print("     note and confirm green.")
     n += 1
-    print(f"  {n}. Set required status checks from that PR's run — `gh pr checks <N>`")
+    print(f"  {n}. Set required status checks from that PR's run: `gh pr checks <N>`")
     print(f"     prints contexts. Expected here: {', '.join(contexts)}")
     if plan.ci_is_ours:
         print("     (`lint` is deliberately absent; enable later with lint_gate.py)")
     n += 1
     print(f"  {n}. Verify from outside: fleet_status.py --repo <owner>/<name>")
+    if private_repo:
+        n += 1
+        print(f"  {n}. This repo is private, so {PVR_NAME} was NOT enabled -- SECURITY.md")
+        print("     points researchers at a button that doesn't exist yet. Turn it on the")
+        print("     day this repo goes public: Settings -> Code security -> Private")
+        print(f"     vulnerability reporting, or `gh api -X PUT repos/<owner>/<name>/{PVR_PATH}`.")
 
 
 def main(argv: list[str]) -> int:
@@ -420,8 +672,11 @@ def main(argv: list[str]) -> int:
         metavar="PATH:SYMBOL",
         help="A location whose version must move on every release. Repeatable.",
     )
-    ap.add_argument("--no-version-files", action="store_true",
-                    help="This repo has no version string outside pyproject.toml")
+    ap.add_argument(
+        "--no-version-files",
+        action="store_true",
+        help="This repo has no version string outside pyproject.toml",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -447,7 +702,7 @@ def main(argv: list[str]) -> int:
             print(f"\nerror: --version-file path not found: {path}", file=sys.stderr)
             return 1
         text = (repo / path).read_text(errors="replace")
-        if not re.search(rf'^{re.escape(symbol)}\s*=', text, re.MULTILINE):
+        if not re.search(rf"^{re.escape(symbol)}\s*=", text, re.MULTILINE):
             print(f"\nerror: no `{symbol} = ...` assignment in {path}", file=sys.stderr)
             return 1
 
@@ -475,18 +730,28 @@ def main(argv: list[str]) -> int:
         print_next_steps(plan, args.version_file)
         return 0
 
-    written = apply_plan(plan, args.version_file)
+    try:
+        templates_version = current_templates_version()
+    except OnboardError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    written = apply_plan(plan, args.version_file, templates_version)
     print()
     for w in written:
         print(f"  wrote {w}")
 
     slug = detect_slug(repo)
+    visibility = None
     if slug:
+        visibility = repo_visibility(slug)
         print(f"  {ensure_label(slug, dry_run=False)}")
+        print(f"  {ensure_pvr(slug, visibility, dry_run=False)}")
     else:
         print(f"  could not detect owner/name -- create the `{LABEL}` label by hand")
+        print(f"  could not detect owner/name -- enable {PVR_NAME} by hand")
 
-    print_next_steps(plan, args.version_file)
+    print_next_steps(plan, args.version_file, private_repo=(visibility == "private"))
     return 0
 
 

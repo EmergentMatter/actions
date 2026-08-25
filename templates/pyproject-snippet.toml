@@ -50,3 +50,32 @@ showcontent = true
 version_files = [
   "src/<package_name>/__init__.py:__version__",
 ]
+
+# ── mypy ────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.13"
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Per-module relaxation for JAX/bpy code, never project-wide:
+# [[tool.mypy.overrides]]
+# module = ["<package_name>.sdf_shapes", "<package_name>.sdf_ops"]
+# disallow_untyped_defs = false
+
+# List only the untyped deps this repo actually imports:
+# [[tool.mypy.overrides]]
+# module = ["jax.*", "bpy"]
+# ignore_missing_imports = true
+
+# ── pytest ──────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]   # per-repo ignores are explicit entries
+
+# ── dev dependency group additions ─────────────────────────────────────
+# Add to this repo's existing [dependency-groups] dev = [...] list:
+#   "pytest>=8.0",
+#   "ruff>=0.16",
+#   "mypy>=1.14",

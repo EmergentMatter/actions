@@ -461,6 +461,53 @@ jobs:
         run: |
           uvx towncrier build --yes --version "${{ steps.bump.outputs.next }}"
 
+      - name: Collect this release's changelog entries
+        # For the release PR body, so a reviewer can see what they are
+        # releasing without opening the diff.
+        #
+        # Read back out of CHANGELOG.md rather than out of changelog.d/:
+        # towncrier has already consumed and deleted those notes by this
+        # point, and reading the built file guarantees the PR says exactly
+        # what the changelog says rather than a second rendering of it.
+        id: notes
+        if: >-
+          steps.detect.outputs.is-release-commit == 'false' &&
+          steps.bump.outputs.level != 'none'
+        env:
+          VERSION: ${{ steps.bump.outputs.next }}
+        run: |
+          python3 - <<'PYEOF' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+
+          version = os.environ["VERSION"]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+
+          # towncrier writes `## <version> (<date>)` with entries grouped under
+          # `### Major` / `### Minor` / `### Patch`. Match that heading through
+          # to the next `## `, which is the previous release. Keyed on the
+          # version rather than on position or on the start marker, so it holds
+          # whether towncrier inserted at the marker or prepended.
+          match = re.search(
+              rf"^## {re.escape(version)}[ (].*?(?=^## |\Z)", text, re.M | re.S
+          )
+          section = match.group(0).strip() if match else ""
+          # Drop towncrier's own version heading; the PR title already says it.
+          section = re.sub(r"^## .*\n", "", section, count=1).strip()
+
+          if not section:
+              # Never silently emit an empty section: a release PR listing no
+              # changes looks like there are none, rather than like a bug here.
+              section = (
+                  f"Could not read the `{version}` section out of CHANGELOG.md. "
+                  "See the diff on this PR for what is being released."
+              )
+
+          print("section<<CHANGELOG_SECTION_EOF")
+          print(section)
+          print("CHANGELOG_SECTION_EOF")
+          PYEOF
+
       - name: Remove the shared checkout before staging the PR
         # actions/checkout refuses a path outside the workspace, so .em-actions
         # necessarily lands inside the consumer's tree -- where create-pull-request
@@ -490,17 +537,36 @@ jobs:
           # update, note deletions, and lockfile refresh — nothing else ran
           # in this job before this step, so the working tree diff already
           # satisfies that; nothing extra is added here.
+          # Follows the repo's own pull request template, minus the sections
+          # that cannot apply to an automated PR: there is no linked issue,
+          # and the checklist asks the reviewer to check the release rather
+          # than asking the author to check their own work.
+          # Each paragraph is ONE long line on purpose. GitHub renders issue
+          # and PR bodies as GitHub Flavored Markdown, where a single newline
+          # is a hard line break rather than a paragraph continuation, so
+          # hard-wrapped prose renders as a column of short broken lines.
+          # Wrap these lines and the body looks broken in the browser.
           body: |
-            Automated release PR. Merging this is the release: it pushes
-            tag `v${{ steps.bump.outputs.next }}` and, in that same run,
-            builds the wheel/sdist and creates the GitHub Release.
+            ## What changed and why
 
-            This PR contains only the version bump, the `CHANGELOG.md`
-            update, the consumed note deletions, and the refreshed
-            `uv.lock`.
+            Version bump to `v${{ steps.bump.outputs.next }}`, computed from the ${{ steps.bump.outputs.count }} pending changelog note(s).
 
-            If the checks below show as not run, close this PR and
-            immediately reopen it — see `CONTRIBUTING.md`.
+            Merging this is the release: it pushes tag `v${{ steps.bump.outputs.next }}` and, in that same run, builds the wheel/sdist and creates the GitHub Release.
+
+            ### In this release
+
+            ${{ steps.notes.outputs.section }}
+
+            ## How was this tested?
+
+            Every change listed above was gated by the checks on `main` before this PR was drafted, which is where the testing happens. This PR itself adds no code: only the version bump, the `CHANGELOG.md` update, the consumed note deletions, and the refreshed `uv.lock`.
+
+            If the checks below show as not run, close this PR and immediately reopen it. See `CONTRIBUTING.md` for why.
+
+            ## Checklist
+
+            - [ ] The entries above read correctly to someone who did not write them
+            - [ ] `v${{ steps.bump.outputs.next }}` is the right version for those changes
           # E6: exempts this PR from changelog-check.yml's note requirement
           # by label. It's also opened as github-actions[bot], which
           # changelog-check.yml's default bot-actors already exempts (E5) —
