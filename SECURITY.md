@@ -20,8 +20,8 @@ instead, and name the affected package or repository in the report.
 Private reporting keeps the details out of view until a fix is
 available.
 
-We aim to acknowledge within five business days. Tarek El Afifi is the
-responder of record.
+We aim to acknowledge within five business days. Private reports reach
+the maintainers of the repository they are filed on.
 
 ### What to include
 
