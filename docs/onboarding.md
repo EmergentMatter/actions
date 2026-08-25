@@ -139,7 +139,7 @@ template exists for repos starting from nothing.
 | 6 | `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike 1–3 this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
 | 7 | `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
 | 8 | `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
-| 9 | `ruff.toml` | Three lines (`extend = "ruff-base.toml"`) plus room for this repo's own per-file additions. Yours from the moment it's written -- see "Before you start" for the parallel with `ci.yml`. |
+| 9 | `ruff.toml` | `extend = "ruff-base.toml"` plus room for this repo's own additions. Yours from the moment it's written. |
 
 Files 1–3 are thin stubs pinned to `@v1`, copied from `EmergentMatter/actions`'s
 `templates/` directory into your repo's `.github/workflows/`. Files 2 and 3
@@ -156,17 +156,13 @@ explanation, below.
 **Files 4–9 are copies, not references, and that distinction has a
 cost worth understanding up front.** Files 1–3 point at code hosted here,
 so a fix lands in every consuming repo the moment `v1` moves, and nobody
-has to do anything. Files 4–9 are yours from the moment you copy them: an
-improvement to `templates/ci.yml` will never reach a repo that onboarded
-last month. Files 4, 5, 7, and 8 (`changeset.py`, `CONTRIBUTING.md`,
-`STYLE.md`, `ruff-base.toml`) are `managed` in
-[`templates/manifest.toml`](../templates/manifest.toml), so `scripts/sync.py`
-*can* pull a later change into them -- but only when someone runs it; it's
-not automatic the way 1–3 are. Files 6 and 9 (`ci.yml`, `ruff.toml`) are
-`seed-once`: written if absent, then never touched again by either
-`onboard.py` or `sync.py`, because a repo's CI and its local lint
-overrides are legitimately its own. `scripts/fleet_status.py` in this repo
-exists to make managed-file drift visible rather than silent; run it after
+has to do anything. Files 4–9 are yours from the moment you copy them.
+Files 4, 5, 7, and 8 are `managed` in
+[`templates/manifest.toml`](../templates/manifest.toml): `scripts/sync.py`
+can pull a later change in, but only when someone runs it. Files 6 and 9
+are `seed-once`: written if absent, then never touched again, because a
+repo's CI and its local ruff additions are legitimately its own.
+`scripts/fleet_status.py` makes managed-file drift visible; run it after
 onboarding, and periodically after that.
 
 `onboard.py` also seeds a set of standard repo-hygiene files:

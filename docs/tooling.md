@@ -181,7 +181,7 @@ to see info findings without deciding they're worth a nonzero exit.
 | `stub` | broken | still on the `workflow_call` path removed in v1.1.0, so it 404s on every PR |
 | `workflow_call` | broken | `ci.yml` not callable; `version.yml` fails at parse time on every push to main |
 | `gate` | broken (else info) | the `lint` job's two halves disagree, per `lint_gate.py`. Reported at `info` when the two halves agree |
-| `format_gate` | broken (else info) | same, for the `format` job. `info` at `not yet adopted` when the repo's `ci.yml` has no `format:` job at all -- expected for any repo onboarded before this job existed, since `ci.yml` is seed-once |
+| `format_gate` | broken (else info) | same, for the `format` job. `info` if the repo has no `format:` job yet |
 | `typecheck_gate` | broken (else info) | same, for the `typecheck` job |
 | `contexts` | warn | required checks missing, or no branch protection at all |
 | `verify` | warn | build job runs `uv build` with no `verify-wheel`; a wheel that builds and installs nothing would pass |
@@ -204,14 +204,11 @@ correctly configured, not incomplete. See below.
 
 ## `lint_gate.py`
 
-Started lint-only; now stages `lint`, `format`, and `typecheck` the same
-way, since all three roll out over an established codebase identically
-and each is its own `--job`. `--job` defaults to `lint`, so every
-pre-existing invocation (no `--job` at all) is unaffected.
+Stages `lint`, `format`, or `typecheck` via `--job` (default: `lint`).
 
 The gate is two settings in two places, and they must agree:
 
-1. `continue-on-error: true` on `ci.yml`'s job for that job: a file in the repo
+1. `continue-on-error: true` on `ci.yml`'s job: a file in the repo
 2. the job's name in the required status checks: a GitHub setting
 
 Flipping one without the other is not a half-measure, it is a broken state,
@@ -240,9 +237,8 @@ would misdirect whoever is reading it.
 `on` **refuses if the repo still has findings for that job.** Enforcing over
 a dirty backlog blocks every open PR with errors unrelated to its own
 changes: the problem the staged rollout exists to avoid. `--skip-backlog-check`
-overrides it, and you should expect to regret that. The command it runs to
-check the backlog is job-specific: `ruff check .` for `lint`, `ruff format
---check .` for `format`, `mypy src` for `typecheck`.
+overrides it, and you should expect to regret that. Backlog command per job:
+`ruff check .` (lint), `ruff format --check .` (format), `mypy src` (typecheck).
 
 The file edit is left uncommitted deliberately: commit it and open a PR.
 Branch protection is changed immediately, so until that PR merges the repo

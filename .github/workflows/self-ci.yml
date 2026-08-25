@@ -1,16 +1,12 @@
 name: Self CI
 
-# This repo's own checks, not reusable, not workflow_call. Ruff + mypy +
-# pytest over scripts/ and tests/, matching CLAUDE.md's documented "Build &
-# Run" commands exactly (uv sync / uv run ruff check . / uv run pytest) so
-# local reproduction is identical to CI. Ruleset, line-length, and the
-# mypy/pytest config all live in this repo's own pyproject.toml -- not
-# duplicated here as CLI flags.
+# This repo's own checks, not reusable, not workflow_call. Ruff, mypy, and
+# pytest over scripts/ and tests/, matching CLAUDE.md's "Build & Run"
+# commands. Config lives in this repo's own pyproject.toml, not duplicated
+# here as CLI flags.
 #
-# format/typecheck run enforced (no continue-on-error), matching lint here:
-# this repo's own code has no backlog to stage around. templates/ci.yml
-# ships format/typecheck staged (continue-on-error, per STYLE.md's staged
-# rollout) for consuming repos that do.
+# format/typecheck are enforced here, unlike the staged versions in
+# templates/ci.yml, because this repo has no backlog to stage around.
 
 on:
   pull_request:
@@ -283,10 +279,7 @@ jobs:
         run: uv sync --locked
 
       - name: mypy
-        # This repo ships scripts/, not a src/ package (see pyproject.toml's
-        # header comment: no [build-system], it's a virtual project) -- so
-        # `mypy scripts` is the right invocation here, not the `mypy src`
-        # that templates/ci.yml's typecheck job runs for a consuming repo.
+        # scripts/, not src/ -- this repo ships no package.
         run: uv run mypy scripts
 
   test:

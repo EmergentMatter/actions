@@ -14,8 +14,8 @@ predates provenance tracking. See `templates` and `stamp` below.
 Checks, per repo:
 
   gate            the lint gate's two halves agree (see lint_gate.py)
-  format_gate     same, for the `format` job (ruff format --check)
-  typecheck_gate  same, for the `typecheck` job (mypy)
+  format_gate     same, for the `format` job
+  typecheck_gate  same, for the `typecheck` job
   stub        the changelog stub uses the composite action, not the
               `workflow_call` path removed in v1.1.0. A repo still on
               that path is BROKEN right now, not merely stale.
@@ -25,9 +25,7 @@ Checks, per repo:
               than `.github/workflows/ci.yml / lint`
   templates   every `managed` file in templates/manifest.toml matches its
               live copy. (`seed-once` files, e.g. ci.yml and ruff.toml,
-              are skipped: repos legitimately customise those.) STYLE.md
-              and ruff-base.toml (both managed) are covered here for free
-              -- adding them to the manifest was the only change needed.
+              are skipped: repos legitimately customise those.)
   stamp       the `templates_version` provenance stamp against this repo's
               newest release tag
   security    if SECURITY.md documents private vulnerability reporting,
@@ -35,11 +33,7 @@ Checks, per repo:
               nothing inherits, so a public repo can carry a policy
               promising a route it doesn't have. (Private repos: N/A.)
   tooling     pyproject.toml declares [tool.mypy] and
-              [tool.pytest.ini_options]. Existence only, not exact
-              content -- mypy and pytest have no config-inheritance
-              mechanism the way ruff's `extend` gives lint/format, so
-              uniformity there comes from review, and this is what makes
-              an outright-missing block visible.
+              [tool.pytest.ini_options] (existence only)
 
 Reads everything over the API. No clones. Stdlib only; GitHub access
 shells out to `gh`.
@@ -68,13 +62,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # This repo ships no installed package (scripts/ is stdlib-only, run in
-    # place -- see CLAUDE.md), so a plain `import lint_gate` / `onboard` /
-    # `sync` has nothing to resolve to at runtime; that's what the
-    # importlib.util dynamic loads in the `else` branch are for. mypy can't
-    # see through those on its own, so this branch (never taken at runtime:
-    # TYPE_CHECKING is always False there) gives it the real modules to
-    # check attribute access and type annotations against instead.
+    # Never runs; gives mypy the real modules for attribute checks below.
     import lint_gate
     import onboard
     import sync
@@ -82,11 +70,7 @@ else:
     _spec = importlib.util.spec_from_file_location(
         "lint_gate", Path(__file__).resolve().parent / "lint_gate.py"
     )
-    # Both narrow a real path on disk to a concrete ModuleSpec/loader;
-    # spec_from_file_location only returns None for an import kind this
-    # isn't (namespace packages, frozen/built-in modules), never a plain
-    # file path.
-    assert _spec is not None and _spec.loader is not None
+    assert _spec is not None and _spec.loader is not None  # always true for a real file path
     lint_gate = importlib.util.module_from_spec(_spec)
     # Must be registered before exec: @dataclass resolves cls.__module__
     # through sys.modules, and a module loaded this way isn't there by
@@ -469,23 +453,13 @@ def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]
 def _check_staged_job_gate(
     job: str, check_name: str, ci_text: str | None, contexts: list[str] | None
 ) -> list[Finding]:
-    """Shared body behind check_format_gate and check_typecheck_gate.
-
-    Same two-halves-must-agree logic as check_gate above, generalised via
-    lint_gate.py's own `job` parameter (see its module docstring). Kept as
-    a private helper rather than folding into check_gate itself, so
-    check_gate's signature -- and every existing call site and test -- is
-    untouched by this repo's two newer staged jobs.
-    """
+    """Shared body behind check_format_gate and check_typecheck_gate."""
     if ci_text is None or contexts is None:
         return []
     try:
         has_line = lint_gate.has_continue_on_error(ci_text, job)
     except lint_gate.LintGateError:
-        # Unlike lint, format/typecheck are new jobs that ci.yml is
-        # seed-once about: most repos onboarded before this PR simply
-        # haven't adopted them into their own copy yet. That is the
-        # expected, staged-rollout-not-started state, not a defect.
+        # Expected for a repo that hasn't adopted this job into ci.yml yet.
         return [Finding(check_name, "info", f"no `{job}:` job; not yet adopted")]
     state = lint_gate.State(has_line, job in contexts, job)
     if state.name == "INCONSISTENT":
@@ -503,16 +477,9 @@ def check_typecheck_gate(ci_text: str | None, contexts: list[str] | None) -> lis
 
 
 def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
-    """The mypy and pytest config blocks STYLE.md's Typing/Testing sections
-    describe actually exist in the repo's pyproject.toml.
+    """Check that pyproject.toml has [tool.mypy] and [tool.pytest.ini_options].
 
-    Existence only, not exact content: repos are expected to relax mypy
-    per-module for JAX/bpy code, and pytest's addopts can reasonably vary.
-    Neither tool has ruff's `extend` mechanism, so templates/manifest.toml
-    can't keep these current the way it does STYLE.md or ruff-base.toml --
-    the config block is copy-pasted at onboarding (see
-    templates/pyproject-snippet.toml) and never synced. Uniformity beyond
-    "does it exist at all" comes from review, not this check.
+    Existence only, not exact content -- neither tool has ruff's `extend`.
     """
     if pyproject_text is None:
         return [

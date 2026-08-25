@@ -13,13 +13,8 @@
 #               learn to click past is worse than no check. Clear the
 #               backlog in its own dedicated PR before enforcing. Don't
 #               skip straight to blocking.
-#   format    - `ruff format --check .`; staged exactly like lint, via the
-#               same scripts/lint_gate.py (`--job format`). Ruff owns
-#               formatting per STYLE.md, so this is what actually checks
-#               nobody hand-formats around it.
-#   typecheck - `mypy src`; staged exactly like lint (`--job typecheck`).
-#               See STYLE.md's "Typing" section for the strict-ish default
-#               and the per-module override shape for JAX/bpy code.
+#   format    - `ruff format --check .`, staged the same way as lint.
+#   typecheck - `mypy src`, staged the same way as lint. See STYLE.md.
 #   test      - runs the repo's test suite. If there isn't one yet, it
 #               still runs (and passes) rather than being skipped outright,
 #               see the "no tests" branch below. The floor is never
@@ -107,13 +102,7 @@ jobs:
   format:
     name: format
     runs-on: ubuntu-latest
-    # STAGED ROLLOUT. Same mechanics as the lint job above: `continue-on-error`
-    # does NOT make this job non-blocking on pull requests -- only leaving
-    # `format` out of required status checks does that. Stage 1 (onboarding):
-    # keep this line, leave `format` out of required contexts. Stage 2: clear
-    # the existing `ruff format` backlog in its own dedicated PR. Stage 3:
-    # delete this line AND add `format` to required contexts, both together.
-    # Managed by `scripts/lint_gate.py --job format`; see docs/onboarding.md.
+    # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job format.
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,8 +120,7 @@ jobs:
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
-    # STAGED ROLLOUT. Same mechanics as the lint job above. Managed by
-    # `scripts/lint_gate.py --job typecheck`; see docs/onboarding.md.
+    # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job typecheck.
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

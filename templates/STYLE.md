@@ -1,13 +1,6 @@
 # The EmergentMatter style guide
 
-This is the org's style guide. It's a `managed` template (see
-`templates/manifest.toml` in `EmergentMatter/actions`): a rule change here
-means editing the template and cutting a tag, and `sync.py` rolls it out.
-A hand-edited copy in your repo is reported by `fleet_status.py`, never
-silently overwritten.
-
-It codifies what the strongest repos in the org already do. Most of this
-should feel familiar if you've read good code here before.
+How to write, test, and document code in EmergentMatter repos.
 
 - [Python style](#python-style)
 - [Naming](#naming)
@@ -21,217 +14,177 @@ should feel familiar if you've read good code here before.
 
 ## Python style
 
-- **`uv` is the only entry point.** `uv sync`, `uv run pytest`, `uv run
-  ruff check .`. No bare `pip`, no `poetry`, no `python -m venv` by hand.
-- **src-layout + hatchling.** `src/<package>/`, not a top-level package
-  directory.
-- **`uv.lock` is committed**, in every repo, never gitignored. CI syncs
-  with `uv sync --locked`, so a stale lockfile fails loudly instead of
-  silently resolving something different than what's checked in.
-- **Ruff owns everything mechanical**: linting and formatting both. Humans
-  don't argue about formatting in review. Every repo carries two files:
-  - `ruff-base.toml` -- managed, the shared ruleset. Don't edit it locally;
-    edit the template in `EmergentMatter/actions` instead.
-  - `ruff.toml` -- seed-once, yours from onboarding. `extend =
-    "ruff-base.toml"` plus whatever this repo needs on top (see the file's
-    own comments for the shape of a per-file ignore).
-  - Line length is 100, everywhere. Target Python is `py313` in the base;
-    a repo on the 3.11 floor (see [Python version
-    policy](#python-version-policy)) overrides `target-version` in its own
-    `ruff.toml`.
-  - Every mechanical reformat commit belongs in `.git-blame-ignore-revs`,
-    so `git blame` still points at the change that mattered.
-  - A catalog or data module with hand-aligned literals opts out per-file
-    with `# fmt: off` / `# fmt: on` around the literal. Never a repo-wide
-    `[format]` override.
-- **`from __future__ import annotations`** at the top of every module.
-  The one documented exception is a Blender `PropertyGroup` module, where
-  the framework itself requires evaluated annotations at class-definition
-  time -- state the reason in a comment at the import, don't just drop it
-  silently.
-- **Lazy imports for heavy or host-bound dependencies** (`jax`, `bpy`,
-  `openvdb`, and similar): import them at the point of use, not at module
-  load time, and raise a clear error that tells the user how to get the
-  dependency if the import fails. Keeps a boot path free of dependencies
-  it doesn't actually need yet, and keeps that testable (a test asserting
-  the boot path stays free of a given import is the reference pattern).
-- **Frozen dataclasses with `__post_init__` validation** are the house
-  schema idiom. Validate at the boundary, and name the class, the field,
-  the expected value, and the actual value in the error message. A new
-  mutable dataclass in schema code needs a stated reason in review.
-- **CLI scripts** follow this repo's own shape: `argparse`, `def
-  main(argv: list[str] | None = None) -> int`, errors printed to stderr
-  with an `error:` prefix, and `return 1` -- never a silent skip on
-  something ambiguous.
+- **Use `uv` only.** `uv sync`, `uv run pytest`, `uv run ruff check .`. No
+  bare `pip`, `poetry`, or `python -m venv`.
+- **Use src-layout + hatchling.** `src/<package>/`, not a top-level
+  package directory.
+- **Commit `uv.lock`.** Never gitignore it. CI syncs with `uv sync
+  --locked`, so a stale lockfile fails loudly.
+- **Ruff owns linting and formatting.** Every repo carries two files:
+  - `ruff-base.toml`: the shared ruleset. Do not edit it. Put local
+    changes in `ruff.toml` instead.
+  - `ruff.toml`: `extend = "ruff-base.toml"` plus this repo's own
+    additions.
+  - Line length is 100. Target Python is `py313`; a repo on the 3.11
+    floor sets `target-version = "py311"` in its own `ruff.toml`.
+  - Put every mechanical reformat commit in `.git-blame-ignore-revs`.
+  - Opt a catalog or data module with hand-aligned literals out per-file
+    with `# fmt: off` / `# fmt: on`. Never override `[format]` for the
+    whole repo.
+- **Add `from __future__ import annotations`** at the top of every
+  module. Exception: a Blender `PropertyGroup` module, which needs
+  evaluated annotations at class-definition time. State the reason in a
+  comment.
+- **Import heavy or host-bound dependencies lazily** (`jax`, `bpy`,
+  `openvdb`, and similar): import at the point of use, not at module load
+  time. Raise a clear error that tells the user how to get the dependency
+  if the import fails.
+- **Use frozen dataclasses with `__post_init__` validation** for schemas.
+  Validate at the boundary. Name the class, the field, the expected
+  value, and the actual value in the error message. State a reason in
+  review for a new mutable dataclass in schema code.
+- **Write CLI scripts as** `argparse`, `def main(argv: list[str] | None =
+  None) -> int`, errors to stderr with an `error:` prefix, `return 1` on
+  anything ambiguous. Never a silent skip.
 
 ## Naming
 
-- **The typed-prefix convention on primitive scalars**: `d_` for `float`,
-  `n_` for `int`, `b_` for `bool`, `s_` for `str`. This is deliberate and
-  applied consistently across the org -- if it's new to you, it exists so
-  a variable's type is visible at every call site without following it
-  back to a definition. It applies to scalars only; a composite value
-  (a vector, a dataclass, a mapping) gets a bare name plus a type
-  annotation instead of a prefix.
-- **Units belong in the name**, not just the docstring, when the value is
-  a scalar accessor: `d_min_wall_mm`, not `d_min_wall`. A caller shouldn't
-  need to open the function to find out what unit a number is in.
-- `SCREAMING_SNAKE` for module-level constants.
-- `_leading_underscore` for private names, and they never appear in
+- **Use the typed-prefix convention on primitive scalars**: `d_` for
+  `float`, `n_` for `int`, `b_` for `bool`, `s_` for `str`. It keeps a
+  variable's type visible at every call site. Applies to scalars only;
+  give a composite value (a vector, a dataclass, a mapping) a bare name
+  plus a type annotation instead.
+- **Put units in the name** for a scalar accessor: `d_min_wall_mm`, not
+  `d_min_wall`.
+- Use `SCREAMING_SNAKE` for module-level constants.
+- Use `_leading_underscore` for private names. Never put them in
   `__all__`.
-- Every public module declares `__all__` explicitly.
-- Exceptions are `PascalCase` and end in `Error`.
+- Declare `__all__` in every public module.
+- End exception names in `Error`, `PascalCase`.
 
 ## Docstrings and comments
 
-Boundary-verbose: rich at module and API boundaries, lean inside function
-bodies. This is a followed convention, not something a linter enforces.
+Write rich docs at module and API boundaries. Keep function bodies lean.
 
-1. **Every module opens with a docstring that says why it exists**, and
-   where it sits relative to the rest of the package. State the rule,
-   then the failure it prevents, then (where it helps) the evidence.
-2. **Every public function or class gets a docstring.** One line when the
-   signature is self-explanatory. Google-style `Args:` / `Returns:` /
-   `Raises:` sections when it isn't. (Google over NumPy: it's the more
-   compact of the two, and matches "verbose enough, not overwhelming.")
-3. **Inline comments explain why** -- invariants, units, coordinate
-   frames, a rejected alternative and the reason it lost -- never what the
-   next line does. If a comment just restates the code, delete it.
-4. **Private helpers get a docstring only when they're non-obvious.** A
+1. **Open every module with a docstring that says why it exists**, and
+   where it sits relative to the rest of the package.
+2. **Give every public function or class a docstring.** One line when
+   the signature is self-explanatory. Google-style `Args:` / `Returns:`
+   / `Raises:` sections when it isn't.
+3. **Write inline comments that explain why**: invariants, units,
+   coordinate frames, a rejected alternative and the reason it lost.
+   Never restate what the next line does. Delete a comment that just
+   restates the code.
+4. **Give private helpers a docstring only when they're non-obvious.** A
    one-line `d_*` property whose name already encodes quantity and unit
    needs nothing further.
 
-What moves out of code entirely:
+Keep out of code:
 
-- **Migration archaeology.** "Moved here from X on date Y", "the first
-  version folded this twice" -- that belongs in the changelog or the
-  commit body, not in a docstring or a loop-body comment that everyone
-  reading the code from now on has to wade through.
-- **No `TODO` / `FIXME` / `HACK` markers.** Unfinished work is a GitHub
-  issue, a `NotImplementedError` with a message explaining what's missing,
-  or an honest "Known Limitations" section in the docs. Not a comment that
-  quietly ships forever.
-- **Every `noqa` carries its rule code and a one-line justification.**
-  `# noqa: E501` with no reason is not acceptable; `# noqa: E501 -- this
-  URL can't be wrapped` is.
+- **Migration history.** Put "moved here from X", "this used to work
+  differently" in the changelog or the commit body, not in a docstring
+  or a loop-body comment.
+- **No `TODO` / `FIXME` / `HACK` markers.** File a GitHub issue, raise
+  `NotImplementedError` with a message, or write a "Known Limitations"
+  section instead.
+- **Give every `noqa` a rule code and a one-line justification.**
+  `# noqa: E501` alone is not acceptable.
 
 ## Typing
 
-- **Every package ships `py.typed`.** Careful annotations are invisible to
-  a consumer without this one-line marker file.
-- **mypy runs in CI.** Strict-ish on structural code
-  (`disallow_untyped_defs`, modern syntax), relaxed per-module for
-  JAX-kernel or `bpy`-bound code via explicit, commented overrides in
-  `[[tool.mypy.overrides]]` -- never a blanket project-wide relaxation.
-  `ignore_missing_imports` is fine for the usual scientific-stack
-  offenders (`jax`, `pyvista`, `trimesh`, `skimage`, `bpy`), stated as an
-  override, not assumed.
-- **`Literal` enums use `typing.get_args()`** for their runtime
-  counterpart, never a hand-copied tuple that can silently drift from the
-  `Literal` it's supposed to mirror.
-- **Multi-value returns crossing a function boundary are a `NamedTuple` or
-  a dataclass**, never a bare positional tuple. A caller unpacking `a, b,
-  c = f()` has no way to tell what broke when the order changes; a
-  `NamedTuple` field does.
+- **Ship `py.typed`** in every package.
+- **Run mypy in CI.** Use `disallow_untyped_defs` and modern syntax by
+  default. Relax per-module for JAX-kernel or `bpy`-bound code with an
+  explicit, commented override in `[[tool.mypy.overrides]]` -- never a
+  blanket project-wide relaxation. Set `ignore_missing_imports` for
+  `jax`, `pyvista`, `trimesh`, `skimage`, `bpy` as needed.
+- **Generate a `Literal`'s runtime counterpart with `typing.get_args()`.**
+  Never hand-copy a tuple that can drift from it.
+- **Return multi-value results as a `NamedTuple` or dataclass.** Never a
+  bare positional tuple.
 
 ## Python version policy
 
-- The org default is `requires-python = ">=3.13"`.
-- A library with **zero runtime dependencies**, or stdlib-only ones, may
-  declare `>=3.11` instead -- but only paired with a CI matrix that
-  actually runs its tests on 3.11. A lower floor claimed without the
-  matrix proving it doesn't count as supported; it's a number in
-  `pyproject.toml` nobody has verified.
+- Default to `requires-python = ">=3.13"`.
+- A library with zero runtime dependencies, or stdlib-only ones, may
+  declare `>=3.11` -- only paired with a CI matrix that runs its tests on
+  3.11.
 
 ## Testing
 
-- **Test names are behavior sentences**:
+- **Name tests as behavior sentences**:
   `test_removed_workflow_path_is_broken_not_merely_stale`, not
-  `test_check_3`. A failing test name should tell you what's wrong before
-  you open the file.
-- **Module-level test functions, no test classes.** A flat `tests/`
-  directory, with files named for the module or the invariant they pin,
-  not for an arbitrary grouping.
-- **Test-module docstrings state the invariant the file pins.** Read the
-  top of the file and know what would have to break for it to matter.
-- **Helpers over fixtures.** Module-level builder functions
+  `test_check_3`.
+- **Write module-level test functions, no test classes.** Use a flat
+  `tests/` directory, with files named for the module or the invariant
+  they pin.
+- **Open every test-module docstring by stating the invariant the file
+  pins.**
+- **Prefer helpers over fixtures.** Use module-level builder functions
   (`_make_header(**overrides)`) plus the built-in `tmp_path` and
-  `monkeypatch` cover almost everything. A `conftest.py` appears only when
-  data is genuinely shared across files, with a comment explaining why --
-  not as a default home for setup code.
-- **Parametrize once cases exceed about three**, with `ids=` so a failure
-  reads as a case name, not `test_foo[2]`.
-- **Negative tests pin the message**: `pytest.raises(SomeError,
-  match="...")` on the meaningful fragment, not just the exception type.
-- **Numeric asserts use `pytest.approx` with an explicit, justified
-  tolerance.** Suite-wide tolerances get a named constant with a comment
-  explaining what it absorbs (`RATE_TOL = 1.02  # margin absorbs sampling
-  luck, not real error`). Never a bare `==` on a computed float.
-- **Every public API gets a happy-path test and an edge-case test. Every
-  bugfix lands with a regression test.** A gate test (provenance, units,
-  a cross-file contract) is first-class, and named as a gate so its
-  purpose is obvious from the test list.
-- **Coverage is reported, not gated**, by default. A repo may opt into a
-  coverage gate once it's ready; that's a per-repo decision, not an org
-  default.
-- **Machine-specific paths come from environment variables with a loud
-  skip** when the variable isn't set, never a hardcoded absolute path that
-  only works on one contributor's machine.
+  `monkeypatch`. Add a `conftest.py` only when data is genuinely shared
+  across files, with a comment explaining why.
+- **Parametrize once cases exceed about three**, with `ids=`.
+- **Pin the message in negative tests**: `pytest.raises(SomeError,
+  match="...")`.
+- **Use `pytest.approx` with an explicit, justified tolerance** for
+  numeric asserts. Name suite-wide tolerances as constants
+  (`RATE_TOL = 1.02  # margin absorbs sampling luck, not real error`).
+  Never use bare `==` on a computed float.
+- **Write a happy-path test and an edge-case test for every public API.
+  Add a regression test with every bugfix.** Name gate tests
+  (provenance, units, a cross-file contract) as gates.
+- **Report coverage; don't gate on it by default.** A repo may opt into
+  a coverage gate.
+- **Read machine-specific paths from environment variables, with a loud
+  skip when unset.** Never hardcode an absolute path.
 
 ## TypeScript
 
 For repos with a TypeScript surface:
 
-- **`tsconfig` is strict, plus**: `noUncheckedIndexedAccess`,
+- **Set `tsconfig` to strict, plus**: `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `noImplicitOverride`,
   `verbatimModuleSyntax`.
-- **ESLint flat config plus Prettier.** `no-explicit-any` is an error, not
-  a warning. No empty `catch` blocks.
-- **Function components, named exports only.**
-- **Pure logic lives in React-free modules**, so it can be unit-tested
+- **Use ESLint flat config plus Prettier.** Set `no-explicit-any` to
+  error. No empty `catch` blocks.
+- **Write function components with named exports only.**
+- **Keep pure logic in React-free modules**, so it's unit-testable
   without a DOM.
 
 ## Documentation
 
-- **README needs a working Install section and a copy-pasteable
-  quickstart that actually runs**, from a clean clone, not from a
-  contributor's already-configured machine. Version numbers, test counts,
-  and layout trees in a README must match reality at release time.
-- **`CLAUDE.md` holds the stable guide only**: build/run commands,
-  architecture, naming, constraints. Dated journals, roadmaps, and
-  sign-off notes go to GitHub issues or `docs/journal/`, not into the file
-  every session reads on every task.
-- **ADRs** live at `docs/adr/NNNN-kebab-title.md`, with `Status`,
+- **Give the README a working Install section and a copy-pasteable
+  quickstart that runs from a clean clone.** Keep version numbers, test
+  counts, and layout trees accurate at release time.
+- **Keep `CLAUDE.md` to the stable guide**: build/run commands,
+  architecture, naming, constraints. Put dated journals, roadmaps, and
+  sign-off notes in GitHub issues or `docs/journal/`.
+- **Write ADRs** at `docs/adr/NNNN-kebab-title.md`, with `Status`,
   `Context`, `Decision`, and `Consequences` sections.
 
 ## Open-source hygiene
 
-A checklist to run before a repo goes public, or as part of a PR review on
-one that already is:
+Checklist before a repo goes public, or during PR review on one that
+already is:
 
-- **No personal names as decision provenance** in shipped source or docs.
-  "Alex's working figure" becomes an institutional source string plus a
-  dated entry in a private decision log -- the substance stays, the name
-  goes.
-- **No absolute personal paths** (`/Users/someone/...`). Derive the path
-  from `__file__`, or read it from an environment variable with a loud
-  skip when it's unset.
-- **No private-repo references presented as resolvable**: a relative link
-  to a sibling repo nobody outside the org can open, a "see
-  internal-repo/path/to/file.py" citation, a line-number reference into a
-  repo that isn't public. Describe the pattern in place instead, or link
-  a public doc.
-- **No internal tracker or doc citations** in user-facing strings: an
-  internal ticket ID in an error message, a path into an internal wiki in
-  a data file. Use a public issue, an in-repo doc, or plain prose instead.
-- **No internal process artifacts**: agent-facing journals, "note to
+- **Never name a person as decision provenance** in shipped source or
+  docs. Use an institutional source string plus a dated entry in a
+  private decision log.
+- **Never hardcode an absolute personal path.** Derive it from
+  `__file__`, or read an environment variable with a loud skip when it's
+  unset.
+- **Never reference a private repo as resolvable.** Describe the pattern
+  in place, or link a public doc.
+- **Never cite an internal tracker or doc** in a user-facing string. Use
+  a public issue, an in-repo doc, or plain prose.
+- **Remove internal process artifacts**: agent-facing journals, "note to
   future me" comments, bootstrap prompt transcripts. Move them to
   `docs/history/` or delete them.
-- **A `.mailmap`** normalizing any laptop-hostname commit emails, added
+- **Add a `.mailmap`** normalizing any laptop-hostname commit emails
   before history goes public.
 - **Complete `[project]` metadata**: institutional `authors`, `urls`,
-  `readme`, and `classifiers`. Fix anything that reads like a personal
-  signature rather than a project attribution.
-- **Cross-repo installs work from a public clone.** A sibling dependency
-  pinned as a local path (`../other-repo`) is a release blocker until it's
-  published to an index or a wheelhouse.
+  `readme`, `classifiers`.
+- **Make cross-repo installs work from a public clone.** Publish a
+  sibling dependency pinned as a local path (`../other-repo`) to an
+  index or a wheelhouse before the repo goes public.

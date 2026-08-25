@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """Turn a consuming repo's staged-rollout gate on or off, or report its state.
 
-Started as lint-only; now shared by three jobs staged the same way --
-`lint`, `format`, and `typecheck` -- since all three roll out over an
-established codebase the same way and would otherwise triple this file.
-Pass `--job` to pick which one; it defaults to `lint` for backward
-compatibility with every existing invocation.
+Manages `lint`, `format`, or `typecheck` via `--job` (default: `lint`).
 
 The gate has TWO halves that must agree, and they live in different places:
 
@@ -54,9 +50,7 @@ CI_FILE = ".github/workflows/ci.yml"
 LINT_CONTEXT = "lint"
 JOBS = ("lint", "format", "typecheck")
 
-# The command that proves a job's backlog is clean, keyed by job. Only
-# meaningful for `on`, which refuses to enforce over existing findings (see
-# lint_backlog_is_clean below, kept generic under the same name).
+# The command that proves a job's backlog is clean, keyed by job.
 BACKLOG_CHECK_CMD: dict[str, list[str]] = {
     "lint": ["uv", "run", "ruff", "check", "."],
     "format": ["uv", "run", "ruff", "format", "--check", "."],
@@ -82,12 +76,7 @@ def _job_label(job: str) -> str:
 
 
 def on_comment(job: str = "lint") -> str:
-    """The comment left behind once `job` is enforced (continue-on-error removed).
-
-    `lint` keeps the original, flag-free wording so every existing repo's
-    on/off round trip produces byte-identical output to before this
-    generalised; `format`/`typecheck` point at the `--job` flag they need.
-    """
+    """The comment left behind once `job` is enforced (continue-on-error removed)."""
     off_hint = "off" if job == "lint" else f"--job {job} off"
     return (
         f"    # {_job_label(job)} is ENFORCED: this job has no continue-on-error, and `{job}` is\n"
@@ -96,8 +85,7 @@ def on_comment(job: str = "lint") -> str:
     )
 
 
-# Backward-compatible constant: the `lint` job's comment, unchanged from
-# before this file learned about `format`/`typecheck`.
+# The lint job's comment, byte-for-byte unchanged.
 ON_COMMENT = on_comment("lint")
 
 
@@ -113,8 +101,7 @@ def find_lint_job_block(text: str, job: str = "lint") -> tuple[int, int]:
 
     Text-based on purpose: ci.yml carries long explanatory comments that a
     YAML round-trip would silently drop, and this repo is stdlib-only so
-    there is no ruamel available to preserve them. `job` defaults to `lint`
-    so every pre-existing caller keeps working unchanged.
+    there is no ruamel available to preserve them.
     """
     lines = text.split("\n")
     start = None
@@ -403,10 +390,7 @@ def cmd_toggle(args: argparse.Namespace, *, turn_on: bool) -> int:
 
 
 def default_off_comment(job: str = "lint") -> str:
-    """The comment `off` restores for `job`, explaining the staged rollout.
-
-    `lint` reproduces the original wording byte-for-byte -- see DEFAULT_OFF_COMMENT.
-    """
+    """The comment `off` restores for `job`, explaining the staged rollout."""
     return (
         f"    # STAGED ROLLOUT. `continue-on-error` does NOT make {job} non-blocking\n"
         f"    # on pull requests -- only leaving `{job}` out of the required status\n"
@@ -417,8 +401,7 @@ def default_off_comment(job: str = "lint") -> str:
     )
 
 
-# Backward-compatible constant: the `lint` job's off-comment, unchanged from
-# before this file learned about `format`/`typecheck`.
+# The lint job's off-comment, byte-for-byte unchanged.
 DEFAULT_OFF_COMMENT = default_off_comment("lint")
 
 

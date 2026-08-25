@@ -64,23 +64,13 @@ from typing import TYPE_CHECKING
 ACTIONS_REPO = Path(__file__).resolve().parent.parent
 
 if TYPE_CHECKING:
-    # This repo ships no installed package (see CLAUDE.md: scripts/ is
-    # stdlib-only, run in place, never `pip install`-ed), so a plain
-    # `import onboard` has nothing to resolve to at runtime -- hence the
-    # importlib.util dynamic load below, which mypy can't see through on
-    # its own. This branch is never taken at runtime (TYPE_CHECKING is
-    # always False there); it exists only so mypy resolves `onboard.*`
-    # against the real module instead of an opaque ModuleType.
+    # Never runs; gives mypy the real module for onboard.* attribute checks.
     import onboard
 else:
     _spec = importlib.util.spec_from_file_location(
         "onboard", Path(__file__).resolve().parent / "onboard.py"
     )
-    # Both narrow a real path on disk to a concrete ModuleSpec/loader;
-    # spec_from_file_location only returns None for an import kind this
-    # isn't (namespace packages, frozen/built-in modules), never a plain
-    # file path.
-    assert _spec is not None and _spec.loader is not None
+    assert _spec is not None and _spec.loader is not None  # always true for a real file path
     onboard = importlib.util.module_from_spec(_spec)
     sys.modules["onboard"] = onboard
     _spec.loader.exec_module(onboard)
