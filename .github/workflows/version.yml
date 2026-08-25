@@ -541,15 +541,17 @@ jobs:
           # that cannot apply to an automated PR: there is no linked issue,
           # and the checklist asks the reviewer to check the release rather
           # than asking the author to check their own work.
+          # Each paragraph is ONE long line on purpose. GitHub renders issue
+          # and PR bodies as GitHub Flavored Markdown, where a single newline
+          # is a hard line break rather than a paragraph continuation, so
+          # hard-wrapped prose renders as a column of short broken lines.
+          # Wrap these lines and the body looks broken in the browser.
           body: |
             ## What changed and why
 
-            Version bump to `v${{ steps.bump.outputs.next }}`, computed from
-            the ${{ steps.bump.outputs.count }} pending changelog note(s).
+            Version bump to `v${{ steps.bump.outputs.next }}`, computed from the ${{ steps.bump.outputs.count }} pending changelog note(s).
 
-            Merging this is the release: it pushes tag
-            `v${{ steps.bump.outputs.next }}` and, in that same run, builds
-            the wheel/sdist and creates the GitHub Release.
+            Merging this is the release: it pushes tag `v${{ steps.bump.outputs.next }}` and, in that same run, builds the wheel/sdist and creates the GitHub Release.
 
             ### In this release
 
@@ -557,14 +559,9 @@ jobs:
 
             ## How was this tested?
 
-            Every change listed above was gated by the checks on `main`
-            before this PR was drafted, which is where the testing happens.
-            This PR itself adds no code: only the version bump, the
-            `CHANGELOG.md` update, the consumed note deletions, and the
-            refreshed `uv.lock`.
+            Every change listed above was gated by the checks on `main` before this PR was drafted, which is where the testing happens. This PR itself adds no code: only the version bump, the `CHANGELOG.md` update, the consumed note deletions, and the refreshed `uv.lock`.
 
-            If the checks below show as not run, close this PR and
-            immediately reopen it. See `CONTRIBUTING.md` for why.
+            If the checks below show as not run, close this PR and immediately reopen it. See `CONTRIBUTING.md` for why.
 
             ## Checklist
 
