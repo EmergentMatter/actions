@@ -348,6 +348,62 @@ def test_stamp_status_helper():
     assert fleet_status._stamp_status("v9.9.9", ALL_TAGS) is None
 
 
+# --------------------------------------------------------------- security
+
+SECURITY_TEMPLATE = (REPO_ROOT / "templates" / "SECURITY.md").read_text()
+UNRELATED_SECURITY_MD = "# Security Policy\n\nEmail security@example.com.\n"
+
+
+def test_marker_matches_the_shipped_policy():
+    """SECURITY_PVR_MARKER anchors on the literal button label templates/SECURITY.md
+    tells a researcher to click. If that file gets reworded and stops containing the
+    marker verbatim, check_security_reporting() returns [] for every repo -- silently.
+    Nothing else would go red. This is the tripwire: reword the policy without updating
+    SECURITY_PVR_MARKER to match, and this test catches it instead of the check quietly
+    turning itself off."""
+    assert fleet_status.SECURITY_PVR_MARKER in SECURITY_TEMPLATE
+
+
+def test_public_repo_with_disabled_reporting_is_flagged():
+    """The exact failure mode this check exists for: the policy promises a button
+    the repo doesn't have."""
+    findings = fleet_status.check_security_reporting(SECURITY_TEMPLATE, "disabled")
+    assert severities(findings, "security") == ["warn"]
+    assert messages(findings, "security") == (
+        "SECURITY.md documents private vulnerability reporting but it is "
+        "disabled on this repo; enable it in Settings or re-run onboard.py"
+    )
+
+
+def test_public_repo_with_enabled_reporting_is_clean():
+    assert fleet_status.check_security_reporting(SECURITY_TEMPLATE, "enabled") == []
+
+
+def test_private_repo_is_never_flagged_regardless_of_policy_text():
+    """Private repos can't have the feature at all -- not-applicable, not a finding,
+    even though the text and the "disabled"-shaped API state would otherwise match."""
+    assert fleet_status.check_security_reporting(SECURITY_TEMPLATE, "not-applicable") == []
+
+
+def test_repo_with_no_security_md_is_never_flagged():
+    assert fleet_status.check_security_reporting(None, "disabled") == []
+
+
+def test_security_md_that_doesnt_promise_the_button_is_never_flagged():
+    """A different SECURITY.md (e.g. an email-based policy) makes no promise about
+    the Security tab, so a disabled setting there isn't a broken promise."""
+    assert fleet_status.check_security_reporting(UNRELATED_SECURITY_MD, "disabled") == []
+
+
+def test_ambiguous_api_response_is_never_read_as_disabled():
+    """A 404 covers private/no-access/unavailable alike -- guessing "disabled" from
+    it is exactly the failure mode this whole check exists to avoid."""
+    findings = fleet_status.check_security_reporting(SECURITY_TEMPLATE, "unknown")
+    assert severities(findings, "security") == ["info"]
+    assert "warn" not in [f.severity for f in findings]
+    assert "could not determine" in messages(findings, "security")
+
+
 # ------------------------------------------------------------- roll-up logic
 
 

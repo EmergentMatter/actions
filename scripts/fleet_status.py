@@ -26,6 +26,10 @@ Checks, per repo:
               repos legitimately customise those)
   stamp       the `templates_version` provenance stamp against this repo's
               newest release tag
+  security    if SECURITY.md documents private vulnerability reporting,
+              the repo actually has it turned on -- a per-repo setting
+              nothing inherits, so a public repo can carry a policy
+              promising a route it doesn't have (private repos: N/A)
 
 Reads everything over the API -- no clones. Stdlib only; GitHub access
 shells out to `gh`.
@@ -82,6 +86,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = REPO_ROOT / "templates"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
+SECURITY_FILE = "SECURITY.md"
+
+# The literal button label templates/SECURITY.md tells a researcher to click.
+# Its presence is how we know the policy is *promising* the private-reporting
+# route, as opposed to a repo with some other SECURITY.md that never does.
+SECURITY_PVR_MARKER = "Report a vulnerability"
 
 REMOVED_WORKFLOW_PATH = "actions/.github/workflows/changelog-check.yml@"
 COMPOSITE_ACTION_PATH = "actions/changelog-check@"
@@ -172,6 +182,50 @@ def check_naming(text: str | None) -> list[Finding]:
             )
         ]
     return []
+
+
+def check_security_reporting(security_text: str | None, pvr_status: str) -> list[Finding]:
+    """SECURITY.md's promised route only exists if the repo has it turned on.
+
+    templates/SECURITY.md tells a researcher to open the Security tab and
+    click "Report a vulnerability". That button only appears when private
+    vulnerability reporting is enabled -- a per-repo setting nothing
+    inherits (verified live: on for this repo, off for every other public
+    repo in the org, no org default enabling it for new ones). A repo can
+    carry a policy promising a route it doesn't have; a researcher who
+    follows it and finds no button either gives up or discloses publicly.
+
+    `pvr_status` is one of:
+      "enabled"         -- the button exists; nothing to report
+      "disabled"        -- the promise is broken; warn
+      "not-applicable"  -- private repo; the feature can't exist there, so
+                           this is never a finding regardless of the text
+      "unknown"         -- the API response was ambiguous (private repo,
+                           no access, and feature-unavailable all look like
+                           a 404). Never read as "disabled" -- that would be
+                           exactly the guess this check exists to replace.
+    """
+    if security_text is None or SECURITY_PVR_MARKER not in security_text:
+        return []
+    if pvr_status in ("enabled", "not-applicable"):
+        return []
+    if pvr_status == "unknown":
+        return [
+            Finding(
+                "security",
+                "info",
+                "could not determine whether private vulnerability reporting is "
+                "enabled (ambiguous response from the API) -- SECURITY.md documents it",
+            )
+        ]
+    return [
+        Finding(
+            "security",
+            "warn",
+            "SECURITY.md documents private vulnerability reporting but it is "
+            "disabled on this repo; enable it in Settings or re-run onboard.py",
+        )
+    ]
 
 
 def check_workflow_call(text: str | None) -> list[Finding]:
@@ -363,6 +417,8 @@ def evaluate(
     dest_texts: dict[str, str | None] | None = None,
     stamp: str | None = None,
     tags: list[str] | None = None,
+    security_text: str | None = None,
+    pvr_status: str = "unknown",
 ) -> list[Finding]:
     manifest = manifest or []
     dest_texts = dest_texts or {}
@@ -375,6 +431,7 @@ def evaluate(
         *check_verify_wheel(ci_text),
         *check_templates(manifest, dest_texts, _stamp_status(stamp, tags)),
         *check_templates_version(stamp, tags),
+        *check_security_reporting(security_text, pvr_status),
         *check_pins(ci_text),
         *check_naming(ci_text),
     ]
@@ -423,6 +480,34 @@ def fetch_local_tags() -> list[str]:
     return [line.strip() for line in p.stdout.splitlines() if line.strip()]
 
 
+def fetch_private_vuln_reporting(repo: str) -> str:
+    """"enabled" | "disabled" | "not-applicable" (private repo) | "unknown".
+
+    Visibility is checked FIRST, deliberately: the reporting endpoint 404s
+    for a private repo, for no access, and for "feature unavailable" alike,
+    so a bare 404 from it can't be told apart from "disabled". Reading any
+    of those as "disabled" would emit a warn accusing a repo that either
+    can't have the feature or that we simply couldn't inspect.
+    """
+    code, out, _ = gh(["api", f"repos/{repo}", "-q", ".private"])
+    if code != 0:
+        return "unknown"
+    private = out.strip()
+    if private == "true":
+        return "not-applicable"
+    if private != "false":
+        return "unknown"
+    code, out, _ = gh(["api", f"repos/{repo}/private-vulnerability-reporting", "-q", ".enabled"])
+    if code != 0:
+        return "unknown"
+    enabled = out.strip()
+    if enabled == "true":
+        return "enabled"
+    if enabled == "false":
+        return "disabled"
+    return "unknown"
+
+
 def fetch_contexts(repo: str) -> list[str] | None:
     code, out, _ = gh(["api", f"repos/{repo}", "-q", ".default_branch"])
     if code != 0:
@@ -459,6 +544,14 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         }
         stamp = fetch_stamp(repo)
         contexts = fetch_contexts(repo)
+        security = fetch_file(repo, SECURITY_FILE)
+        # Only spend the two extra `gh api` calls when there's actually a
+        # promise to verify -- most repos won't have SECURITY.md yet.
+        pvr_status = (
+            fetch_private_vuln_reporting(repo)
+            if security is not None and SECURITY_PVR_MARKER in security
+            else "unknown"
+        )
         return RepoReport(
             repo,
             evaluate(
@@ -469,6 +562,8 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
                 dest_texts=dest_texts,
                 stamp=stamp,
                 tags=tags,
+                security_text=security,
+                pvr_status=pvr_status,
             ),
         )
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep
