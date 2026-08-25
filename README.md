@@ -97,7 +97,7 @@ it lands, often not the same name as the source) and a `policy`:
 | `PULL_REQUEST_TEMPLATE.md` | `.github/PULL_REQUEST_TEMPLATE.md` | What changed and why, linked issue, test plan, checklist | managed |
 | `ISSUE_TEMPLATE/bug_report.yml` | `.github/ISSUE_TEMPLATE/bug_report.yml` | Structured bug report form | managed |
 | `ISSUE_TEMPLATE/feature_request.yml` | `.github/ISSUE_TEMPLATE/feature_request.yml` | Structured feature request form | managed |
-| `ISSUE_TEMPLATE/config.yml` | `.github/ISSUE_TEMPLATE/config.yml` | Disables blank issues; links to Discussions and the security policy | managed |
+| `ISSUE_TEMPLATE/config.yml` | `.github/ISSUE_TEMPLATE/config.yml` | Disables blank issues; links to emergent-matter-sdm's Discussions and the security policy | managed |
 
 ## Architecture
 
