@@ -137,9 +137,7 @@ def test_proposal_is_candidates_not_a_decision(tmp_path):
     """
     pkg = tmp_path / "p"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text(
-        '__version__ = "2.0.0"\n__schema_version__ = "2.0.0"\n'
-    )
+    (pkg / "__init__.py").write_text('__version__ = "2.0.0"\n__schema_version__ = "2.0.0"\n')
     found = onboard.propose_version_files(tmp_path, "2.0.0")
     assert len(found) == 2, "both surfaced; the human picks"
 
@@ -243,22 +241,30 @@ def test_load_manifest_rejects_an_unknown_policy(tmp_path):
         onboard.load_manifest(manifest)
 
 
-def test_real_manifest_declares_ci_as_the_only_seed_once_entry():
+def test_real_manifest_declares_only_ci_and_ruff_as_seed_once():
     """Guards the shape docs/onboarding.md and CONTRACT.md assume: every
-    template is kept current by sync.py except ci.yml, which a repo owns
-    outright once it exists."""
+    template is kept current by sync.py except ci.yml (a repo owns its CI
+    outright once it exists) and ruff.toml (a repo's local additions on
+    top of the shared ruff-base.toml, per STYLE.md's Python style section)."""
     entries = onboard.load_manifest()
     seed_once = [e for e in entries if e.policy == "seed-once"]
-    assert [e.dest for e in seed_once] == [onboard.CI_DEST]
+    assert {e.dest for e in seed_once} == {onboard.CI_DEST, "ruff.toml"}
 
 
 def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files():
     """Every entry either already ships a template, or is one of the new
     repo-health files still being written alongside this change."""
     known_pending = {
-        "SECURITY.md", "SUPPORT.md", "CODE_OF_CONDUCT.md", "NOTICE", "LICENSE",
-        "CODEOWNERS", "dependabot.yml", "PULL_REQUEST_TEMPLATE.md",
-        "ISSUE_TEMPLATE/bug_report.yml", "ISSUE_TEMPLATE/feature_request.yml",
+        "SECURITY.md",
+        "SUPPORT.md",
+        "CODE_OF_CONDUCT.md",
+        "NOTICE",
+        "LICENSE",
+        "CODEOWNERS",
+        "dependabot.yml",
+        "PULL_REQUEST_TEMPLATE.md",
+        "ISSUE_TEMPLATE/bug_report.yml",
+        "ISSUE_TEMPLATE/feature_request.yml",
         "ISSUE_TEMPLATE/config.yml",
     }
     for entry in onboard.load_manifest():

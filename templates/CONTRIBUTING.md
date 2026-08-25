@@ -1,9 +1,14 @@
 # Contributing
 
-This repo uses release control: every PR that changes behavior adds a small
-note describing the change, and those notes become the next release. This
-file covers the part you actually do as a contributor. For how the release
-side works, see [EmergentMatter/actions](https://github.com/EmergentMatter/actions)'s
+Read [STYLE.md](STYLE.md) before writing code. It's the org's style guide:
+Python conventions, naming, docstrings, typing, testing, and the
+open-source hygiene checklist, all in one place.
+
+This repo also uses release control: every PR that changes behavior adds a
+small note describing the change, and those notes become the next release.
+This file covers the part you actually do as a contributor. For how the
+release side works, see
+[EmergentMatter/actions](https://github.com/EmergentMatter/actions)'s
 `docs/onboarding.md`.
 
 ## Add a changelog note

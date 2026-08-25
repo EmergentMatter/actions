@@ -1,0 +1,24 @@
+# ruff-base.toml -- managed template, synced by actions/sync.py. Never edit
+# this file directly in a consuming repo; local additions go in ruff.toml
+# (seed-once, `extend`s this file). See STYLE.md's "Python style" section
+# for the reasoning behind each choice below.
+#
+# This supersedes the older "pin ruff==X.Y.Z and rely on its shipped
+# defaults" pattern some repos carried because no explicit ruleset existed.
+# With a shared ruleset here, the pin is no longer load-bearing: the dev
+# group can float to a floor (`ruff>=0.16`) once a repo picks this up.
+
+line-length = 100
+
+# Substrates on the Python 3.11 floor (see STYLE.md's "Python version
+# policy") set target-version = "py311" in their own ruff.toml instead of
+# editing this file -- extend + override, not a fork of the base.
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PTH"]
+
+[format]
+# Adopted fleet-wide. A catalog/data module with hand-aligned literals may
+# opt out per-file with a `# fmt: off` / `# fmt: on` block around the
+# literal, never with a repo-wide [format] override in ruff.toml.
