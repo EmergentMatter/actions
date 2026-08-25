@@ -12,8 +12,15 @@ in the Q&A category.
 
 ## Bugs and feature requests
 
-Open an issue on the repository it affects, using the issue forms
-there.
+Open an issue on the repository the problem affects:
+
+1. Go to that repository on GitHub.
+2. Open the **Issues** tab, then click **New issue**.
+3. Choose **Bug report** or **Feature request** and fill in the form.
+
+The forms ask for what someone needs in order to act on the report.
+Only a few fields are required; the rest help, but leave them blank if
+you don't have them.
 
 ## What is not supported
 
