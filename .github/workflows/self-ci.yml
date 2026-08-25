@@ -5,8 +5,9 @@ name: Self CI
 # commands. Config lives in this repo's own pyproject.toml, not duplicated
 # here as CLI flags.
 #
-# format/typecheck are enforced here, unlike the staged versions in
-# templates/ci.yml, because this repo has no backlog to stage around.
+# format/typecheck run without continue-on-error, since this repo has no
+# backlog to stage around. Making them required checks is a separate step,
+# done at branch-protection adoption time.
 
 on:
   pull_request:
