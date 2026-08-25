@@ -167,6 +167,15 @@ because a repo's CI and its local ruff additions are legitimately its
 own. `scripts/fleet_status.py` makes managed-file drift visible; run it
 after onboarding, and periodically after that.
 
+One manual step goes with the copies: add a short "Code standard"
+section to your repo's `CLAUDE.md` pointing at `STYLE.md` and
+`.github/PULL_REQUEST_TEMPLATE.md`. Agents read `CLAUDE.md` first, so a
+standard that is not named there gets rediscovered from scratch every
+session. Two sentences is enough:
+
+> Follow STYLE.md at the repo root for all code, comments, tests, and
+> docs. Pull request descriptions follow .github/PULL_REQUEST_TEMPLATE.md.
+
 `onboard.py` also seeds a set of standard repo-hygiene files:
 `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `NOTICE`,
 `CODEOWNERS`, `dependabot.yml`, a PR template, and issue templates. They
