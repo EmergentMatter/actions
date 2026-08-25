@@ -72,7 +72,7 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   touched again. `ci.yml` is the only `seed-once` entry, because repos
   legitimately customise their own CI. Read by `onboard.py`, `sync.py` and
   `fleet_status.py`, so adding a template is one entry in one file.
-- `templates/` — the files themselves: the three workflow stubs,
+- `templates/` — the files themselves: the workflow stubs,
   `changeset.py` (→ `scripts/changeset.py` at the consumer's root,
   **not** inside their package), `CONTRIBUTING.md`, `ci.yml`,
   `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`

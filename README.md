@@ -164,7 +164,7 @@ meant to be copied verbatim into the consuming repo.
 ## Links
 
 - [`docs/onboarding.md`](docs/onboarding.md): how to onboard a repo, start to finish
-- [`docs/tooling.md`](docs/tooling.md): the seven maintenance scripts, in full
+- [`docs/tooling.md`](docs/tooling.md): the maintenance scripts, in full
 - [`templates/manifest.toml`](templates/manifest.toml): the source of truth for what every repo receives
 - [`templates/CONTRIBUTING.md`](templates/CONTRIBUTING.md): the contributor-facing half, copied into consuming repos
 - [`templates/pyproject-snippet.toml`](templates/pyproject-snippet.toml): the copy-pasteable config block
