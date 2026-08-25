@@ -135,8 +135,11 @@ template exists for repos starting from nothing.
 | 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or, if HEAD is the release commit that PR's merge just created, tags the release and builds + publishes it, all in the same run. |
 | 3 | `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
 | 4 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
-| 5 | `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat. |
-| 6 | `.github/workflows/ci.yml` | Your repo's own checks. **Only copy this if you don't already have CI.** See "Before you start". Unlike 1–3 this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
+| 5 | `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
+| 6 | `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike 1–3 this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
+| 7 | `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
+| 8 | `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
+| 9 | `ruff.toml` | Three lines (`extend = "ruff-base.toml"`) plus room for this repo's own per-file additions. Yours from the moment it's written -- see "Before you start" for the parallel with `ci.yml`. |
 
 Files 1–3 are thin stubs pinned to `@v1`, copied from `EmergentMatter/actions`'s
 `templates/` directory into your repo's `.github/workflows/`. Files 2 and 3
@@ -150,13 +153,21 @@ changes. File 5 is a direct copy of
 root, unmodified. It's generic, not repo-specific. File 4 needs its own
 explanation, below.
 
-**Files 4, 5 and 6 are copies, not references, and that distinction has a
+**Files 4–9 are copies, not references, and that distinction has a
 cost worth understanding up front.** Files 1–3 point at code hosted here,
 so a fix lands in every consuming repo the moment `v1` moves, and nobody
-has to do anything. Files 4–6 are yours from the moment you copy them: an improvement
-to `templates/ci.yml` will never reach a repo that onboarded last month.
-`scripts/fleet_status.py` in this repo exists to make that drift visible
-rather than silent; run it after onboarding, and periodically after that.
+has to do anything. Files 4–9 are yours from the moment you copy them: an
+improvement to `templates/ci.yml` will never reach a repo that onboarded
+last month. Files 4, 5, 7, and 8 (`changeset.py`, `CONTRIBUTING.md`,
+`STYLE.md`, `ruff-base.toml`) are `managed` in
+[`templates/manifest.toml`](../templates/manifest.toml), so `scripts/sync.py`
+*can* pull a later change into them -- but only when someone runs it; it's
+not automatic the way 1–3 are. Files 6 and 9 (`ci.yml`, `ruff.toml`) are
+`seed-once`: written if absent, then never touched again by either
+`onboard.py` or `sync.py`, because a repo's CI and its local lint
+overrides are legitimately its own. `scripts/fleet_status.py` in this repo
+exists to make managed-file drift visible rather than silent; run it after
+onboarding, and periodically after that.
 
 `onboard.py` also seeds a set of standard repo-hygiene files:
 `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `NOTICE`,
@@ -686,53 +697,62 @@ protection for `main` (repo Settings -> Branches) with:
 All of them are bare job ids: the CI ones are your `ci.yml`'s job names,
 and `changelog` is the job id in `changelog-check.yml`'s stub.
 
-**`lint` is deliberately absent**, even though `templates/ci.yml` ships a
-lint job. It gets added later, in step 3 of the staged rollout below, not
-now. If you brought your own CI and its linting already passes, you can
-skip straight to that step; the staging exists for repos turning a linter
-on over an established codebase, not for repos that are already clean.
+**`lint`, `format`, and `typecheck` are all deliberately absent**, even
+though `templates/ci.yml` ships all three jobs. They get added later, in
+step 3 of the staged rollout below, not now. If you brought your own CI
+and it's already clean on all three, you can skip straight to that step;
+the staging exists for repos turning a check on over an established
+codebase, not for repos that are already clean.
 
-### Staging the lint rollout
+### Staging the lint / format / typecheck rollout
 
-`templates/ci.yml` ships the lint job with `continue-on-error: true`. That
-line is often misread as "lint can't block anything yet." It cannot do
-that, and the difference is worth being exact about, because it decides
-whether the rollout works:
+`templates/ci.yml` ships all three jobs with `continue-on-error: true`.
+That line is often misread as "the job can't block anything yet." It
+cannot do that, and the difference is worth being exact about, because it
+decides whether the rollout works:
 
-| Level | On a lint failure |
+| Level | On a failure |
 |---|---|
 | Job conclusion | `failure` |
 | Workflow **run** conclusion | `success`: the only thing `continue-on-error` changes |
 | **Check run** conclusion | `failure`: what branch protection matches |
 
-The check still fails. So adding `lint` to required contexts blocks PRs
-immediately, `continue-on-error` or not. That's exactly the pile-of-
-unrelated-findings problem the staging exists to avoid.
+The check still fails. So adding the job's name to required contexts
+blocks PRs immediately, `continue-on-error` or not. That's exactly the
+pile-of-unrelated-findings problem the staging exists to avoid.
 
-What that line actually buys is that a lint failure doesn't fail the whole
-run, so it doesn't take down `version.yml`'s `needs: ci` and stall a
-release while the backlog is still being cleared.
+What that line actually buys is that a failure doesn't fail the whole run,
+so it doesn't take down `version.yml`'s `needs: ci` and stall a release
+while the backlog is still being cleared.
 
-So the two levers move together:
+So the two levers move together, for each of the three jobs independently
+(a repo can enforce `lint` while `format`/`typecheck` are still advisory):
 
-1. **Onboard.** Keep `continue-on-error`, require only `test` / `build` /
-   `changelog`. Lint runs and is visible to anyone who looks, but gates
-   nothing.
-2. **Clear the backlog.** One dedicated PR that fixes the existing
-   findings and does nothing else, so the diff is reviewable as "lint
-   fixes" rather than tangled into a feature change.
-3. **Enforce.** Delete `continue-on-error` from the lint job *and* add
-   `lint` to the required contexts. Both, in the same window.
+1. **Onboard.** Keep `continue-on-error` on all three, require only
+   `test` / `build` / `changelog`. They run and are visible to anyone who
+   looks, but gate nothing.
+2. **Clear the backlog.** One dedicated PR per job that fixes the
+   existing findings and does nothing else, so the diff is reviewable as
+   "lint fixes" (or "format fixes", or "typecheck fixes") rather than
+   tangled into a feature change.
+3. **Enforce.** Delete `continue-on-error` from that job *and* add its
+   name to the required contexts. Both, in the same window.
 
 #### Don't do this by hand
 
-`scripts/lint_gate.py` moves both halves together, so the two can't drift:
+`scripts/lint_gate.py` moves both halves together, so the two can't
+drift. It defaults to the `lint` job; pass `--job format` or
+`--job typecheck` for the other two:
 
 ```bash
 # from the target repo's root (or pass --repo-path)
 python3 /path/to/actions/scripts/lint_gate.py status
 python3 /path/to/actions/scripts/lint_gate.py on     # step 3
 python3 /path/to/actions/scripts/lint_gate.py off    # back to step 1
+
+# format / typecheck: same commands, with --job before the subcommand
+python3 /path/to/actions/scripts/lint_gate.py --job format status
+python3 /path/to/actions/scripts/lint_gate.py --job typecheck on
 ```
 
 `status` reports both halves and the state they imply (`OFF`, `ON`, or
@@ -740,10 +760,10 @@ python3 /path/to/actions/scripts/lint_gate.py off    # back to step 1
 check in its own right. The two inconsistent states are reported
 differently, because they fail in opposite directions.
 
-`on` **refuses if the repo still has lint findings**, since enforcing over
-a dirty backlog blocks every open PR with errors unrelated to its changes.
-That is step 2 made mandatory rather than merely advised. `--skip-backlog-check`
-overrides it, and you should expect to regret that.
+`on` **refuses if the repo still has findings for that job**, since
+enforcing over a dirty backlog blocks every open PR with errors unrelated
+to its changes. That is step 2 made mandatory rather than merely advised.
+`--skip-backlog-check` overrides it, and you should expect to regret that.
 
 The file edit is left uncommitted deliberately: commit it and open a PR.
 Branch protection is updated immediately, so until that PR merges the repo
@@ -769,10 +789,11 @@ a context that can no longer be produced.
 they are not the same strings.** `ci.yml` (per `templates/ci.yml`)
 triggers directly on `pull_request` as well as via `workflow_call`, and
 those two triggers display differently. On a PR it runs standalone, so
-GitHub shows its job names bare: `lint`, `test`, `build`. On a push to
-`main` it runs wrapped inside `version.yml`'s own `ci:` job via
-`uses: ./.github/workflows/ci.yml`, and GitHub prefixes those same
-checks: `ci / lint`, `ci / test`, `ci / build`. Those prefixed names
+GitHub shows its job names bare: `lint`, `format`, `typecheck`, `test`,
+`build`. On a push to `main` it runs wrapped inside `version.yml`'s own
+`ci:` job via `uses: ./.github/workflows/ci.yml`, and GitHub prefixes
+those same checks: `ci / lint`, `ci / format`, `ci / typecheck`,
+`ci / test`, `ci / build`. Those prefixed names
 **never appear on a pull request run** and so can never satisfy a
 required check there. Anyone who copies check names off a push run
 instead of a PR run ends up with required contexts that no PR can
@@ -781,9 +802,9 @@ until someone notices and fixes the list.
 
 The exact names above assume `templates/ci.yml` and
 `templates/stub-changelog-check.yml` copied in as-is (job ids `lint` /
-`test` / `build` / `changelog`). If your repo already had its own CI
-with different job names before onboarding, use those names instead.
-Same bare-vs-prefixed rule, different strings.
+`format` / `typecheck` / `test` / `build` / `changelog`). If your repo
+already had its own CI with different job names before onboarding, use
+those names instead. Same bare-vs-prefixed rule, different strings.
 
 ## Releasing under branch protection
 

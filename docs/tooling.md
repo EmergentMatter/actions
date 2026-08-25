@@ -180,12 +180,15 @@ to see info findings without deciding they're worth a nonzero exit.
 |---|---|---|
 | `stub` | broken | still on the `workflow_call` path removed in v1.1.0, so it 404s on every PR |
 | `workflow_call` | broken | `ci.yml` not callable; `version.yml` fails at parse time on every push to main |
-| `gate` | broken (else info) | the lint gate's two halves disagree, per `lint_gate.py`. Reported at `info` when the two halves agree |
+| `gate` | broken (else info) | the `lint` job's two halves disagree, per `lint_gate.py`. Reported at `info` when the two halves agree |
+| `format_gate` | broken (else info) | same, for the `format` job. `info` at `not yet adopted` when the repo's `ci.yml` has no `format:` job at all -- expected for any repo onboarded before this job existed, since `ci.yml` is seed-once |
+| `typecheck_gate` | broken (else info) | same, for the `typecheck` job |
 | `contexts` | warn | required checks missing, or no branch protection at all |
 | `verify` | warn | build job runs `uv build` with no `verify-wheel`; a wheel that builds and installs nothing would pass |
-| `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`, not just `changeset.py`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
+| `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`, not just `changeset.py` -- this now includes `STYLE.md` and `ruff-base.toml`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
 | `stamp` | info / warn | the `templates_version` provenance stamp against this repo's newest release tag: `info` if there's no stamp at all (onboarded before it existed), `warn` if it names an unrecognised tag or is behind |
 | `security` | warn | `SECURITY.md` documents private vulnerability reporting but the repo has it turned off. Not applicable to private repos, which can't have the feature at all |
+| `tooling` | warn | `pyproject.toml` is missing `[tool.mypy]` or `[tool.pytest.ini_options]` (existence only, not exact content -- see `templates/pyproject-snippet.toml`) |
 | `pins` | warn | an action pinned to a version targeting Node 20 |
 | `naming` | info | `ci.yml` has no `name:`, so checks display the file path |
 
@@ -201,34 +204,45 @@ correctly configured, not incomplete. See below.
 
 ## `lint_gate.py`
 
-The lint gate is two settings in two places, and they must agree:
+Started lint-only; now stages `lint`, `format`, and `typecheck` the same
+way, since all three roll out over an established codebase identically
+and each is its own `--job`. `--job` defaults to `lint`, so every
+pre-existing invocation (no `--job` at all) is unaffected.
 
-1. `continue-on-error: true` on `ci.yml`'s lint job: a file in the repo
-2. `lint` in the required status checks: a GitHub setting
+The gate is two settings in two places, and they must agree:
+
+1. `continue-on-error: true` on `ci.yml`'s job for that job: a file in the repo
+2. the job's name in the required status checks: a GitHub setting
 
 Flipping one without the other is not a half-measure, it is a broken state,
 and the two broken states fail in **opposite directions**:
 
 | State | Consequence |
 |---|---|
-| line removed, context absent | lint gates nothing on PRs, but a lint failure now fails the run and can stall `version.yml`'s `needs: ci` mid-release |
-| context added, line present | lint gates PRs, but a lint failure still sails through the release path |
+| line removed, context absent | the job gates nothing on PRs, but its failure now fails the run and can stall `version.yml`'s `needs: ci` mid-release |
+| context added, line present | the job gates PRs, but its failure still sails through the release path |
 
 ```bash
 cd ../some-repo
 uv run --project ../actions python ../actions/scripts/lint_gate.py status
 uv run --project ../actions python ../actions/scripts/lint_gate.py on
 uv run --project ../actions python ../actions/scripts/lint_gate.py off
+
+# format / typecheck: same commands, --job goes BEFORE the subcommand
+uv run --project ../actions python ../actions/scripts/lint_gate.py --job format status
+uv run --project ../actions python ../actions/scripts/lint_gate.py --job typecheck on
 ```
 
 `status` exits non-zero on `INCONSISTENT`, so it works as a check by itself.
 The two inconsistent states get different messages, because the same message
 would misdirect whoever is reading it.
 
-`on` **refuses if the repo still has lint findings.** Enforcing over a dirty
-backlog blocks every open PR with errors unrelated to its own changes: the
-problem the staged rollout exists to avoid. `--skip-backlog-check` overrides
-it, and you should expect to regret that.
+`on` **refuses if the repo still has findings for that job.** Enforcing over
+a dirty backlog blocks every open PR with errors unrelated to its own
+changes: the problem the staged rollout exists to avoid. `--skip-backlog-check`
+overrides it, and you should expect to regret that. The command it runs to
+check the backlog is job-specific: `ruff check .` for `lint`, `ruff format
+--check .` for `format`, `mypy src` for `typecheck`.
 
 The file edit is left uncommitted deliberately: commit it and open a PR.
 Branch protection is changed immediately, so until that PR merges the repo
@@ -238,13 +252,13 @@ and its protection disagree.
 
 It does not make a check non-blocking. Verified on a real run:
 
-| Level | On a lint failure |
+| Level | On a failure |
 |---|---|
 | Job conclusion | `failure` |
 | Workflow **run** conclusion | `success`: the only thing `continue-on-error` changes |
 | **Check run** conclusion | `failure`: what branch protection matches |
 
-What that line buys is that a lint failure does not fail the whole run, so it
+What that line buys is that a failure does not fail the whole run, so it
 cannot take down `version.yml`'s `needs: ci` and stall a release while the
 backlog is still being cleared.
 
