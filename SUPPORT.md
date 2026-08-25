@@ -2,9 +2,8 @@
 
 ## Scope
 
-This policy covers software published by EmergentMatter: the
-`emergent-matter-*` packages, `EmergentMatter/actions`, and the
-SDM toolchain.
+This policy applies to the software EmergentMatter publishes, including
+this repository.
 
 ## Questions and usage help
 
@@ -13,8 +12,8 @@ in the Q&A category.
 
 ## Bugs and feature requests
 
-Open an issue on the specific package's repository, using the issue
-forms there.
+Open an issue on the repository it affects, using the issue forms
+there.
 
 ## What is not supported
 

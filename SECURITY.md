@@ -2,9 +2,8 @@
 
 ## Scope
 
-This policy covers software published by EmergentMatter: the
-`emergent-matter-*` packages, `EmergentMatter/actions`, and the
-SDM toolchain.
+This policy applies to the software EmergentMatter publishes, including
+this repository.
 
 ## Reporting a vulnerability
 
@@ -32,5 +31,5 @@ responder of record.
 
 ## Supported versions
 
-These packages are pre-1.0. Only the latest release of each package is
-supported; there are no backported fixes to older versions.
+Only the latest release is supported. There are no backported fixes to
+older versions.
