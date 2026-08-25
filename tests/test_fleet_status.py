@@ -1,6 +1,6 @@
 """Tests for scripts/fleet_status.py.
 
-Covers the pure evaluation logic. The `gh` wrappers aren't exercised — they
+Covers the pure evaluation logic. The `gh` wrappers aren't exercised: they
 are thin shells over the CLI, and the value here is that a repo in a bad
 state is reported as bad, with the right severity.
 """

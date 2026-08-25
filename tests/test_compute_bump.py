@@ -33,7 +33,7 @@ def run_compute_bump(tmp_path: Path, *extra_args: str) -> subprocess.CompletedPr
 
 
 class TestBumpMatrix:
-    """Each level against a known current version — standard semver, no
+    """Each level against a known current version: standard semver, no
     special-casing below 1.0 except the major transition (covered separately).
     """
 
@@ -87,7 +87,7 @@ def test_minor_beats_patch_but_not_major(tmp_path: Path) -> None:
 
 
 def test_below_1_0_major_transition(tmp_path: Path) -> None:
-    """V2: no special handling below 1.0 — major on 0.4.2 gives 1.0.0."""
+    """V2: no special handling below 1.0, so major on 0.4.2 gives 1.0.0."""
     write_pyproject(tmp_path, "0.4.2")
     write_note(tmp_path / "changelog.d", "+x.major.md")
     result = run_compute_bump(tmp_path)

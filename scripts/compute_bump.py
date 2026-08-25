@@ -67,7 +67,7 @@ def max_level(notes_dir: Path) -> tuple[str | None, int]:
         if path.suffix != ".md":
             continue
         count += 1
-        # Fragment grammar: <name>.<level>.md — take the part after the
+        # Fragment grammar is <name>.<level>.md: take the part after the
         # last "." before ".md".
         stem = path.stem  # strips ".md"
         level = stem.rsplit(".", 1)[-1]
@@ -83,7 +83,7 @@ def max_level(notes_dir: Path) -> tuple[str | None, int]:
     if count == 0:
         return None, 0
 
-    for level in LEVELS:  # major, minor, patch — highest first
+    for level in LEVELS:  # LEVELS is ordered major, minor, patch: highest first
         if level in found_levels:
             return level, count
 

@@ -230,8 +230,8 @@ def add_workflow_call(text: str) -> str | None:
     lines = text.split("\n")
     start = next((i for i, ln in enumerate(lines) if re.match(r"^on:\s*$", ln)), None)
     if start is None:
-        # `on: [push, pull_request]` inline form — too many shapes to rewrite
-        # safely, so leave it for a human.
+        # `on: [push, pull_request]` inline form has too many shapes to
+        # rewrite safely, so leave it for a human.
         return None
     end = len(lines)
     for i in range(start + 1, len(lines)):
@@ -533,7 +533,7 @@ def print_next_steps(plan: Plan, version_files: list[str], *, private_repo: bool
     print("     gate is not wired up, not that you got away with it. Then add a")
     print("     note and confirm green.")
     n += 1
-    print(f"  {n}. Set required status checks from that PR's run — `gh pr checks <N>`")
+    print(f"  {n}. Set required status checks from that PR's run: `gh pr checks <N>`")
     print(f"     prints contexts. Expected here: {', '.join(contexts)}")
     if plan.ci_is_ours:
         print("     (`lint` is deliberately absent; enable later with lint_gate.py)")
