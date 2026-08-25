@@ -45,13 +45,20 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, get_args
+
+# fleet_status.py imports this module directly (dynamically -- see its own
+# module docstring). __all__ is scoped to that cross-module surface.
+__all__ = ["LintGateError", "State", "JobName", "LINT_CONTEXT", "has_continue_on_error"]
 
 CI_FILE = ".github/workflows/ci.yml"
 LINT_CONTEXT = "lint"
-JOBS = ("lint", "format", "typecheck")
+
+JobName = Literal["lint", "format", "typecheck"]
+JOBS: tuple[JobName, ...] = get_args(JobName)
 
 # The command that proves a job's backlog is clean, keyed by job.
-BACKLOG_CHECK_CMD: dict[str, list[str]] = {
+BACKLOG_CHECK_CMD: dict[JobName, list[str]] = {
     "lint": ["uv", "run", "ruff", "check", "."],
     "format": ["uv", "run", "ruff", "format", "--check", "."],
     "typecheck": ["uv", "run", "mypy", "src"],
@@ -75,7 +82,7 @@ def _job_label(job: str) -> str:
     return job[:1].upper() + job[1:]
 
 
-def on_comment(job: str = "lint") -> str:
+def on_comment(job: JobName = "lint") -> str:
     """The comment left behind once `job` is enforced (continue-on-error removed)."""
     off_hint = "off" if job == "lint" else f"--job {job} off"
     return (
@@ -96,7 +103,7 @@ class LintGateError(RuntimeError):
 # ---------------------------------------------------------------- pure logic
 
 
-def find_lint_job_block(text: str, job: str = "lint") -> tuple[int, int]:
+def find_lint_job_block(text: str, job: JobName = "lint") -> tuple[int, int]:
     """Return (start, end) line indices of the `<job>:` job block in ci.yml.
 
     Text-based on purpose: ci.yml carries long explanatory comments that a
@@ -123,7 +130,7 @@ def find_lint_job_block(text: str, job: str = "lint") -> tuple[int, int]:
     return start, len(lines)
 
 
-def has_continue_on_error(text: str, job: str = "lint") -> bool:
+def has_continue_on_error(text: str, job: JobName = "lint") -> bool:
     """True if `job` carries an active `continue-on-error: true`."""
     start, end = find_lint_job_block(text, job)
     for line in text.split("\n")[start:end]:
@@ -132,7 +139,7 @@ def has_continue_on_error(text: str, job: str = "lint") -> bool:
     return False
 
 
-def strip_continue_on_error(text: str, job: str = "lint") -> str:
+def strip_continue_on_error(text: str, job: JobName = "lint") -> str:
     """Remove `job`'s continue-on-error line and its rollout comment."""
     lines = text.split("\n")
     start, end = find_lint_job_block(text, job)
@@ -161,7 +168,7 @@ def strip_continue_on_error(text: str, job: str = "lint") -> str:
     return "\n".join(lines[:first] + replacement + lines[target + 1 :])
 
 
-def add_continue_on_error(text: str, off_comment: str, job: str = "lint") -> str:
+def add_continue_on_error(text: str, off_comment: str, job: JobName = "lint") -> str:
     """Put the continue-on-error line (and its explanation) back."""
     if has_continue_on_error(text, job):
         return text
@@ -193,12 +200,15 @@ def add_continue_on_error(text: str, off_comment: str, job: str = "lint") -> str
 
 @dataclass(frozen=True)
 class State:
+    """The gate's two halves for one job, and what they imply together."""
+
     has_line: bool
     lint_required: bool
-    job: str = "lint"
+    job: JobName = "lint"
 
     @property
     def name(self) -> str:
+        """`OFF`, `ON`, or `INCONSISTENT` -- see the module docstring's table."""
         if self.has_line and not self.lint_required:
             return "OFF"
         if not self.has_line and self.lint_required:
@@ -207,6 +217,9 @@ class State:
 
     @property
     def detail(self) -> str:
+        """A human-readable explanation of `name`, with the fix for the
+        two INCONSISTENT states (they fail in opposite directions, so the
+        message differs)."""
         label = _job_label(self.job)
         on_hint = "on" if self.job == "lint" else f"--job {self.job} on"
         if self.name == "OFF":
@@ -293,7 +306,7 @@ def strict_setting(repo: str, branch: str) -> bool:
     return bool(json.loads(out).get("strict", False))
 
 
-def lint_backlog_is_clean(repo_path: Path, job: str = "lint") -> tuple[bool, str]:
+def lint_backlog_is_clean(repo_path: Path, job: JobName = "lint") -> tuple[bool, str]:
     """Run `job`'s own check command. Turning the gate on over a dirty backlog
     blocks every open PR with findings unrelated to their changes."""
     proc = subprocess.run(
@@ -389,7 +402,7 @@ def cmd_toggle(args: argparse.Namespace, *, turn_on: bool) -> int:
     return 0
 
 
-def default_off_comment(job: str = "lint") -> str:
+def default_off_comment(job: JobName = "lint") -> str:
     """The comment `off` restores for `job`, explaining the staged rollout."""
     return (
         f"    # STAGED ROLLOUT. `continue-on-error` does NOT make {job} non-blocking\n"

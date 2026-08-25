@@ -4,10 +4,14 @@ Each test drives the CLI as a subprocess against a tmp_path fixture, since
 that's exactly how the GitHub Actions workflow will invoke it.
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "compute_bump.py"
 
@@ -32,34 +36,22 @@ def run_compute_bump(tmp_path: Path, *extra_args: str) -> subprocess.CompletedPr
     )
 
 
-class TestBumpMatrix:
-    """Each level against a known current version: standard semver, no
-    special-casing below 1.0 except the major transition (covered separately).
-    """
-
-    def test_patch_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.patch.md")
-        result = run_compute_bump(tmp_path)
-        assert result.returncode == 0
-        payload = json.loads(result.stdout)
-        assert payload == {"level": "patch", "current": "1.2.3", "next": "1.2.4", "count": 1}
-
-    def test_minor_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.minor.md")
-        result = run_compute_bump(tmp_path)
-        payload = json.loads(result.stdout)
-        assert payload["level"] == "minor"
-        assert payload["next"] == "1.3.0"
-
-    def test_major_bump(self, tmp_path: Path) -> None:
-        write_pyproject(tmp_path, "1.2.3")
-        write_note(tmp_path / "changelog.d", "+aaaa1111.major.md")
-        result = run_compute_bump(tmp_path)
-        payload = json.loads(result.stdout)
-        assert payload["level"] == "major"
-        assert payload["next"] == "2.0.0"
+@pytest.mark.parametrize(
+    ("level", "expected_next"),
+    [("patch", "1.2.4"), ("minor", "1.3.0"), ("major", "2.0.0")],
+    ids=["patch", "minor", "major"],
+)
+def test_each_level_bumps_a_known_version_correctly(
+    tmp_path: Path, level: str, expected_next: str
+) -> None:
+    """Standard semver, no special-casing below 1.0 (the major transition
+    below 1.0 is covered separately)."""
+    write_pyproject(tmp_path, "1.2.3")
+    write_note(tmp_path / "changelog.d", f"+aaaa1111.{level}.md")
+    result = run_compute_bump(tmp_path)
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload == {"level": level, "current": "1.2.3", "next": expected_next, "count": 1}
 
 
 def test_max_wins_across_mixed_pending_notes(tmp_path: Path) -> None:

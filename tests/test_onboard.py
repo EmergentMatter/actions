@@ -319,7 +319,7 @@ def test_load_manifest_rejects_an_unknown_policy(tmp_path):
     not be treated as one of the two known ones."""
     manifest = tmp_path / "manifest.toml"
     manifest.write_text('[[template]]\nsource = "a.md"\ndest = "A.md"\npolicy = "sometimes"\n')
-    with pytest.raises(onboard.OnboardError):
+    with pytest.raises(onboard.OnboardError, match="sometimes"):
         onboard.load_manifest(manifest)
 
 

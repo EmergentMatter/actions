@@ -85,10 +85,9 @@ else:
     # Import templates/manifest.toml's one parser (onboard.py's) rather than
     # redefining TemplateEntry/load_manifest here, the same way sync.py does.
     # A redefinition here could drift from the other two tools' notion of the
-    # manifest. That already happened once: this file used to default a
-    # missing `policy` key to "managed" instead of raising, which
-    # under-reported drift on exactly the seed-once files that default was
-    # supposed to protect.
+    # manifest -- for example, silently defaulting a missing `policy` key to
+    # "managed" instead of raising, which would under-report drift on exactly
+    # the seed-once files that default is supposed to protect.
     _spec = importlib.util.spec_from_file_location(
         "onboard", Path(__file__).resolve().parent / "onboard.py"
     )
@@ -102,10 +101,10 @@ else:
     # shapes onboard.py can ever write it in (a vX.Y.Z point release, or the
     # short commit SHA current_templates_version() falls back to when HEAD
     # isn't tagged -- every repo synced off an unmerged branch gets this
-    # one). Redefining that notion here risked exactly the bug it just
-    # caused: this check used to warn "not a recognised release tag" on a
-    # SHA stamp that onboard.py wrote correctly, permanently, on every repo
-    # synced during development.
+    # one). Redefining that notion here risks the same drift: a stamp
+    # validity check that disagrees with onboard.py would warn "not a
+    # recognised release tag" on a SHA stamp onboard.py wrote correctly,
+    # permanently, on every repo synced off an unmerged branch.
     _spec = importlib.util.spec_from_file_location(
         "sync", Path(__file__).resolve().parent / "sync.py"
     )
@@ -149,6 +148,8 @@ SEVERITY_ORDER = {"broken": 0, "warn": 1, "info": 2}
 
 @dataclass
 class Finding:
+    """One thing a `check_*` function noticed about a repo."""
+
     check: str
     severity: str  # broken | warn | info
     message: str
@@ -156,12 +157,16 @@ class Finding:
 
 @dataclass
 class RepoReport:
+    """Every finding for one repo, plus the roll-up severity `render()` and
+    `main()` sort and exit on."""
+
     repo: str
     findings: list[Finding] = field(default_factory=list)
     error: str | None = None
 
     @property
     def worst(self) -> str | None:
+        """The most severe finding's severity, or None if the repo is clean."""
         if self.error:
             return "broken"
         if not self.findings:
@@ -173,6 +178,8 @@ class RepoReport:
 
 
 def check_stub(text: str | None) -> list[Finding]:
+    """The changelog-check stub uses the composite action, not the
+    `workflow_call` path removed in v1.1.0."""
     if text is None:
         return [Finding("stub", "warn", f"no {CHANGELOG_STUB} -- changelog gate not installed")]
     if REMOVED_WORKFLOW_PATH in text:
@@ -192,6 +199,7 @@ def check_stub(text: str | None) -> list[Finding]:
 
 
 def check_pins(text: str | None) -> list[Finding]:
+    """No action pinned to a version whose action.yml targets Node 20."""
     if text is None:
         return []
     out = []
@@ -208,6 +216,8 @@ def check_pins(text: str | None) -> list[Finding]:
 
 
 def check_naming(text: str | None) -> list[Finding]:
+    """ci.yml declares a top-level `name:`, so checks read `CI / lint`
+    rather than falling back to the file path."""
     if text is None:
         return [Finding("naming", "warn", f"no {CI_FILE}")]
     if not re.search(r"^name:\s*\S", text, re.MULTILINE):
@@ -352,14 +362,13 @@ def check_templates(
 ) -> list[Finding]:
     """Every `managed` template, compared to its live copy in the target repo.
 
-    `seed-once` templates (just ci.yml today) are skipped entirely -- repos
-    legitimately customise CI, so a diff there is not a finding.
+    `seed-once` templates are skipped entirely -- repos legitimately
+    customise their own CI, so a diff there is not a finding.
 
-    Whether a diff means "old copy" or "deliberate edit" used to be a
-    guess (see the old changeset-only check this replaced). Now it's known
-    from the `stamp` check's verdict: a current stamp plus a diff is a
-    choice to surface, not a mistake, so it's reported as info, not warn.
-    A stale or unrecognised stamp doesn't establish a cause here -- see the
+    Whether a diff means a stale copy or a deliberate edit is known from
+    the `stamp` check's verdict: a current stamp plus a diff is a choice
+    to surface, not a mistake, so it's reported as info, not warn. A
+    stale or unrecognised stamp doesn't establish a cause here -- see the
     `stamp` finding for that.
     """
     out = []
@@ -444,6 +453,7 @@ def check_templates_version(stamp: str | None, tags: list[str]) -> list[Finding]
 
 
 def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
+    """The `lint` job's two staged-rollout halves (see lint_gate.py) agree."""
     if ci_text is None or contexts is None:
         return []
     try:
@@ -458,7 +468,7 @@ def check_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]
 
 
 def _check_staged_job_gate(
-    job: str, check_name: str, ci_text: str | None, contexts: list[str] | None
+    job: lint_gate.JobName, check_name: str, ci_text: str | None, contexts: list[str] | None
 ) -> list[Finding]:
     """Shared body behind check_format_gate and check_typecheck_gate."""
     if ci_text is None or contexts is None:
@@ -476,10 +486,12 @@ def _check_staged_job_gate(
 
 
 def check_format_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
+    """The `format` job's two staged-rollout halves agree."""
     return _check_staged_job_gate("format", "format_gate", ci_text, contexts)
 
 
 def check_typecheck_gate(ci_text: str | None, contexts: list[str] | None) -> list[Finding]:
+    """The `typecheck` job's two staged-rollout halves agree."""
     return _check_staged_job_gate("typecheck", "typecheck_gate", ci_text, contexts)
 
 
@@ -560,6 +572,7 @@ def check_ts_job(bun_lock_present: bool, ci_text: str | None) -> list[Finding]:
 
 
 def check_contexts(contexts: list[str] | None) -> list[Finding]:
+    """Required status checks look like a recognised configuration."""
     if contexts is None:
         return [Finding("contexts", "warn", "no required status checks on the default branch")]
     expected = {"test", "build", "changelog"}
@@ -586,6 +599,12 @@ def evaluate(
     bun_lock_present: bool = False,
     ruff_toml_present: bool = False,
 ) -> list[Finding]:
+    """Run every `check_*` function against one repo's fetched state.
+
+    See the module docstring's "Checks, per repo" list for what each one
+    covers; the keyword args here are just those checks' own inputs,
+    threaded through in one call so `inspect()` has a single entry point.
+    """
     manifest = manifest or []
     dest_texts = dest_texts or {}
     tags = tags or []
@@ -707,6 +726,9 @@ def discover(org: str) -> list[str]:
 
 
 def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoReport:
+    """Fetch one repo's state over the API and evaluate() it. Never raises:
+    any failure becomes the report's own `error`, so one bad repo can't
+    sink the sweep."""
     try:
         ci = fetch_file(repo, CI_FILE)
         stub = fetch_file(repo, CHANGELOG_STUB)

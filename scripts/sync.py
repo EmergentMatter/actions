@@ -61,6 +61,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# fleet_status.py imports this module directly (dynamically -- see its own
+# module docstring). __all__ is scoped to that cross-module surface.
+__all__ = ["SyncError", "usable_stamp"]
+
 ACTIONS_REPO = Path(__file__).resolve().parent.parent
 
 if TYPE_CHECKING:
@@ -77,11 +81,13 @@ else:
 
 
 class SyncError(RuntimeError):
-    pass
+    """Anything that should stop the sync with a readable message."""
 
 
 @dataclass
 class EntryResult:
+    """What happened (or would happen) to one managed template entry."""
+
     dest: str
     action: str
     detail: str = ""
@@ -270,6 +276,9 @@ def decide_and_apply(
     dry_run: bool,
     side: str | None,
 ) -> EntryResult:
+    """Three-way compare one managed entry and act on the result (see the
+    module docstring's table). `side` forces a conflict's resolution
+    ("ours"/"theirs"/None to prompt); `dry_run` reports without writing."""
     dest_path = repo / entry.dest
     ours = read_local(repo, entry.dest)
     theirs = read_template_at(actions_repo, "HEAD", entry.source)
@@ -350,6 +359,8 @@ def decide_and_apply(
 def sync_repo(
     repo: Path, actions_repo: Path, *, dry_run: bool, side: str | None, only: list[str] | None
 ) -> list[EntryResult]:
+    """Run decide_and_apply() over every managed manifest entry (or just
+    `only`, if given), against the repo's recorded templates_version stamp."""
     manifest = onboard.load_manifest()
     entries = [e for e in manifest if e.policy == "managed"]
     if only:

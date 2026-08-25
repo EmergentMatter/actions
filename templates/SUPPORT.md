@@ -7,7 +7,7 @@ this repository.
 
 ## Questions and usage help
 
-Ask in [GitHub Discussions](https://github.com/EmergentMatter/actions/discussions),
+Ask in [GitHub Discussions](https://github.com/EmergentMatter/emergent-matter-sdm/discussions),
 in the Q&A category.
 
 ## Bugs and feature requests

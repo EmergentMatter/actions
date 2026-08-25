@@ -438,7 +438,7 @@ source = "PULL_REQUEST_TEMPLATE.md"
 dest   = ".github/PULL_REQUEST_TEMPLATE.md"
 """
     )
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="policy"):
         fleet_status.load_manifest(manifest)
 
 
