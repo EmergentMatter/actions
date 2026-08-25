@@ -47,6 +47,19 @@ import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
+
+# This module is a CLI, but sync.py and fleet_status.py both import it
+# directly (dynamically, since this repo ships no installed package --
+# see their own module docstrings). __all__ is scoped to that cross-module
+# surface, not every name a human reading main() might need.
+__all__ = [
+    "OnboardError",
+    "TemplateEntry",
+    "load_manifest",
+    "parse_point_release",
+    "current_templates_version",
+]
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 CI_DEST = ".github/workflows/ci.yml"
@@ -65,11 +78,14 @@ SNIPPET_SECTIONS = ("towncrier", "em-release", "mypy", "pytest")
 
 
 class OnboardError(RuntimeError):
-    pass
+    """Anything that should stop onboarding with a readable message."""
 
 
 @dataclass(frozen=True)
 class TemplateEntry:
+    """One row of templates/manifest.toml: a file this repo ships, where it
+    lands in a consuming repo, and whether sync.py may update it later."""
+
     source: str  # relative to templates/
     dest: str  # relative to the target repo root
     policy: str  # "managed" | "seed-once"
@@ -145,6 +161,9 @@ def current_templates_version(actions_repo: Path | None = None) -> str:
 
 @dataclass
 class Action:
+    """One line of the onboarding plan: what would happen to one target
+    file or resource, and why."""
+
     kind: str  # create | skip | manual
     target: str
     note: str = ""
@@ -152,6 +171,9 @@ class Action:
 
 @dataclass
 class Plan:
+    """Everything build_plan() worked out for a target repo, before
+    apply_plan() writes any of it."""
+
     repo_path: Path
     package_name: str
     version: str
@@ -168,6 +190,7 @@ class Plan:
 
 
 def read_pyproject(repo: Path) -> dict:
+    """Parse the target repo's pyproject.toml, or raise if it has none."""
     p = repo / "pyproject.toml"
     if not p.is_file():
         raise OnboardError(
@@ -177,8 +200,13 @@ def read_pyproject(repo: Path) -> dict:
         return tomllib.load(f)
 
 
-def parse_ci(text: str) -> tuple[bool, list[str]]:
-    """Return (has_workflow_call, job_names) from a CI workflow's text."""
+class ParsedCI(NamedTuple):
+    has_workflow_call: bool
+    job_names: list[str]
+
+
+def parse_ci(text: str) -> ParsedCI:
+    """Read whether a CI workflow is `workflow_call`-able, and its job names."""
     has_call = re.search(r"^\s{2,4}workflow_call:", text, re.MULTILINE) is not None
     jobs: list[str] = []
     in_jobs = False
@@ -192,7 +220,7 @@ def parse_ci(text: str) -> tuple[bool, list[str]]:
             m = re.match(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$", line)
             if m:
                 jobs.append(m.group(1))
-    return has_call, jobs
+    return ParsedCI(has_call, jobs)
 
 
 def propose_version_files(repo: Path, version: str) -> list[tuple[str, str]]:
@@ -279,6 +307,9 @@ def insert_marker(text: str) -> str | None:
 
 
 def build_plan(repo: Path, declared: list[str]) -> Plan:
+    """Work out everything onboarding a repo would do, without writing
+    anything. `declared` is the `--version-file` values already on the
+    command line; an empty list means propose candidates instead."""
     data = read_pyproject(repo)
     project = data.get("project", {})
     name = project.get("name")
@@ -461,6 +492,7 @@ def render_config_block(
 
 
 def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> list[str]:
+    """Write every `create` action in `plan`. Returns the target paths written."""
     done = []
     for action in plan.actions:
         if action.kind != "create":
@@ -498,8 +530,7 @@ def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> 
             entry = next(e for e in plan.manifest if e.dest == action.target)
             # `shutil.copy` preserves the mode; `copyfile` does not. changeset.py
             # carries a shebang and is 100755 in templates/, and a copy that lands
-            # non-executable trips ruff's EXE001 in every repo onboarded -- which
-            # is exactly how it reached both consumers before this was fixed.
+            # non-executable trips ruff's EXE001 in every repo onboarded with it.
             shutil.copy(TEMPLATES / entry.source, dest)
         done.append(action.target)
     return done

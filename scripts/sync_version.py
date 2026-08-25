@@ -15,6 +15,7 @@ import re
 import sys
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
 # Matches an assignment like:  symbol = "1.2.3"   or   symbol = '1.2.3'
 # Captures: (1) everything up to and including the opening quote,
@@ -39,7 +40,13 @@ def read_version_files(pyproject_path: Path) -> list[str]:
     return data.get("tool", {}).get("em-release", {}).get("version_files", [])
 
 
-def parse_entry(entry: str) -> tuple[str, str]:
+class VersionFileEntry(NamedTuple):
+    path_str: str
+    symbol: str
+
+
+def parse_entry(entry: str) -> VersionFileEntry:
+    """Split one `version_files` entry ("path:symbol") into its two parts."""
     if ":" not in entry:
         print(
             f"error: malformed version_files entry {entry!r}, expected 'path:symbol'",
@@ -47,7 +54,7 @@ def parse_entry(entry: str) -> tuple[str, str]:
         )
         sys.exit(1)
     path_str, symbol = entry.rsplit(":", 1)
-    return path_str, symbol
+    return VersionFileEntry(path_str, symbol)
 
 
 def find_assignment(text: str, symbol: str) -> re.Match[str] | None:
