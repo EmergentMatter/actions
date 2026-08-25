@@ -1,13 +1,7 @@
-# Code owners for the community-health files under templates/.
+# Owned by the EmergentMatter maintainers.
 #
-# These files are copied into each repo by `scripts/onboard.py` (and kept
-# current by `scripts/sync.py`) -- not served by GitHub's community-health
-# inheritance, which only reaches into a `.github` repo automatically. A
-# change here doesn't reach a repo that already onboarded until that repo
-# syncs again, so getting the wording right before it goes out is what
-# "owned rather than open" buys.
-#
-# CODEOWNERS itself was never one of the files GitHub's inheritance would
-# have served anyway -- that has nothing to do with copy vs. inheritance.
+# Copied in from EmergentMatter/actions at onboarding. Edit it if this repo
+# needs different owners: sync.py reports the difference rather than
+# overwriting it.
 
 *                       @telafifi @evanmj @ecarrig
