@@ -1,6 +1,6 @@
 name: Self CI
 
-# This repo's own checks — not reusable, not workflow_call. Ruff + mypy +
+# This repo's own checks, not reusable, not workflow_call. Ruff + mypy +
 # pytest over scripts/ and tests/, matching CLAUDE.md's documented "Build &
 # Run" commands exactly (uv sync / uv run ruff check . / uv run pytest) so
 # local reproduction is identical to CI. Ruleset, line-length, and the

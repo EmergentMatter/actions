@@ -21,8 +21,8 @@
 #               See STYLE.md's "Typing" section for the strict-ish default
 #               and the per-module override shape for JAX/bpy code.
 #   test      - runs the repo's test suite. If there isn't one yet, it
-#               still runs (and passes) rather than being skipped outright
-#               — see the "no tests" branch below. The floor is never
+#               still runs (and passes) rather than being skipped outright,
+#               see the "no tests" branch below. The floor is never
 #               zero (C5).
 #   build     - `uv build`, then install the built wheel into a clean
 #               environment and import it, then keep the artifacts. A
