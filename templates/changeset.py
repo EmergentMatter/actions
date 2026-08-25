@@ -112,7 +112,7 @@ def _swallow_paste(fd: int) -> None:
     """
     tail = ""
     while _has_pending(fd):
-        tail = (tail + _read_byte(fd))[-len(PASTE_END):]
+        tail = (tail + _read_byte(fd))[-len(PASTE_END) :]
         if tail == PASTE_END:
             return
 
