@@ -34,6 +34,8 @@ Checks, per repo:
               promising a route it doesn't have. (Private repos: N/A.)
   tooling     pyproject.toml declares [tool.mypy] and
               [tool.pytest.ini_options] (existence only)
+  ruff_config ruff-base.toml present with no ruff.toml to `extend` it, or
+              pyproject.toml still has an inline [tool.ruff] section
   ts_job      a `ui/bun.lock` exists but the `ts` job in ci.yml is still
               commented out
 
@@ -123,6 +125,8 @@ CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
 SECURITY_FILE = "SECURITY.md"
 BUN_LOCK_FILE = "ui/bun.lock"  # the conventional path; a package elsewhere isn't detected
+RUFF_BASE_FILE = "ruff-base.toml"
+RUFF_TOML_FILE = "ruff.toml"
 
 # The literal button label templates/SECURITY.md tells a researcher to click.
 # Its presence is how we know the policy is *promising* the private-reporting
@@ -503,6 +507,42 @@ def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
     return out
 
 
+def check_ruff_config_adoption(
+    ruff_base_present: bool, ruff_toml_present: bool, pyproject_text: str | None
+) -> list[Finding]:
+    """ruff-base.toml is inert without a ruff.toml that `extend`s it -- ruff
+    never auto-discovers ruff-base.toml on its own, and sync.py can only
+    install the managed ruff-base.toml; it can never create the seed-once
+    ruff.toml for a repo onboarded before this system existed. See
+    docs/onboarding.md's migration note for the fix."""
+    if not ruff_base_present:
+        return []
+    out = []
+    if not ruff_toml_present:
+        out.append(
+            Finding(
+                "ruff_config",
+                "warn",
+                "ruff-base.toml present but no ruff.toml -- ruff never reads it as-is",
+            )
+        )
+    if pyproject_text is not None:
+        try:
+            data = tomllib.loads(pyproject_text)
+        except tomllib.TOMLDecodeError:
+            data = {}
+        if "ruff" in data.get("tool", {}):
+            out.append(
+                Finding(
+                    "ruff_config",
+                    "warn",
+                    "ruff-base.toml present but pyproject.toml still has an inline "
+                    "[tool.ruff] section -- move it into ruff.toml",
+                )
+            )
+    return out
+
+
 def check_ts_job(bun_lock_present: bool, ci_text: str | None) -> list[Finding]:
     """A repo with a Bun package at the conventional `ui/bun.lock` path
     should have uncommented the `ts` job in templates/ci.yml."""
@@ -544,6 +584,7 @@ def evaluate(
     pvr_status: str = "unknown",
     pyproject_text: str | None = None,
     bun_lock_present: bool = False,
+    ruff_toml_present: bool = False,
 ) -> list[Finding]:
     manifest = manifest or []
     dest_texts = dest_texts or {}
@@ -560,6 +601,9 @@ def evaluate(
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
         *check_pyproject_tooling(pyproject_text),
+        *check_ruff_config_adoption(
+            dest_texts.get(RUFF_BASE_FILE) is not None, ruff_toml_present, pyproject_text
+        ),
         *check_ts_job(bun_lock_present, ci_text),
         *check_pins(ci_text),
         *check_naming(ci_text),
@@ -676,6 +720,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         security = fetch_file(repo, SECURITY_FILE)
         pyproject = fetch_file(repo, "pyproject.toml")
         bun_lock_present = fetch_file(repo, BUN_LOCK_FILE) is not None
+        ruff_toml_present = fetch_file(repo, RUFF_TOML_FILE) is not None
         # Only spend the two extra `gh api` calls when there's actually a
         # promise to verify -- most repos won't have SECURITY.md yet.
         pvr_status = (
@@ -697,6 +742,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
                 pvr_status=pvr_status,
                 pyproject_text=pyproject,
                 bun_lock_present=bun_lock_present,
+                ruff_toml_present=ruff_toml_present,
             ),
         )
     except Exception as exc:  # noqa: BLE001 - one bad repo must not sink the sweep

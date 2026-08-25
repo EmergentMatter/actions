@@ -180,6 +180,24 @@ reminder to turn it on the day the repo goes public.
 `scripts/fleet_status.py`'s `security` check is what catches a repo that
 forgot.
 
+### Migrating a repo onboarded before the shared ruff config
+
+`sync.py` can install the managed `ruff-base.toml` into an already-onboarded
+repo, but it can never create `ruff.toml`: that file is `seed-once`,
+written only by `onboard.py`, at onboarding time. A repo onboarded before
+this standard existed ends up with `ruff-base.toml` on disk and ruff never
+reading it -- ruff doesn't auto-discover it by name.
+
+Fix it by hand, once:
+
+1. Create `ruff.toml` at the repo root with `extend = "ruff-base.toml"`.
+2. Move any `[tool.ruff]` additions from `pyproject.toml` into `ruff.toml`.
+3. Delete the inline `[tool.ruff]` section from `pyproject.toml`.
+
+`scripts/fleet_status.py`'s `ruff_config` check flags both halves of this:
+`ruff-base.toml` present with no `ruff.toml`, and `ruff-base.toml` present
+while `pyproject.toml` still carries the inline section.
+
 ### Why `build-release.yml` isn't the automatic path
 
 The obvious design looks like: push a `v*` tag, let `build-release.yml`

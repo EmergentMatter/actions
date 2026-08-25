@@ -183,7 +183,7 @@ def test_consistent_format_and_typecheck_gates_report_their_state_as_info(ci, co
 
 def test_format_and_typecheck_gates_are_independent_of_the_lint_gate():
     """A repo could have lint enforced while format/typecheck are still
-    advisory -- the three gates must not be able to shadow one another."""
+    advisory -- the staged-job gates must not be able to shadow one another."""
     ci = CI_FORMAT_TYPECHECK_OFF.replace(
         "jobs:\n",
         "jobs:\n  lint:\n    name: lint\n    runs-on: ubuntu-latest\n    steps:\n"
@@ -235,6 +235,41 @@ def test_no_pyproject_is_flagged_not_crashed_on():
 def test_unparseable_pyproject_is_flagged_not_crashed_on():
     findings = fleet_status.check_pyproject_tooling("this is not [ valid toml")
     assert severities(findings, "tooling") == ["warn"]
+
+
+# ------------------------------------------------------------- ruff config
+
+
+def test_no_ruff_base_is_never_flagged():
+    assert fleet_status.check_ruff_config_adoption(False, False, None) == []
+
+
+def test_ruff_base_without_ruff_toml_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(True, False, None)
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "no ruff.toml" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_with_ruff_toml_and_no_inline_section_is_clean():
+    assert fleet_status.check_ruff_config_adoption(True, True, "[project]\nname = 'x'\n") == []
+
+
+def test_ruff_base_with_a_lingering_inline_ruff_section_is_a_warning():
+    findings = fleet_status.check_ruff_config_adoption(
+        True, True, "[tool.ruff]\nline-length = 88\n"
+    )
+    assert severities(findings, "ruff_config") == ["warn"]
+    assert "[tool.ruff]" in messages(findings, "ruff_config")
+
+
+def test_ruff_base_missing_both_ruff_toml_and_still_inline_is_flagged_twice():
+    findings = fleet_status.check_ruff_config_adoption(True, False, "[tool.ruff]\nfoo = 1\n")
+    assert severities(findings, "ruff_config") == ["warn", "warn"]
+
+
+def test_ruff_config_check_never_crashes_on_unparseable_pyproject():
+    findings = fleet_status.check_ruff_config_adoption(True, True, "this is not [ valid")
+    assert findings == []
 
 
 # ------------------------------------------------------------------ ts job
