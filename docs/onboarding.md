@@ -129,41 +129,43 @@ template exists for repos starting from nothing.
 
 ## The files
 
-| # | File | What it does |
-|---|---|---|
-| 1 | `.github/workflows/changelog-check.yml` | On every PR: fails the PR if it's missing a `changelog.d/` note and doesn't carry the `skip-changelog` label. |
-| 2 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or, if HEAD is the release commit that PR's merge just created, tags the release and builds + publishes it, all in the same run. |
-| 3 | `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
-| 4 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
-| 5 | `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
-| 6 | `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike 1–3 this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
-| 7 | `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
-| 8 | `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
-| 9 | `ruff.toml` | `extend = "ruff-base.toml"` plus room for this repo's own additions. Yours from the moment it's written. |
+| File | What it does |
+|---|---|
+| `.github/workflows/changelog-check.yml` | On every PR: fails the PR if it's missing a `changelog.d/` note and doesn't carry the `skip-changelog` label. |
+| `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or, if HEAD is the release commit that PR's merge just created, tags the release and builds + publishes it, all in the same run. |
+| `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
+| `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
+| `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
+| `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike the workflow stubs above, this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
+| `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
+| `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
+| `ruff.toml` | `extend = "ruff-base.toml"` plus room for this repo's own additions. Yours from the moment it's written. |
 
-Files 1–3 are thin stubs pinned to `@v1`, copied from `EmergentMatter/actions`'s
-`templates/` directory into your repo's `.github/workflows/`. Files 2 and 3
-point at reusable workflows this repo hosts
-(`uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1`); file 1
-points at a composite action instead
+The workflow stubs (`changelog-check.yml`, `version.yml`, `build-release.yml`)
+are thin, pinned to `@v1`, copied from `EmergentMatter/actions`'s
+`templates/` directory into your repo's `.github/workflows/`. `version.yml`
+and `build-release.yml` point at reusable workflows this repo hosts
+(`uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1`);
+`changelog-check.yml` points at a composite action instead
 (`uses: EmergentMatter/actions/changelog-check@v1`, inside a normal job).
 See "The changelog check doesn't need `actions-ref`" below for what that
-changes. File 5 is a direct copy of
+changes. `CONTRIBUTING.md` is a direct copy of
 [`templates/CONTRIBUTING.md`](../templates/CONTRIBUTING.md) into your repo
-root, unmodified. It's generic, not repo-specific. File 4 needs its own
-explanation, below.
+root, unmodified. It's generic, not repo-specific. `scripts/changeset.py`
+needs its own explanation, below.
 
-**Files 4–9 are copies, not references, and that distinction has a
-cost worth understanding up front.** Files 1–3 point at code hosted here,
-so a fix lands in every consuming repo the moment `v1` moves, and nobody
-has to do anything. Files 4–9 are yours from the moment you copy them.
-Files 4, 5, 7, and 8 are `managed` in
+**Everything else is a copy, not a reference, and that distinction has a
+cost worth understanding up front.** The workflow stubs point at code
+hosted here, so a fix lands in every consuming repo the moment `v1`
+moves, and nobody has to do anything. The rest is yours from the moment
+you copy it. `scripts/changeset.py`, `CONTRIBUTING.md`, `STYLE.md`, and
+`ruff-base.toml` are `managed` in
 [`templates/manifest.toml`](../templates/manifest.toml): `scripts/sync.py`
-can pull a later change in, but only when someone runs it. Files 6 and 9
-are `seed-once`: written if absent, then never touched again, because a
-repo's CI and its local ruff additions are legitimately its own.
-`scripts/fleet_status.py` makes managed-file drift visible; run it after
-onboarding, and periodically after that.
+can pull a later change in, but only when someone runs it. `ci.yml` and
+`ruff.toml` are `seed-once`: written if absent, then never touched again,
+because a repo's CI and its local ruff additions are legitimately its
+own. `scripts/fleet_status.py` makes managed-file drift visible; run it
+after onboarding, and periodically after that.
 
 `onboard.py` also seeds a set of standard repo-hygiene files:
 `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `NOTICE`,
@@ -694,15 +696,15 @@ All of them are bare job ids: the CI ones are your `ci.yml`'s job names,
 and `changelog` is the job id in `changelog-check.yml`'s stub.
 
 **`lint`, `format`, and `typecheck` are all deliberately absent**, even
-though `templates/ci.yml` ships all three jobs. They get added later, in
-step 3 of the staged rollout below, not now. If you brought your own CI
-and it's already clean on all three, you can skip straight to that step;
-the staging exists for repos turning a check on over an established
-codebase, not for repos that are already clean.
+though `templates/ci.yml` ships each of those jobs. They get added later,
+in the enforce step of the staged rollout below, not now. If you brought
+your own CI and it's already clean on all of them, you can skip straight
+to that step; the staging exists for repos turning a check on over an
+established codebase, not for repos that are already clean.
 
 ### Staging the lint / format / typecheck rollout
 
-`templates/ci.yml` ships all three jobs with `continue-on-error: true`.
+`templates/ci.yml` ships each staged job with `continue-on-error: true`.
 That line is often misread as "the job can't block anything yet." It
 cannot do that, and the difference is worth being exact about, because it
 decides whether the rollout works:
@@ -721,12 +723,12 @@ What that line actually buys is that a failure doesn't fail the whole run,
 so it doesn't take down `version.yml`'s `needs: ci` and stall a release
 while the backlog is still being cleared.
 
-So the two levers move together, for each of the three jobs independently
+So the two levers move together, independently for each staged job
 (a repo can enforce `lint` while `format`/`typecheck` are still advisory):
 
-1. **Onboard.** Keep `continue-on-error` on all three, require only
-   `test` / `build` / `changelog`. They run and are visible to anyone who
-   looks, but gate nothing.
+1. **Onboard.** Keep `continue-on-error` on every staged job, require
+   only `test` / `build` / `changelog`. They run and are visible to
+   anyone who looks, but gate nothing.
 2. **Clear the backlog.** One dedicated PR per job that fixes the
    existing findings and does nothing else, so the diff is reviewable as
    "lint fixes" (or "format fixes", or "typecheck fixes") rather than
@@ -852,8 +854,9 @@ python3 /path/to/actions/scripts/fleet_status.py --repo <owner>/<name>
 Exit 0 means no `broken` or `warn` finding across any of its checks (see
 [tooling.md](tooling.md#fleet_statuspy) for the full list). An `info`
 finding, like a stamp-free repo, can still show up in the output without
-affecting the exit code. Run it again periodically. Files 4-6 are
-copies, so drift starts accumulating from the day you onboard.
+affecting the exit code. Run it again periodically. Everything past the
+workflow stubs is a copy, so drift starts accumulating from the day you
+onboard.
 
 Skipping step 1 is the tempting one, because everything already looks
 green. That is exactly the state a gate that checks nothing produces.

@@ -2,9 +2,9 @@
 # `.github/workflows/ci.yml` and adjust as the repo needs.
 #
 # Most repos in the org currently run no automated checks at all; this is
-# the floor every repo gets on day one, not the ceiling. Five stages,
-# consistent names across every repo that copies this (C4), so "the lint
-# job" and "the build job" mean the same thing everywhere:
+# the floor every repo gets on day one, not the ceiling. Consistent job
+# names across every repo that copies this (C4), so "the lint job" and
+# "the build job" mean the same thing everywhere:
 #
 #   lint      - advisory during rollout; see the staged-rollout note on the
 #               lint job below. Turning a linter on across an established

@@ -20,7 +20,8 @@ How to write, test, and document code in EmergentMatter repos.
   package directory.
 - **Commit `uv.lock`.** Never gitignore it. CI syncs with `uv sync
   --locked`, so a stale lockfile fails loudly.
-- **Ruff owns linting and formatting.** Every repo carries two files:
+- **Ruff owns linting and formatting.** Every repo carries a base
+  ruleset file and a local override file:
   - `ruff-base.toml`: the shared ruleset. Do not edit it. Put local
     changes in `ruff.toml` instead.
   - `ruff.toml`: `extend = "ruff-base.toml"` plus this repo's own
