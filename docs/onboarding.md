@@ -593,10 +593,11 @@ is safe; explaining what the directory is for belongs in this doc and in
 
 The notes themselves are named `+<8 hex characters>.<level>.md`, e.g.
 `+a1b2c3d4.minor.md`. `compute_bump.py` also parses the standard
-towncrier issue-numbered form (`123.minor.md`), but `uv run changeset`
-always generates the random `+hex` form; that's the one you'll actually
-see, and it exists specifically so contributors never have to make a
-naming decision or worry about a collision.
+towncrier issue-numbered form (`123.minor.md`), but
+`uv run scripts/changeset.py` always generates the random `+hex` form;
+that's the one you'll actually see, and it exists specifically so
+contributors never have to make a naming decision or worry about a
+collision.
 
 Anything in `changelog.d/` that isn't a properly-named note (a stray
 file, a typo'd extension, an unrecognized level) fails the release job
