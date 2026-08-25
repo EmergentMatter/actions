@@ -517,7 +517,7 @@ def test_only_filters_to_the_requested_dest(actions_repo, tmp_path):
 
 def test_only_rejects_an_unknown_dest(actions_repo, tmp_path):
     repo = _row_target(tmp_path, actions_repo)
-    with pytest.raises(sync.SyncError):
+    with pytest.raises(sync.SyncError, match="NOPE.md"):
         sync.sync_repo(repo, actions_repo, dry_run=False, side="theirs", only=["NOPE.md"])
 
 
@@ -677,8 +677,12 @@ def test_main_exits_0_when_fully_resolved(actions_repo, tmp_path):
 
 
 def test_main_rejects_ours_and_theirs_together():
-    with pytest.raises(SystemExit):
+    """argparse's own mutually-exclusive-group error: the message goes to
+    stderr, not into the exception, so there's nothing to `match=` on --
+    the exit code is the meaningful, code-controlled part."""
+    with pytest.raises(SystemExit) as exc_info:
         sync.main(["--repo-path", "/nonexistent", "--ours", "--theirs"])
+    assert exc_info.value.code == 2
 
 
 # ------------------------------------------------------------------- git plumbing
