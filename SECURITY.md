@@ -7,18 +7,25 @@ this repository.
 
 ## Reporting a vulnerability
 
-**Preferred:** report using GitHub's private vulnerability reporting on
-the affected repository -- go to that repository, open
-**Security → Report a vulnerability**, and submit the report there.
+Report it privately on the repository it affects:
 
-**Fallback:** if the affected repository doesn't offer private
-vulnerability reporting, report it at
+1. Go to that repository on GitHub.
+2. Open the **Security** tab.
+3. Click **Report a vulnerability**.
+4. Fill in the form and submit it.
+
+That opens a private conversation with the maintainers. Nothing is
+visible to anyone else, and nothing becomes public until a fix is ready
+and an advisory is published.
+
+**If that repository has no "Report a vulnerability" button**, it has
+not turned private reporting on yet. Use
 [EmergentMatter/actions' security advisories](https://github.com/EmergentMatter/actions/security/advisories/new)
-instead, and name the affected package or repository in the report.
+instead, following the same steps there, and name the affected
+repository in your report.
 
 **Do not open a public issue for a security report**, on either route.
-Private reporting keeps the details out of view until a fix is
-available.
+A public issue tells everyone about the problem before there is a fix.
 
 We aim to acknowledge within five business days. Private reports reach
 the maintainers of the repository they are filed on.
