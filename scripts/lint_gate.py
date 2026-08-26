@@ -64,16 +64,27 @@ BACKLOG_CHECK_CMD: dict[JobName, list[str]] = {
     "typecheck": ["uv", "run", "mypy", "src"],
 }
 
-# Marks the comment block that explains the staged rollout. Used to keep the
-# comment honest when the line it describes is added or removed.
-# Phrases that identify a staged-rollout comment as OURS to replace. The
-# second is the pre-v1.1.0 template's wording: repos onboarded before that
-# release carry it, and leaving it behind next to "<Job> is ENFORCED"
-# produces a file that contradicts itself. Only ever add to this list --
-# removing an entry orphans the comment in every repo still carrying it.
-OFF_COMMENT_SENTINELS = (
+# Text that marks a comment line as OURS to replace, so flipping a job
+# never leaves a stale explanation sitting above the new one. Each tuple
+# covers one direction. Only ever add an entry; removing one stops this
+# script recognizing (and replacing) that wording in a repo still
+# carrying it, so the old and new one end up stacked instead of swapped.
+#
+# STAGED_COMMENT_SENTINELS: the comment `on` looks for and removes.
+# "# STAGED ROLLOUT." covers both the current lint job's comment in
+# templates/ci.yml and the short one-liner format/typecheck carry.
+# "# Staged rollout: non-blocking..." is the pre-v1.1.0 template's wording.
+STAGED_COMMENT_SENTINELS = (
     "# STAGED ROLLOUT.",
     "# Staged rollout: non-blocking until the existing lint backlog is",
+    "# Staged:",
+)
+
+# ENFORCED_COMMENT_SENTINELS: the comment `off` looks for and removes.
+# "is ENFORCED:" is the pre-this-fix wording ("Lint is ENFORCED:", etc.).
+ENFORCED_COMMENT_SENTINELS = (
+    "# Enforced:",
+    "is ENFORCED:",
 )
 
 
@@ -82,17 +93,29 @@ def _job_label(job: str) -> str:
     return job[:1].upper() + job[1:]
 
 
+def _find_sentinel_line(
+    lines: list[str], start: int, end: int, sentinels: tuple[str, ...]
+) -> int | None:
+    """Index of the first line in `lines[start:end]` naming one of `sentinels`,
+    or None. Finding the sentinel's own line, rather than walking backward
+    through however many comment lines happen to be contiguous above it,
+    is what lets `on`/`off` remove a whole multi-line comment even when a
+    blank line splits it into more than one contiguous run."""
+    for i in range(start, end):
+        if any(sentinel in lines[i] for sentinel in sentinels):
+            return i
+    return None
+
+
 def on_comment(job: JobName = "lint") -> str:
     """The comment left behind once `job` is enforced (continue-on-error removed)."""
-    off_hint = "off" if job == "lint" else f"--job {job} off"
     return (
-        f"    # {_job_label(job)} is ENFORCED: this job has no continue-on-error, and `{job}` is\n"
-        f"    # a required status check. To stage it back off, run lint_gate.py {off_hint}\n"
-        "    # -- which restores both halves together. See docs/onboarding.md.\n"
+        f"    # Enforced: no continue-on-error, and `{job}` is a required status\n"
+        f"    # check. Stage it back to advisory with `lint_gate.py --job {job} off`.\n"
     )
 
 
-# The lint job's comment, byte-for-byte unchanged.
+# The lint job's comment.
 ON_COMMENT = on_comment("lint")
 
 
@@ -140,7 +163,8 @@ def has_continue_on_error(text: str, job: JobName = "lint") -> bool:
 
 
 def strip_continue_on_error(text: str, job: JobName = "lint") -> str:
-    """Remove `job`'s continue-on-error line and its rollout comment."""
+    """Remove `job`'s continue-on-error line and its staged-rollout comment,
+    replacing both with `on_comment(job)`."""
     lines = text.split("\n")
     start, end = find_lint_job_block(text, job)
 
@@ -152,49 +176,40 @@ def strip_continue_on_error(text: str, job: JobName = "lint") -> str:
     if target is None:
         return text
 
-    # Walk back over the contiguous comment block directly above the line,
-    # but only if it is the staged-rollout explanation -- an unrelated
-    # comment someone added is theirs, not ours to delete.
-    first = target
-    while first - 1 >= start and lines[first - 1].lstrip().startswith("#"):
-        first -= 1
-    owns_comment = any(
-        sentinel in lines[i] for i in range(first, target) for sentinel in OFF_COMMENT_SENTINELS
-    )
-    if not owns_comment:
-        first = target
+    # Find where OUR comment starts, rather than walking back through
+    # however many comment lines are contiguous above the line: a blank
+    # line inside a long explanation would stop that walk partway through
+    # and leave the rest of the old comment sitting above the new one.
+    comment_start = _find_sentinel_line(lines, start, target, STAGED_COMMENT_SENTINELS)
+    first = comment_start if comment_start is not None else target
 
     replacement = on_comment(job).rstrip("\n").split("\n")
     return "\n".join(lines[:first] + replacement + lines[target + 1 :])
 
 
 def add_continue_on_error(text: str, off_comment: str, job: JobName = "lint") -> str:
-    """Put the continue-on-error line (and its explanation) back."""
+    """Put the continue-on-error line (and its staged-rollout comment) back,
+    replacing any existing enforced-comment with `off_comment`."""
     if has_continue_on_error(text, job):
         return text
     lines = text.split("\n")
     start, end = find_lint_job_block(text, job)
 
-    # Drop the "<job> is enforced" note if present, then insert before the
-    # job's `steps:` key so the flag lands among the job's other settings.
-    kept = [
-        i
-        for i in range(start, end)
-        if f"# {_job_label(job)} is ENFORCED:" not in lines[i]
-        and "# a required status check." not in lines[i]
-        and "# -- which restores both halves together." not in lines[i]
-    ]
-    block = [lines[i] for i in kept]
-
     insert_at = None
-    for offset, line in enumerate(block):
-        if re.match(r"^\s*steps:\s*(#.*)?$", line):
-            insert_at = offset
+    for i in range(start, end):
+        if re.match(r"^\s*steps:\s*(#.*)?$", lines[i]):
+            insert_at = i
             break
     if insert_at is None:
         raise LintGateError(f"No `steps:` key in the {job} job of {CI_FILE}.")
 
-    new_block = block[:insert_at] + off_comment.rstrip("\n").split("\n") + block[insert_at:]
+    # Same reasoning as strip_continue_on_error: find the enforced comment's
+    # own start line rather than filtering by fixed substrings, so it comes
+    # out whole even if its exact wording has changed since it was written.
+    comment_start = _find_sentinel_line(lines, start, insert_at, ENFORCED_COMMENT_SENTINELS)
+    cut_at = comment_start if comment_start is not None else insert_at
+
+    new_block = lines[start:cut_at] + off_comment.rstrip("\n").split("\n") + lines[insert_at:end]
     return "\n".join(lines[:start] + new_block + lines[end:])
 
 
@@ -405,16 +420,13 @@ def cmd_toggle(args: argparse.Namespace, *, turn_on: bool) -> int:
 def default_off_comment(job: JobName = "lint") -> str:
     """The comment `off` restores for `job`, explaining the staged rollout."""
     return (
-        f"    # STAGED ROLLOUT. `continue-on-error` does NOT make {job} non-blocking\n"
-        f"    # on pull requests -- only leaving `{job}` out of the required status\n"
-        f"    # checks does that. What this line buys is that a {job} failure doesn't\n"
-        "    # fail the whole run, so it can't stall version.yml's `needs: ci`\n"
-        "    # mid-rollout. Managed by scripts/lint_gate.py; see docs/onboarding.md.\n"
+        f"    # Staged: continue-on-error keeps a `{job}` failure from failing the\n"
+        f"    # run. Enforce it with `lint_gate.py --job {job} on`.\n"
         "    continue-on-error: true"
     )
 
 
-# The lint job's off-comment, byte-for-byte unchanged.
+# The lint job's off-comment.
 DEFAULT_OFF_COMMENT = default_off_comment("lint")
 
 
