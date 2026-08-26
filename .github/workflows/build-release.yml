@@ -15,6 +15,19 @@ name: Build & Release
 # triggers. Their build/release steps are deliberately duplicated rather than
 # shared; see the comment above those steps in version.yml for why, and keep
 # the two copies in step when either changes.
+#
+# KNOWN GAP: this workflow has no sibling-repo / sibling2-repo checkout of
+# any kind, unlike version.yml (see that workflow's sibling-* / sibling2-*
+# inputs and CONTRACT.md's "Private sibling checkout" sections). `uv build`
+# below resolves `[tool.uv.sources]` the same way `uv version --bump` /
+# `uv lock` do, so a repo with a private path dependency (nested or not)
+# hits the identical `Distribution not found` failure here, on the rare
+# path that reaches this workflow at all: a human-pushed tag, or manual
+# `workflow_dispatch`. Not fixed here -- flagged, deliberately, rather than
+# implemented alongside version.yml's nested-sibling support, because it
+# would duplicate the checkout/validation machinery a second time in a
+# second reusable workflow for a fallback path nobody has hit yet. Revisit
+# if a repo with a private sibling actually needs this trigger.
 
 on:
   workflow_call:

@@ -28,11 +28,28 @@ jobs:
       # sibling-repo: EmergentMatter/emergent-matter-materials
       # sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
       # sibling-path: emergent-matter-materials
+
+      # ── Second (nested) private sibling: DELETE unless sibling-repo
+      # ABOVE itself pins a private path dependency (consumer -> sibling ->
+      # sibling2). Requires sibling-repo to also be set -- if you uncomment
+      # this block, sibling-repo above names your DIRECT dependency, not
+      # necessarily emergent-matter-materials. Real example:
+      # emergent-matter-web-sdm-tool -> emergent-matter-sdm-core ->
+      # emergent-matter-materials, i.e. sibling-repo would be sdm-core and
+      # sibling2-repo would be materials. See docs/onboarding.md, "A second,
+      # nested sibling".
+      # sibling2-repo: EmergentMatter/emergent-matter-materials
+      # sibling2-ref: <SHA -- pinned, matching sibling-repo's own ci.yml>
+      # sibling2-path: emergent-matter-materials
     permissions: { contents: write, pull-requests: write }
 
     # ── DELETE alongside the sibling-* inputs above if you aren't using them.
+    # If you uncommented the nested block, sibling-token also names a
+    # DIFFERENT secret than the single-hop default below -- one per repo,
+    # matching whatever you set sibling-repo / sibling2-repo to.
     # secrets:
     #   sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+    #   sibling2-token: ${{ secrets.MATERIALS_REPO_TOKEN }}  # only with the nested block above
 
     # NO `secrets: inherit` here, deliberately. `sibling-token` above is the
     # only secret the shared workflows read, and it is mapped BY NAME;

@@ -138,6 +138,54 @@ on:
         type: string
         default: ""
 
+      # ── Second (nested) private sibling ───────────────────────────────
+      #
+      # For the one hop further out: sibling-repo's OWN pyproject.toml pins
+      # a private path dependency too (consumer -> sibling -> sibling2).
+      # `uv version --bump` / `uv lock` resolve sibling-repo's
+      # [tool.uv.sources] as part of resolving the consumer, so sibling2
+      # has to land on disk as well, at whatever path sibling-repo's own
+      # source entry names -- the identical failure mode as the plain
+      # sibling case, one link further down the chain:
+      #
+      #   error: Distribution not found at: file:///.../sibling2
+      #
+      # Unset (the default), every sibling2 step below is skipped and a
+      # consumer using only the single-sibling case above is unaffected --
+      # this input set is purely additive. The fleet's nesting depth is two
+      # today (a direct private sibling that itself pins a private
+      # sibling); there is no sibling3. See docs/onboarding.md, "A second,
+      # nested sibling".
+      sibling2-repo:
+        description: >-
+          owner/name of a second private repo to check out alongside the
+          consumer's checkout and sibling-repo (same staging level as
+          sibling-repo, not nested inside it -- uv resolves each repo's
+          path sources relative to ITS OWN checkout, so all three have to
+          be siblings on disk). Empty (the default) disables this second
+          checkout. Requires sibling-repo to also be set -- validated
+          below, because a nested sibling with no direct sibling makes no
+          sense and is almost certainly a misconfigured stub.
+        type: string
+        default: ""
+      sibling2-ref:
+        description: >-
+          Exact ref of sibling2-repo. Required when sibling2-repo is set,
+          for the same reason sibling-ref is required -- an empty checkout
+          ref silently means "the default branch". Pin a SHA: sibling-repo's
+          own uv.lock (and transitively the consumer's) embeds sibling2's
+          resolved version.
+        type: string
+        default: ""
+      sibling2-path:
+        description: >-
+          Directory sibling2 lands in, as a SINGLE path segment. Must match
+          sibling-repo's OWN path source for it, and must differ from
+          sibling-path -- both land in the same parent directory, and a
+          collision would silently overwrite one checkout with the other.
+        type: string
+        default: ""
+
     secrets:
       sibling-token:
         description: >-
@@ -150,6 +198,13 @@ on:
           `secrets: inherit` -- this workflow is public and pinned by a
           MOVABLE `v1` tag, so inheriting would make that tag equivalent to
           org-wide secret access in every consuming repo.
+        required: false
+      sibling2-token:
+        description: >-
+          Token used to read sibling2-repo, needed when it is private.
+          Same rules as sibling-token: a fine-grained PAT scoped to that one
+          repo, mapped by name, never via `secrets: inherit`. Optional; a
+          public sibling2 falls back to `github.token`.
         required: false
 
 permissions: {}
@@ -216,7 +271,10 @@ jobs:
 
       # ---------------------------------------------------------------
       # Private sibling checkout -- see the sibling-* inputs for why.
-      # All three steps no-op when sibling-repo is unset.
+      # All three steps no-op when sibling-repo is unset. The sibling2-*
+      # block right after it is the same mechanism one hop further out --
+      # see the sibling2-* inputs above -- and no-ops independently when
+      # sibling2-repo is unset.
       # ---------------------------------------------------------------
       - name: Validate the sibling inputs
         if: inputs.sibling-repo != ''
@@ -285,6 +343,98 @@ jobs:
           # mv took everything.
           rmdir .em-sibling
           echo "sibling checked out at ${dest}"
+
+      # ---------------------------------------------------------------
+      # Second (nested) private sibling -- see the sibling2-* inputs for
+      # why. Mirrors the block above exactly, staged through its own
+      # .em-sibling2/ directory so the two checkouts can't collide even
+      # transiently. All steps no-op when sibling2-repo is unset.
+      # ---------------------------------------------------------------
+      - name: Validate the sibling2 inputs
+        if: inputs.sibling2-repo != ''
+        env:
+          SIBLING_REPO: ${{ inputs.sibling-repo }}
+          SIBLING_PATH: ${{ inputs.sibling-path }}
+          SIBLING2_REF: ${{ inputs.sibling2-ref }}
+          SIBLING2_PATH: ${{ inputs.sibling2-path }}
+        run: |
+          set -euo pipefail
+          # A nested sibling with no direct sibling is almost certainly a
+          # misconfigured stub -- e.g. sibling-repo/-ref/-path accidentally
+          # left off while only the sibling2-* block was filled in.
+          if [ -z "${SIBLING_REPO}" ]; then
+            echo "::error::sibling2-repo is set but sibling-repo is not. sibling2 is the SECOND sibling in a nested chain (consumer -> sibling -> sibling2) -- set sibling-repo/-ref/-path first."
+            exit 1
+          fi
+          # Checked BEFORE the checkout: an empty ref doesn't fail checkout, it
+          # silently resolves to the sibling's default branch.
+          if [ -z "${SIBLING2_REF}" ]; then
+            echo "::error::sibling2-ref is required when sibling2-repo is set -- an empty ref silently means the sibling's default branch."
+            exit 1
+          fi
+          # Becomes a destination OUTSIDE the workspace in the relocate step,
+          # so it is constrained to one plain segment.
+          case "${SIBLING2_PATH}" in
+            "" | */* | . | ..)
+              echo "::error::sibling2-path must be a single directory name with no slashes (got: '${SIBLING2_PATH}')."
+              exit 1
+              ;;
+          esac
+          # sibling and sibling2 both land in the same parent directory
+          # (dirname $GITHUB_WORKSPACE) -- a shared path would mean the
+          # second move silently overwrites the first checkout.
+          if [ "${SIBLING2_PATH}" = "${SIBLING_PATH}" ]; then
+            echo "::error::sibling2-path ('${SIBLING2_PATH}') is the same as sibling-path. Both land in the same parent directory and would collide -- give sibling2 its own path segment."
+            exit 1
+          fi
+
+      - name: Check out the second private sibling
+        if: inputs.sibling2-repo != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.sibling2-repo }}
+          ref: ${{ inputs.sibling2-ref }}
+          # Falls back to github.token so a PUBLIC sibling2 needs no secret.
+          token: ${{ secrets.sibling2-token || github.token }}
+          # One-shot clone -- no reason to leave the token in its git config.
+          persist-credentials: false
+          # Staged INSIDE the workspace, in its OWN directory (not
+          # .em-sibling/) so it can never collide with the first sibling's
+          # in-flight staging area. The next step moves it out.
+          path: .em-sibling2/${{ inputs.sibling2-path }}
+
+      - name: Move the second sibling alongside the consumer checkout
+        if: inputs.sibling2-repo != ''
+        env:
+          SIBLING2_PATH: ${{ inputs.sibling2-path }}
+        run: |
+          set -euo pipefail
+          # Same layout as the first sibling -- both land one level ABOVE
+          # $GITHUB_WORKSPACE, as siblings of each other and of the
+          # consumer, matching the local dev layout the nested repo's own
+          # ci.yml uses (see docs/onboarding.md, "A second, nested sibling"):
+          #
+          #   /home/runner/work/<repo>/            <- dirname, destination
+          #   ├── <repo>/                          <- $GITHUB_WORKSPACE
+          #   ├── foo/                             <- sibling-repo
+          #   └── bar/                             <- sibling2-repo
+          #
+          dest="$(dirname "${GITHUB_WORKSPACE}")/${SIBLING2_PATH}"
+          # A sibling2-path equal to the consumer's OWN repo name puts dest
+          # on $GITHUB_WORKSPACE, and the rm below would delete the checkout
+          # this job is releasing from. Cheap assert, catastrophic miss.
+          if [ "${dest}" = "${GITHUB_WORKSPACE}" ]; then
+            echo "::error::sibling2-path '${SIBLING2_PATH}' resolves to the consumer checkout itself (${GITHUB_WORKSPACE})."
+            exit 1
+          fi
+          rm -rf "${dest}"
+          mv ".em-sibling2/${SIBLING2_PATH}" "${dest}"
+          # .em-sibling2 must not survive: create-pull-request sweeps stray
+          # dirs into the release PR as gitlinks -- the same bug the
+          # '.em-actions' cleanup step below fixes. rmdir over rm -rf so it
+          # also asserts the mv took everything.
+          rmdir .em-sibling2
+          echo "sibling2 checked out at ${dest}"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0

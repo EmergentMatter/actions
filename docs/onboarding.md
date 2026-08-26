@@ -29,6 +29,7 @@ it covers, not front-to-back.
 - [Before you start](#before-you-start)
 - [The files](#the-files)
 - [A private sibling your package depends on (optional)](#a-private-sibling-your-package-depends-on-optional)
+- [A second, nested sibling](#a-second-nested-sibling)
 - [Publishing to a package index (optional)](#publishing-to-a-package-index-optional)
 - [The config block](#the-config-block)
 - [Worked example: emergent-matter-materials](#worked-example-emergent-matter-materials)
@@ -401,6 +402,96 @@ sandbox laid out the same way CI checks the two repos out.
 All of it is temporary: when the dependency ships to an index, drop the
 `[tool.uv.sources]` entry, the extra checkout in `ci.yml`, these three
 inputs, the secret, and the PAT.
+
+### A second, nested sibling
+
+Skip this too unless your sibling's **own** `pyproject.toml` also has a
+`[tool.uv.sources]` entry pointing at a local path -- i.e. your repo pins
+one private dependency, and that dependency itself pins another:
+
+```
+your repo  ->  emergent-matter-sdm-core  ->  emergent-matter-materials
+```
+
+This is a real, current case: `emergent-matter-web-sdm-tool` pins
+`emergent-matter-sdm-core` as a path source, and `sdm-core`'s own
+`pyproject.toml` pins `emergent-matter-materials` the same way. Resolving
+web-sdm-tool needs **both** siblings on disk, not just the direct one --
+`uv` resolves each repo's `[tool.uv.sources]` relative to that repo's own
+checkout, so sdm-core's own path source for materials has to resolve too,
+which means materials has to be sitting there when `uv lock` runs.
+
+The shared `version.yml` covers this with a second, independent input set:
+`sibling2-repo` / `sibling2-ref` / `sibling2-path` / the `sibling2-token`
+secret, same shape as the four `sibling-*` ones above, checked out to the
+same level (a sibling of both your repo and `sibling-repo`, not nested
+inside it on disk -- see the diagram below). It requires `sibling-repo` to
+also be set; a nested sibling with no direct sibling is refused as a
+likely misconfigured stub.
+
+**Your own `ci.yml` still has to check out both siblings itself**, exactly
+as it already does for the single-sibling case, because `version.yml` is
+called by reference and the same "your CI resolves the sibling for the
+`ci` job, the shared workflow resolves it again for the `version` job"
+split applies to each hop. Both repos land as siblings of your own
+checkout in `ci.yml`, and the same layout again in `version.yml`:
+
+```
+$GITHUB_WORKSPACE/
+├── emergent-matter-web-sdm-tool/   (this repo)
+├── emergent-matter-sdm-core/       (sibling-repo -- your DIRECT dependency)
+└── emergent-matter-materials/      (sibling2-repo -- sdm-core's OWN dependency)
+```
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/emergent-matter-sdm-core
+      sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
+      sibling-path: emergent-matter-sdm-core
+      sibling2-repo: EmergentMatter/emergent-matter-materials
+      sibling2-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
+      sibling2-path: emergent-matter-materials
+    secrets:
+      sibling-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+    permissions: { contents: write, pull-requests: write }
+```
+
+Two things worth being deliberate about, both consequences of the same
+"resolved relative to that repo's own checkout" rule:
+
+- **`sibling2-ref` pins the SHA your DIRECT sibling depends on, not
+  whatever `main` happens to be.** Read it off `sibling-repo`'s own
+  `ci.yml` (its `MATERIALS_REF` or equivalent), the same way you read
+  `sibling-ref` off your own dependency declaration. If `sibling-repo`
+  bumps its own dependency, your `sibling2-ref` goes stale the same way a
+  floating ref would -- pin it, and expect to bump it when the direct
+  sibling's own pin moves.
+- **`sibling-path` and `sibling2-path` must differ.** Both land in the
+  same parent directory (one level above `$GITHUB_WORKSPACE`), so a
+  collision would silently overwrite one checkout with the other. The
+  shared workflow refuses this before either checkout runs rather than
+  discovering it after.
+
+The fleet's nesting depth is two today: a direct private sibling that
+itself pins one private sibling. There is no `sibling3` input, and adding
+one is not expected to be needed soon -- see CONTRACT.md if that changes.
+
+**`build-release.yml` does not support this (or the single-sibling case)
+at all.** It only matters for that workflow's two non-automatic triggers
+(a human-pushed tag, or manual `workflow_dispatch`); the automated release
+path is entirely `version.yml`, which builds and publishes inline once it
+detects the release commit. See that workflow's own header comment if you
+ever need the fallback path with a private sibling in play.
+
+All of it is temporary, same as the single-sibling case: when both
+dependencies ship to an index, drop both `[tool.uv.sources]` entries, both
+extra checkouts in `ci.yml`, all six `sibling2-*`/`sibling-*` inputs, both
+secrets, and both PATs.
 
 ## Publishing to a package index (optional)
 

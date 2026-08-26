@@ -321,6 +321,59 @@ nobody made there. Bump the SHA and `uv.lock` in one commit.
 Omit all three inputs and the sibling steps skip entirely. The whole
 block comes out when the dependency ships to an index.
 
+### Second (nested) private sibling checkout (optional)
+
+For the one hop further out: `foo`'s **own** `pyproject.toml` pins a
+private path dependency too (`consumer -> foo -> bar`). `uv version
+--bump` / `uv lock` resolve `foo`'s `[tool.uv.sources]` as part of
+resolving the consumer, so `bar` has to land on disk as well, at whatever
+path `foo`'s own source entry names -- the identical failure mode as the
+single-sibling case, one link further down the chain.
+
+`sibling2-repo` / `sibling2-ref` / `sibling2-path` / `sibling2-token` are
+the same shape as the four `sibling-*` inputs, purely additive, and
+**require `sibling-repo` to also be set** -- a nested sibling with no
+direct sibling is refused as a misconfigured stub:
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/foo
+      sibling-ref: <SHA>
+      sibling-path: foo
+      sibling2-repo: EmergentMatter/bar
+      sibling2-ref: <SHA>          # required; a float breaks `uv sync --locked`
+      sibling2-path: bar           # must differ from sibling-path; must match
+                                    # foo's OWN `[tool.uv.sources]` entry for bar
+    secrets:
+      sibling-token: ${{ secrets.FOO_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.BAR_REPO_TOKEN }}
+    permissions: { contents: write, pull-requests: write }
+```
+
+Both siblings land at the **same** staging level -- as siblings of each
+other and of the consumer, one directory above `$GITHUB_WORKSPACE`, not
+nested inside one another on disk, because `uv` resolves each repo's
+`[tool.uv.sources]` relative to **that repo's own** checkout. `sibling-path`
+and `sibling2-path` must therefore differ: a collision would silently
+overwrite one checkout with the other, so it's refused before either
+checkout runs, not discovered afterward.
+
+Omit `sibling2-repo` and this whole block skips, exactly like the
+single-sibling case, and every existing single-sibling consumer is
+unaffected. The fleet's nesting depth is two today (a direct private
+sibling that itself pins a private sibling); there is no `sibling3`.
+
+**`build-release.yml` has no sibling support at all, single or nested.**
+That's a pre-existing gap, not something this section's inputs cover; see
+that workflow's own header comment. It only matters for its two
+non-automatic triggers (a human-pushed tag, or `workflow_dispatch`), since
+`version.yml` is the automated release path and builds inline once it
+detects the release commit.
+
 ## Where each guarantee lives
 
 | Path | What it owns |
