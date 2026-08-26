@@ -576,7 +576,11 @@ def check_contexts(contexts: list[str] | None) -> list[Finding]:
     if contexts is None:
         return [Finding("contexts", "warn", "no required status checks on the default branch")]
     expected = {"test", "build", "changelog"}
-    missing = expected - set(contexts)
+    # A matrixed job reports one context per leg, named "job (variant)" --
+    # sdm-physics requires "test (3.11)" and "test (3.13)" and has no bare
+    # "test" context at all. Each leg satisfies the base-name requirement.
+    present = set(contexts) | {c.split(" (", 1)[0] for c in contexts if c.endswith(")")}
+    missing = expected - present
     if missing:
         return [
             Finding("contexts", "warn", f"missing required check(s): {', '.join(sorted(missing))}")

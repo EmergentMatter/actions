@@ -334,6 +334,19 @@ def test_unprotected_branch_is_a_warning():
     assert severities(fleet_status.check_contexts(None), "contexts") == ["warn"]
 
 
+def test_matrixed_test_contexts_satisfy_the_test_requirement():
+    """A matrix job has no bare-name context, only one per leg."""
+    assert fleet_status.check_contexts(["test (3.11)", "test (3.13)", "build", "changelog"]) == []
+
+
+def test_matrix_normalisation_does_not_invent_missing_checks():
+    """A matrixed test leg alone must not stand in for build or changelog."""
+    findings = fleet_status.check_contexts(["test (3.11)"])
+    assert severities(findings, "contexts") == ["warn"]
+    assert "build" in messages(findings, "contexts")
+    assert "changelog" in messages(findings, "contexts")
+
+
 # ------------------------------------------------------- workflow_call
 
 
