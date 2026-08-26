@@ -192,10 +192,22 @@ For repos with a TypeScript package:
 - **Write ADRs** at `docs/adr/NNNN-kebab-title.md`, with `Status`,
   `Context`, `Decision`, and `Consequences` sections.
 
+### Writing
+
+- **Use plain punctuation.** No em dashes.
+- **Write short sentences.** No run-ons.
+- **Never count or place things in docs or comments.** A phrase like
+  "the six files," "files 4-9," or "all three jobs" goes stale the
+  moment the set changes. Name things by role or filename instead. A
+  configuration value (a line length, a version number, a timeout) is
+  not a count of things, and stating it directly is fine.
+
 ## Open-source hygiene
 
 Checklist before a repo goes public, or during PR review on one that
-already is:
+already is. **These rules apply to every file that ships in the repo**
+-- `CLAUDE.md`, docs, test fixtures, scripts, comments, error messages,
+not only source code:
 
 - **Never name a person as decision provenance** in shipped source or
   docs. Use an institutional source string plus a dated entry in a

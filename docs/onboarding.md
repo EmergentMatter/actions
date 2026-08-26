@@ -387,6 +387,17 @@ change nobody made there. Pin it, and bump the SHA and `uv.lock`
 together in one commit. Keep the SHA in your `ci.yml` and the
 `sibling-ref` here in step, too: they lock against the same thing.
 
+**Watch out for the local lockfile trap.** Your local checkout of the
+sibling is not the pinned SHA. Any `uv run` or `uv sync` you run
+locally resolves `[tool.uv.sources]` against your local checkout
+instead, and regenerates `uv.lock` to match it. Commit that lock and
+`uv sync --locked` starts failing in CI, where the sibling sits at the
+pinned SHA instead. Stage files explicitly rather than `git add -A`.
+Check `git diff uv.lock` before every commit in a repo like this. When
+you do mean to change the dependency, regenerate the lock against the
+pinned sibling SHA on purpose. Then verify with `uv sync --locked` in a
+sandbox laid out the same way CI checks the two repos out.
+
 All of it is temporary: when the dependency ships to an index, drop the
 `[tool.uv.sources]` entry, the extra checkout in `ci.yml`, these three
 inputs, the secret, and the PAT.

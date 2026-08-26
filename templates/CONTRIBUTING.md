@@ -4,12 +4,24 @@ Read [STYLE.md](STYLE.md) before writing code. It's the org's style guide:
 Python conventions, naming, docstrings, typing, testing, and the
 open-source hygiene checklist, all in one place.
 
+Participation here is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
 This repo also uses release control: every PR that changes behavior adds a
 small note describing the change, and those notes become the next release.
 This file covers the part you actually do as a contributor. For how the
 release side works, see
 [EmergentMatter/actions](https://github.com/EmergentMatter/actions)'s
 `docs/onboarding.md`.
+
+## Dev setup
+
+```bash
+uv sync
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
+```
 
 ## Add a changelog note
 
@@ -28,6 +40,16 @@ This asks you two things:
 
 It writes a small file into `changelog.d/`. Commit it with the rest of your
 PR. A check on the PR fails if this file is missing.
+
+### Running it without a terminal
+
+`scripts/changeset.py` needs a real terminal for its arrow-key picker.
+Without one (stdin or stdout not a TTY), it drops to a plain numbered
+prompt instead: type a digit to pick the level, then type the summary
+line. If stdin has nothing to read at all (closed, or redirected from
+an empty source), each prompt hits end of file. The script then prints
+`Cancelled.` and exits 0. It never hangs waiting for input that can't
+arrive.
 
 ### Picking a level
 
