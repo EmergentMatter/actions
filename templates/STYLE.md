@@ -143,6 +143,10 @@ Keep out of code:
   a coverage gate.
 - **Read machine-specific paths from environment variables, with a loud
   skip when unset.** Never hardcode an absolute path.
+- **Don't parallelize a fast suite.** `pytest -n auto` and compiler
+  caches are for a suite that has become the slow part of CI; below about
+  30s they cost more than they save. When a suite does get there, measure
+  before and after -- the CI template's test job explains both levers.
 
 ## TypeScript
 
