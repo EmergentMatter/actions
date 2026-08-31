@@ -5,8 +5,8 @@
 # repo's own design, per CLAUDE.md's "Known Issues" note.
 #
 # NOT part of the automated release path. version.yml builds and creates
-# the GitHub Release itself, inline, the moment it pushes the release tag
-# — a tag pushed with GITHUB_TOKEN doesn't trigger further workflow runs,
+# the GitHub Release itself, inline, the moment it pushes the release tag.
+# A tag pushed with GITHUB_TOKEN doesn't trigger further workflow runs,
 # so a stub listening for that push would never fire (found by the
 # em-release-control-test rehearsal). This stub stays for two cases that
 # aren't the automated path: a human pushing a `v*` tag by hand (which
@@ -23,12 +23,12 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    # No `secrets: inherit` — build-release.yml never reads secrets.*;
+    # No `secrets: inherit` -- build-release.yml never reads secrets.*;
     # publishing uses OIDC trusted publishing (id-token: write above), not
     # a token. Add it back only if this repo's own copy grows a step that
     # genuinely needs a named secret.
     with:
-      # Opt-in, off by default (S3). Flip to true — and set `environment:`
-      # to a GitHub Environment wired to a PyPI trusted publisher — once
+      # Opt-in, off by default (S3). Flip to true (and set `environment:`
+      # to a GitHub Environment wired to a PyPI trusted publisher) once
       # this repo is ready to publish releases to an index.
       publish: false

@@ -4,7 +4,7 @@ description: >-
   skip-label or was opened by one of bot-actors.
 
 # Inputs are documented in CONTRACT.md. Call it from a job that triggers
-# `on: pull_request` — see templates/stub-changelog-check.yml.
+# `on: pull_request`. See templates/stub-changelog-check.yml.
 
 inputs:
   notes-dir:
@@ -20,7 +20,7 @@ inputs:
     description: Python version used to run compute_bump.py's grammar validation.
     default: "3.13"
 
-# A composite action cannot declare `permissions:` — there is no
+# A composite action cannot declare `permissions:`. There is no
 # `runs.permissions` key. `contents: read` and `pull-requests: read` must
 # come from the calling job.
 
@@ -31,7 +31,7 @@ runs:
     # rather than skips: on a non-PR event `github.event.pull_request` is
     # empty, `ref:` below would silently become the default branch, and
     # the check would appear to run while validating nothing.
-    - name: Guard — pull_request events only
+    - name: Guard, pull_request events only
       shell: bash
       env:
         EVENT_NAME: ${{ github.event_name }}
@@ -91,7 +91,7 @@ runs:
         set -euo pipefail
         # Check the query's exit status explicitly. `mapfile < <(gh api ...)`
         # hides it from both `set -e` and `pipefail`, so a failed query
-        # yields an empty list and gets reported below as "no note added" —
+        # yields an empty list and gets reported below as "no note added",
         # telling a contributor they forgot a note they actually wrote.
         gh_err="${RUNNER_TEMP:-/tmp}/changelog-check-gh-err.txt"
         if ! added_raw="$(
@@ -115,7 +115,7 @@ runs:
           mapfile -t added <<< "${added_raw}"
         fi
 
-        # Only asks "was anything added under notes-dir/?" — deliberately NOT
+        # Only asks "was anything added under notes-dir/?" -- deliberately NOT
         # the *.major|minor|patch.md grammar. A typo'd level must reach
         # compute_bump.py's "unrecognized bump level" below rather than this
         # step's generic "no note was added", which would send a contributor

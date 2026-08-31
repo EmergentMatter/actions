@@ -242,6 +242,68 @@ jobs:
           print(f"OK  {len(form_files)} issue-template file(s) valid")
           EOF
 
+      - name: No em dashes in tracked files
+        # templates/STYLE.md's "Writing" section says "Use plain punctuation.
+        # No em dashes." That file is a managed template every onboarded repo
+        # receives, so this repo shipping the rule while breaking it is the
+        # contradiction issue #26 reported in templates/CONTRIBUTING.md. Prose
+        # review had already missed it across the repo, which is what makes
+        # this worth a check rather than a reviewer's attention.
+        #
+        # The character is written as an escape, never literally, so this step
+        # does not flag its own source.
+        run: |
+          uv run python - <<'EOF'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          EM_DASH = "\u2014"
+
+          # Resolver output, not prose anyone here writes or reviews, and it
+          # never reaches a consuming repo. Excluded so a future uv lockfile
+          # format cannot fail a check nobody in this repo could fix.
+          EXCLUDED = {"uv.lock"}
+
+          # -z means NUL-separated, so decode explicitly: text=True would
+          # apply universal-newline translation inside a filename.
+          tracked = subprocess.run(
+              ["git", "ls-files", "-z"],
+              capture_output=True,
+              check=True,
+          ).stdout.decode("utf-8").split("\0")
+
+          n_checked = 0
+          hits = []
+          for name in tracked:
+              if not name or name in EXCLUDED:
+                  continue
+              path = Path(name)
+              if not path.is_file():
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  # Binary or unreadable; there is no prose here to check.
+                  continue
+              n_checked += 1
+              for n_line, line in enumerate(text.splitlines(), start=1):
+                  if EM_DASH in line:
+                      hits.append(f"{name}:{n_line}: {line.strip()}")
+
+          if hits:
+              print(
+                  f"::error::{len(hits)} line(s) contain an em dash. "
+                  "templates/STYLE.md's 'Writing' section requires plain "
+                  "punctuation. Rewrite with a colon, a comma, parentheses, or "
+                  "a sentence split, or use ' -- ' where the break genuinely "
+                  "needs a dash.\n" + "\n".join(hits)
+              )
+              sys.exit(1)
+
+          print(f"OK  no em dashes in {n_checked} tracked file(s)")
+          EOF
+
   format:
     name: format
     runs-on: ubuntu-latest

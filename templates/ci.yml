@@ -1,4 +1,4 @@
-# Starting CI template for a consuming repo — copy to
+# Starting CI template for a consuming repo. Copy to
 # `.github/workflows/ci.yml` and adjust as the repo needs.
 #
 # Most repos in the org currently run no automated checks at all; this is
@@ -36,7 +36,7 @@
 # whatever's already resolved on a developer's machine (C3).
 #
 # Must stay callable both directly on pull_request AND as a reusable
-# workflow_call — the version.yml stub does `needs: ci` onto this file by
+# workflow_call: the version.yml stub does `needs: ci` onto this file by
 # reference (`uses: ./.github/workflows/ci.yml`).
 #
 # `name: CI` below is what makes checks display as `CI / lint` etc.
@@ -82,7 +82,7 @@ jobs:
     #            -> enforced on PRs and on the release path
     #
     # Deleting this line without adding the context leaves lint unenforced
-    # on PRs while newly able to stall a release — the worst of both.
+    # on PRs while newly able to stall a release -- the worst of both.
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -193,11 +193,11 @@ jobs:
       # Install must be the step immediately before the test run, with
       # nothing that writes a version string in between. Some repos have
       # tests that read INSTALLED package metadata (importlib.metadata),
-      # not the source tree — e.g. emergent-matter-materials asserts
+      # not the source tree. E.g. emergent-matter-materials asserts
       # importlib.metadata.version() agrees with the module's __version__.
       # A fresh sync right before the test step, on every run, makes that
-      # class of "environment vs. tree" drift structurally impossible —
-      # it's a concrete instance of why C3 requires a clean-machine,
+      # class of "environment vs. tree" drift structurally impossible.
+      # It's a concrete instance of why C3 requires a clean-machine,
       # from-lockfile install rather than a persisted/cached environment.
       # If you add a step here later, keep it above this line, not between
       # sync and test.
@@ -208,7 +208,7 @@ jobs:
           if [ -d tests ]; then
             uv run pytest
           else
-            echo "No tests/ directory yet — nothing to run. (install + build still ran below.)"
+            echo "No tests/ directory yet, nothing to run. (install + build still ran below.)"
           fi
 
   build:
