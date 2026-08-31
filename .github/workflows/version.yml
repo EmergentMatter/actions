@@ -1,9 +1,9 @@
 name: Version
 
-# Reusable workflow_call workflow — see CONTRACT.md "version.yml behaviour".
+# Reusable workflow_call workflow. See CONTRACT.md "version.yml behaviour".
 #
 # Called on every push to `main` in a consuming repo, after that repo's own
-# CI (the `needs: ci` edge in its stub — see templates/stub-version.yml).
+# CI (the `needs: ci` edge in its stub; see templates/stub-version.yml).
 #
 # Two paths, chosen by whether HEAD is the release commit that a merged
 # release PR just produced:
@@ -18,27 +18,27 @@ name: Version
 # the em-release-control-test rehearsal: the tag below is pushed using the
 # checkout's persisted GITHUB_TOKEN credentials, and GitHub does not run
 # further workflows from events created by GITHUB_TOKEN (the same
-# recursion guard documented for the release PR's own checks) — so a
+# recursion guard documented for the release PR's own checks), so a
 # `build-release.yml` stub listening for `push: tags: ["v*"]` would simply
 # never fire on the automated path. `uses:` can't take a templated ref
 # either, so this can't call build-release.yml as a nested reusable
-# workflow with the actions-ref input below — the steps are inlined
+# workflow with the actions-ref input below. The steps are inlined
 # instead. build-release.yml still exists, retargeted at `workflow_dispatch`
 # and human-pushed tags (which DO trigger workflows), for manually
 # rebuilding/republishing a past release.
 #
 # Detecting "HEAD is the release commit": rather than parsing the merge
-# commit message (which differs by merge strategy — merge commit, squash,
+# commit message (which differs by merge strategy: merge commit, squash,
 # or rebase all produce a different HEAD message), we ask the GitHub API
 # which merged PR(s) contain this commit and check whether any of them has
 # `release-branch` as its head ref. That's strategy-agnostic and doesn't
 # depend on peter-evans/create-pull-request's exact commit/PR-title text.
 #
 # scripts/compute_bump.py and scripts/sync_version.py live in THIS repo,
-# not the consumer's — a called reusable workflow only checks out the
+# not the consumer's. A called reusable workflow only checks out the
 # CALLER's code by default, so we check out EmergentMatter/actions a
 # second time, pinned to job.workflow_sha (the exact commit SHA of THIS
-# reusable workflow file — see the checkout step below for why, not
+# reusable workflow file; see the checkout step below for why, not
 # github.workflow_ref, which resolves to the CALLER's ref), into
 # .em-actions/, and invoke the scripts from there against the consumer's
 # checked-out pyproject.toml / changelog.d/.
@@ -69,14 +69,14 @@ on:
         type: string
         default: "3.13"
       uv-version:
-        description: Exact uv version to install (never "latest" — uv version --bump needs >=0.7).
+        description: Exact uv version to install (never "latest"; uv version --bump needs >=0.7).
         type: string
         default: "0.12.5"
       skip-label:
         description: >-
           Label applied to the release PR so it exempts its own note check (E6).
           Must match whatever the repo passes as changelog-check.yml's skip-label
-          input — a repo that overrides one and not the other breaks E6 silently.
+          input. A repo that overrides one and not the other breaks E6 silently.
           (Defense in depth only: the release PR is also authored by
           github-actions[bot], which changelog-check.yml's default bot-actors
           already exempts independently.)
@@ -92,7 +92,7 @@ on:
           reviewers). Only consulted when publish is true, but it's still
           used to name the environment even when publish is false: GitHub
           validates `environment:` at workflow-PARSE time, before any `if:`
-          is evaluated, and an empty environment name is invalid there — so
+          is evaluated, and an empty environment name is invalid there -- so
           an empty default doesn't get skipped by the publish gate, it
           fails the whole workflow to load, for every run, including ones
           that never touch publishing. Found live in the rehearsal
@@ -286,7 +286,7 @@ jobs:
           # Checked BEFORE the checkout: an empty ref doesn't fail checkout, it
           # silently resolves to the sibling's default branch.
           if [ -z "${SIBLING_REF}" ]; then
-            echo "::error::sibling-ref is required when sibling-repo is set — an empty ref silently means the sibling's default branch."
+            echo "::error::sibling-ref is required when sibling-repo is set. An empty ref silently means the sibling's default branch."
             exit 1
           fi
           # Becomes a destination OUTSIDE the workspace in the relocate step,
@@ -462,7 +462,7 @@ jobs:
           # is a normal, successful `gh api` exit (jq's select() just
           # yields nothing) and is handled correctly below. A real API
           # failure (rate limit, transient 5xx) must fail this step loudly
-          # via set -e, not be swallowed into "not a release commit" — that
+          # via set -e, not be swallowed into "not a release commit". That
           # would silently skip tagging a just-merged release with a green
           # check and no error anywhere.
           refs=$(
@@ -498,7 +498,7 @@ jobs:
           # between tag-push and release-creation leaves a tag with no
           # Release attached forever.
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "Tag ${tag} already exists — (re)building the release below anyway."
+            echo "Tag ${tag} already exists, (re)building the release below anyway."
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -590,7 +590,7 @@ jobs:
           uv lock
           actual=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "${actual}" != "${EXPECTED_NEXT}" ]; then
-            echo "::error::uv computed version ${actual} but compute_bump.py expected ${EXPECTED_NEXT} — semver bump semantics have diverged between uv and compute_bump.py's V2 rule (no 0.x special-casing)."
+            echo "::error::uv computed version ${actual} but compute_bump.py expected ${EXPECTED_NEXT}. Semver bump semantics have diverged between uv and compute_bump.py's V2 rule (no 0.x special-casing)."
             exit 1
           fi
 
@@ -684,7 +684,7 @@ jobs:
           commit-message: "release: v${{ steps.bump.outputs.next }}"
           title: "Release v${{ steps.bump.outputs.next }}"
           # R3: this PR must contain only the version bump, changelog
-          # update, note deletions, and lockfile refresh — nothing else ran
+          # update, note deletions, and lockfile refresh. Nothing else ran
           # in this job before this step, so the working tree diff already
           # satisfies that; nothing extra is added here.
           # Follows the repo's own pull request template, minus the sections
@@ -719,8 +719,8 @@ jobs:
             - [ ] `v${{ steps.bump.outputs.next }}` is the right version for those changes
           # E6: exempts this PR from changelog-check.yml's note requirement
           # by label. It's also opened as github-actions[bot], which
-          # changelog-check.yml's default bot-actors already exempts (E5) —
-          # this label is defense in depth, not the only path. The caller
+          # changelog-check.yml's default bot-actors already exempts (E5).
+          # This label is defense in depth, not the only path. The caller
           # must pass the same value here as it passes to
           # changelog-check.yml's skip-label input, or E6 breaks silently
           # for a repo that overrides one and not the other.

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Create a changelog.d/ note for this change.
 
-Copied verbatim into consuming repos at `scripts/changeset.py` — stdlib
+Copied verbatim into consuming repos at `scripts/changeset.py` -- stdlib
 only, no dependencies, invoked directly by path (`uv run scripts/changeset.py`)
 from the repo root, with no `[project.scripts]` entry point. It must never
 live inside the package (`src/<pkg>/...`): this is a contributor-only
 authoring tool, and anything under the package root ships in the built
-wheel — see CONTRACT.md and docs/onboarding.md for why this file's location
+wheel. See CONTRACT.md and docs/onboarding.md for why this file's location
 is load-bearing, not cosmetic.
 
 Run it, pick a bump level, write a one-line user-facing summary. `q`,

@@ -1,5 +1,5 @@
 # This repo hosts the org's reusable release workflows. It is NOT itself
-# onboarded into release control — it is versioned by its own `v*` tags,
+# onboarded into release control. It is versioned by its own `v*` tags,
 # which consumers pin against. See .github/RELEASING.md.
 #
 # No [build-system] on purpose: uv treats this as a virtual project, so

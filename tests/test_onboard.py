@@ -151,13 +151,13 @@ def test_marker_goes_above_existing_history_not_below():
     bury every future release under the hand-written history."""
     changelog = (
         "# Changelog\n\nSome intro prose.\n\n"
-        "## v1.10.0 — newest existing\n\nstuff\n\n"
-        "## v1.9.0 — older\n\nmore stuff\n"
+        "## v1.10.0 (newest existing)\n\nstuff\n\n"
+        "## v1.9.0 (older)\n\nmore stuff\n"
     )
     out = onboard.insert_marker(changelog)
     assert out.index(onboard.TOWNCRIER_MARKER) < out.index("## v1.10.0")
     assert "Some intro prose." in out
-    assert "## v1.9.0 — older" in out
+    assert "## v1.9.0 (older)" in out
 
 
 def test_marker_insertion_is_idempotent():
