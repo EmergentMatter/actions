@@ -5,10 +5,9 @@ These read the real reusable workflow and its consumer stub as text and
 assert on their shape, the same way test_onboard.py's
 test_real_manifest_* tests check the real manifest rather than a fixture
 copy. No workflow_call in this repo is ever actually driven by a runner
-in this test suite -- that only happens live, against
-em-release-control-test (see CLAUDE.md) -- so this is the level available
-to catch a regression in the input names, defaults, and the guard steps
-CONTRACT.md documents.
+in this test suite; that only happens live, in a consuming repo. So this
+is the level available to catch a regression in the input names,
+defaults, and the guard steps CONTRACT.md documents.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
 # The maintenance tools
 
-Five scripts in `scripts/` run **from a clone of this repo** against a
-target repo. None of them are copied into consuming repos; they are
-yours, not theirs.
+The scripts below run **from a clone of this repo** against a target
+repo. None of them are copied into consuming repos; they are yours, not
+theirs.
 
-Two more scripts, `compute_bump.py` and `sync_version.py`, exist but
-aren't run this way. They run from *inside* a target repo instead, and
+`compute_bump.py` and `sync_version.py` are the exception. They run from
+*inside* a target repo instead, and
 [onboarding.md](onboarding.md#verifying-it-locally-before-you-rely-on-it)
 covers them.
 
@@ -25,11 +25,9 @@ on macOS is older than that, so use `uv run python`).
 
 ## `onboard.py`
 
-Does the mechanical half of [onboarding](onboarding.md): the three
-workflow stubs, `scripts/changeset.py`, `CONTRIBUTING.md`, `changelog.d/`,
-the config block, the towncrier marker, a set of standard repo-hygiene
-files (`SECURITY.md`, `LICENSE`, `CODEOWNERS`, and others; the full list
-is [`templates/manifest.toml`](../templates/manifest.toml)), and the
+Does the mechanical half of [onboarding](onboarding.md): every file
+[`templates/manifest.toml`](../templates/manifest.toml) declares, plus
+`changelog.d/`, the config block, the towncrier marker, and the
 `skip-changelog` label. Idempotent: run it twice and the second run
 reports what is already correct.
 
@@ -89,8 +87,8 @@ Use `--no-version-files` if the version genuinely only lives in
   hand. See [onboarding.md](onboarding.md#the-label) for that command.
 - **Turns on GitHub's private vulnerability reporting**, but only for a
   *public* repo. The API 404s on a private one, and the feature doesn't
-  exist there. `SECURITY.md` (one of the hygiene files above) points a
-  researcher at the button this enables; a repo onboarded private keeps
+  exist there. The `SECURITY.md` it installs points a researcher at the
+  button this enables; a repo onboarded private keeps
   that promise unmet until someone turns it on after the repo goes public.
   `onboard.py` prints that as a reminder when it skips it.
 
@@ -107,30 +105,12 @@ uv run python scripts/sync.py --repo-path ../some-repo --dry-run
 ```
 
 It three-way compares each `managed` template in
-[`templates/manifest.toml`](../templates/manifest.toml) (see
-[CONTRACT.md](../CONTRACT.md) for the manifest format and the `managed` /
-`seed-once` split):
-
-- **base**: the version the repo last synced from, recorded as
-  `templates_version` in its `[tool.em-release]` block.
-- **ours**: the repo's current copy of the file.
-- **theirs**: this repo's current copy, in `templates/`.
-
-That third point, base, is why this is a three-way compare and not a diff:
-
-- Base and ours agree, theirs has moved: the repo's copy is just **stale**.
-  Updated silently; there's no decision to surface.
-- Base and theirs agree, ours has moved: the repo **deliberately edited**
-  its copy. Left alone, and reported so you know it's there.
-- All three differ: a genuine **conflict**, both sides changed since the
-  last sync. Prompts, unless you already know which side should win.
-
-This is the same distinction `fleet_status.py`'s `templates` check used to
-get wrong, before it had a `templates_version` stamp to compare against:
-every divergent file got flagged the same way, stale copy or knowing edit
-alike, because "differs from the template" was all a two-way diff could
-report. The stamp is what makes "here's why" possible, for both that check
-and this one.
+[`templates/manifest.toml`](../templates/manifest.toml) against the
+`templates_version` the repo last synced from, so a stale copy is updated
+silently and a deliberate local edit is left alone and reported. See the
+`sync.py` section of [CONTRACT.md](../CONTRACT.md) for the manifest format,
+the outcome for each combination, and why the recorded base version is what
+makes the distinction possible at all.
 
 ```
 sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
@@ -145,9 +125,8 @@ sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
   the rest.
 - `--json`: machine-readable output, for scripting.
 
-`seed-once` entries (`ci.yml` today) are never touched: not updated, not
-reported as drift. A repo's CI is its own from the moment `onboard.py` seeds
-it.
+A `seed-once` entry is never touched: not updated, not reported as drift.
+The repo owns it from the moment `onboard.py` seeds it.
 
 Exit code follows the same convention as `lint_gate.py status`: 0 means done
 (nothing pending), 1 an error, 2 that at least one entry is still pending:
@@ -180,16 +159,18 @@ to see info findings without deciding they're worth a nonzero exit.
 |---|---|---|
 | `stub` | broken | still on the `workflow_call` path removed in v1.1.0, so it 404s on every PR |
 | `workflow_call` | broken | `ci.yml` not callable; `version.yml` fails at parse time on every push to main |
-| `gate` | broken (else info) | the `lint` job's two halves disagree, per `lint_gate.py`. Reported at `info` when the two halves agree |
+| `gate` | broken (else info) | the halves of the `lint` gate disagree, per `lint_gate.py`. Reported at `info` when they agree |
 | `format_gate` | broken (else info) | same, for the `format` job. `info` if the repo has no `format:` job yet |
 | `typecheck_gate` | broken (else info) | same, for the `typecheck` job |
 | `contexts` | warn | required checks missing, or no branch protection at all |
 | `verify` | warn | build job runs `uv build` with no `verify-wheel`; a wheel that builds and installs nothing would pass |
-| `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`, not just `changeset.py` -- this now includes `STYLE.md` and `ruff-base.toml`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
+| `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
 | `stamp` | info / warn | the `templates_version` provenance stamp against this repo's newest release tag: `info` if there's no stamp at all (onboarded before it existed), `warn` if it names an unrecognised tag or is behind |
 | `security` | warn | `SECURITY.md` documents private vulnerability reporting but the repo has it turned off. Not applicable to private repos, which can't have the feature at all |
-| `tooling` | warn | `pyproject.toml` is missing `[tool.mypy]` or `[tool.pytest.ini_options]` (existence only, not exact content -- see `templates/pyproject-snippet.toml`) |
+| `tooling` | warn | `pyproject.toml` is missing `[tool.mypy]` or `[tool.pytest.ini_options]`; existence only, not exact content (see `templates/pyproject-snippet.toml`) |
 | `pins` | warn | an action pinned to a version targeting Node 20 |
+| `ruff_config` | warn | `ruff-base.toml` is installed but inert: no `ruff.toml` extends it, or `pyproject.toml` still carries an inline `[tool.ruff]` section |
+| `ts_job` | info | a Bun package is present but `ci.yml` has no `ts:` job |
 | `naming` | info | `ci.yml` has no `name:`, so checks display the file path |
 
 Severity is load-bearing. A repo on the removed stub path is broken *now*; a
@@ -209,13 +190,14 @@ optional `ts` job in `templates/ci.yml` is staged the same way but isn't
 covered here: its working directory isn't the repo root, so it's flipped
 by hand.
 
-The gate is two settings in two places, and they must agree:
+The gate is a setting in the repo and a setting on GitHub, and they must
+agree:
 
 1. `continue-on-error: true` on `ci.yml`'s job: a file in the repo
 2. the job's name in the required status checks: a GitHub setting
 
 Flipping one without the other is not a half-measure, it is a broken state,
-and the two broken states fail in **opposite directions**:
+and the broken states fail in **opposite directions**:
 
 | State | Consequence |
 |---|---|
@@ -234,7 +216,7 @@ uv run --project ../actions python ../actions/scripts/lint_gate.py --job typeche
 ```
 
 `status` exits non-zero on `INCONSISTENT`, so it works as a check by itself.
-The two inconsistent states get different messages, because the same message
+Each inconsistent state gets its own message, because one message for both
 would misdirect whoever is reading it.
 
 `on` **refuses if the repo still has findings for that job.** Enforcing over
@@ -277,7 +259,7 @@ packages = ["src/goodpkg"]
 exclude = ["*.py"]
 ```
 
-and produces a wheel containing three `.dist-info` files and no code. A
+and produces a wheel containing nothing but its `.dist-info` metadata. A
 `packages` entry naming a directory that does not exist also builds without
 complaint.
 

@@ -1,6 +1,6 @@
 # The single declaration of what onboarding installs and what sync.py keeps
 # current. Consumed by onboard.py, sync.py, and fleet_status.py -- read with
-# stdlib tomllib. Do not change this shape without updating all three.
+# stdlib tomllib. Do not change this shape without updating each of them.
 #
 #   source  path relative to templates/ (may be nested, e.g. ISSUE_TEMPLATE/x)
 #   dest    path relative to the target repo root

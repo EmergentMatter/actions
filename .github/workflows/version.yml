@@ -14,18 +14,16 @@ name: Version
 #                                   pending, draft/update the release PR.
 #
 # Build + release are INLINED into this job's tag path rather than left to
-# a separately tag-triggered workflow (build-release.yml). Reason, found by
-# the em-release-control-test rehearsal: the tag below is pushed using the
-# checkout's persisted GITHUB_TOKEN credentials, and GitHub does not run
-# further workflows from events created by GITHUB_TOKEN (the same
-# recursion guard documented for the release PR's own checks), so a
-# `build-release.yml` stub listening for `push: tags: ["v*"]` would simply
-# never fire on the automated path. `uses:` can't take a templated ref
-# either, so this can't call build-release.yml as a nested reusable
-# workflow with the actions-ref input below. The steps are inlined
-# instead. build-release.yml still exists, retargeted at `workflow_dispatch`
-# and human-pushed tags (which DO trigger workflows), for manually
-# rebuilding/republishing a past release.
+# a separately tag-triggered workflow (build-release.yml). The tag below is
+# pushed with the checkout's persisted GITHUB_TOKEN credentials, and a tag
+# pushed that way cannot trigger a workflow: see CONTRACT.md, "Why the
+# release is not tag-triggered". A `build-release.yml` stub listening for
+# `push: tags: ["v*"]` would therefore never fire on the automated path.
+# `uses:` can't take a templated ref either, so this can't call
+# build-release.yml as a nested reusable workflow at the actions-ref input
+# below. The steps are inlined instead. build-release.yml still exists,
+# retargeted at `workflow_dispatch` and human-pushed tags (which DO
+# trigger workflows), for manually rebuilding/republishing a past release.
 #
 # Detecting "HEAD is the release commit": rather than parsing the merge
 # commit message (which differs by merge strategy: merge commit, squash,
@@ -89,14 +87,10 @@ on:
       environment:
         description: >-
           GitHub Environment to run the publish job under (e.g. for required
-          reviewers). Only consulted when publish is true, but it's still
-          used to name the environment even when publish is false: GitHub
-          validates `environment:` at workflow-PARSE time, before any `if:`
-          is evaluated, and an empty environment name is invalid there -- so
-          an empty default doesn't get skipped by the publish gate, it
-          fails the whole workflow to load, for every run, including ones
-          that never touch publishing. Found live in the rehearsal
-          (startup_failure, no jobs ran at all). A repo enabling
+          reviewers). Consulted only when publish is true, but this default
+          must stay non-empty whatever publish is set to. The publish job's
+          own comment, below, is the account of why an empty name here
+          breaks every run of every consuming repo. A repo enabling
           `publish: true` must create a GitHub Environment with this name
           and attach its PyPI trusted publisher to it.
         type: string
@@ -271,7 +265,7 @@ jobs:
 
       # ---------------------------------------------------------------
       # Private sibling checkout -- see the sibling-* inputs for why.
-      # All three steps no-op when sibling-repo is unset. The sibling2-*
+      # Every sibling step no-ops when sibling-repo is unset. The sibling2-*
       # block right after it is the same mechanism one hop further out --
       # see the sibling2-* inputs above -- and no-ops independently when
       # sibling2-repo is unset.
@@ -509,30 +503,25 @@ jobs:
 
       # ---------------------------------------------------------------
       # S2: build the wheel/sdist and attach them to a GitHub Release for
-      # the tag just pushed. Inlined here (via the shared composite action
-      # below) rather than left to a tag-triggered workflow -- see the file
-      # header for why a GITHUB_TOKEN-pushed tag can't rely on that.
-      # Build + create the Release inline, in this same job.
+      # the tag just pushed, inline in this same job rather than left to a
+      # tag-triggered workflow. See the file header for why the tag this
+      # job pushes can't be relied on to trigger one.
       #
-      # These steps are duplicated in build-release.yml, which covers the
-      # human-pushed-tag / workflow_dispatch path. Keep the two in step.
+      # These steps are duplicated in build-release.yml, which serves the
+      # human-pushed-tag / workflow_dispatch path. Keep the two copies in
+      # step when either changes.
       #
-      # A shared composite action was tried and withdrawn. Be careful with the
-      # history here: it was removed while chasing a startup_failure whose real
-      # cause turned out to be elsewhere (the publish job requested a permission
-      # the caller had not granted -- see that job). So the composite action was
-      # NOT proven to be the problem and may well work. What is genuinely
-      # awkward is the reference: `uses:` cannot take a templated ref, so
+      # A shared composite action was tried and withdrawn, but was never
+      # proven to be the problem: it came out while chasing a
+      # startup_failure whose real cause turned out to be elsewhere (the
+      # publish job requested a permission the caller had not granted; see
+      # that job). It may well work. What is genuinely awkward is the
+      # reference: `uses:` cannot take a templated ref, so
       # `EmergentMatter/actions/...@<ref>` could not follow the ref this
-      # workflow is pinned at, and a local `./` path has to exist wherever the
-      # runner resolves it from -- which for a reusable workflow called
+      # workflow is pinned at, and a local `./` path has to exist wherever
+      # the runner resolves it from, which for a reusable workflow called
       # cross-repo is not obvious and was never isolated on its own.
-      #
-      # Given that, the duplication is four steps, verified working end to end.
-      # Revisit only with an isolated test of the `./` resolution question.
-      #
-      # These steps are therefore duplicated in build-release.yml, which serves
-      # the human-pushed-tag / workflow_dispatch path. Keep the two in step.
+      # Revisit only with a test of that `./` resolution question alone.
       - name: Build wheel + sdist
         if: steps.detect.outputs.is-release-commit == 'true'
         run: uv build
@@ -732,19 +721,41 @@ jobs:
     if: needs.version.outputs.is-release-commit == 'true' && inputs.publish
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    # NO `permissions:` block here, and that is load-bearing.
+    # ── The parse-time ceiling on a called workflow ────────────────────
     #
-    # A caller's `permissions:` on a `workflow_call` is a CEILING for every job
-    # in the called workflow. Declaring `id-token: write` here therefore does
-    # not merely fail to take effect when the caller hasn't granted it -- it
-    # fails the ENTIRE workflow at parse time with startup_failure, on every
-    # run, for every repo, including ones with publishing switched off and this
-    # job skipped. Observed live: every run failed until this block was removed.
+    # NO `permissions:` block here, and that absence is load-bearing. This
+    # comment is the canonical account of the failure it avoids; nothing
+    # else restates it.
     #
-    # So the permission has to come from the consumer's stub instead. A repo
-    # enabling `publish: true` adds `id-token: write` to the `permissions:` on
-    # its version.yml stub; this job then inherits it. A repo not publishing
-    # grants nothing extra and this job never runs.
+    # A caller's `permissions:` on a `workflow_call` is a CEILING for every
+    # job in the called workflow, not a per-job grant. GitHub checks a
+    # called job's declared permissions against that ceiling when it PARSES
+    # the workflow, before any `if:` is evaluated. So a job asking for more
+    # than the caller granted does not degrade and does not merely fail
+    # when it runs: the whole workflow fails to load with
+    # `startup_failure`, no job runs at all, and the API returns no message
+    # saying why.
+    #
+    # The blast radius is every onboarded repo, on every push to `main`,
+    # whether or not it publishes anything. A repo with `publish: false`
+    # has this job skipped by the `if:` above, but the parse happens first,
+    # so it breaks too. Observed live in the rehearsal: every run of every
+    # consumer failed until the `permissions:` block came out of this job.
+    #
+    # `environment:` on the line above is validated at that same parse
+    # step, and broke the same way for the same reason: its input default
+    # was once the empty string, which is not a valid environment name, so
+    # every run of every consumer died at startup_failure regardless of the
+    # publish gate. That is why `environment:` is set unconditionally here
+    # rather than gated on `inputs.publish`, and why its input ships a
+    # non-empty default.
+    #
+    # The permission therefore has to come from the consumer's own stub. A
+    # repo enabling `publish: true` adds `id-token: write` to the
+    # `permissions:` block on its version.yml stub and creates a GitHub
+    # Environment named by the `environment` input with a PyPI trusted
+    # publisher attached; this job inherits both. A repo that does not
+    # publish grants nothing extra and this job never runs.
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

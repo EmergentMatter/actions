@@ -1,17 +1,15 @@
 # .github/workflows/build-release.yml
 #
-# CONTRACT.md's "Consumer stub" section only spells out the version.yml
-# stub's exact shape; this one and stub-changelog-check.yml are this
-# repo's own design, per CLAUDE.md's "Known Issues" note.
-#
 # NOT part of the automated release path. version.yml builds and creates
-# the GitHub Release itself, inline, the moment it pushes the release tag.
-# A tag pushed with GITHUB_TOKEN doesn't trigger further workflow runs,
-# so a stub listening for that push would never fire (found by the
-# em-release-control-test rehearsal). This stub stays for two cases that
-# aren't the automated path: a human pushing a `v*` tag by hand (which
-# DOES trigger workflows), and `workflow_dispatch` for manually rebuilding
-# or republishing a past release (e.g. after a failed publish).
+# the GitHub Release itself, inline, the moment it pushes the release tag,
+# because the tag it pushes cannot trigger a workflow. For why, see "Why
+# the release is not tag-triggered" in
+# https://github.com/EmergentMatter/actions/blob/main/CONTRACT.md
+#
+# This stub covers the paths that are not automated: a human pushing a
+# `v*` tag by hand (which DOES trigger workflows), and
+# `workflow_dispatch` for manually rebuilding or republishing a past
+# release (e.g. after a failed publish).
 name: Build & Release
 on:
   push:

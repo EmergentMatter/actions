@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code when working with code in this repository.
 
+## Before starting work
+
+Read the board first. What is planned, in flight, or known broken is not
+recorded in this repo. Before proposing or starting anything:
+
+```bash
+gh issue list                                    # open work, with the reasoning in each body
+gh api repos/:owner/:repo/milestones --jq '.[].title'   # what the next release commits to
+git tag --sort=-v:refname | head -1              # the current version
+```
+
+Do not add a roadmap, a "current work" note, or a known-issues list to any
+file here. File an issue instead, and put the reason and the definition of
+done in its body.
+
 ## Org Playbook
 
 This project follows the EmergentMatter engineering playbook. See
@@ -16,8 +31,10 @@ public, passive repo of reusable GitHub Actions workflows plus small
 stdlib-only Python scripts that let every Python repo in the org version
 and release the same way: one changelog note per PR, one computed release
 PR, merging that PR is the release. See [README.md](README.md) for the
-concept, [docs/onboarding.md](docs/onboarding.md) to onboard a repo, and
-[CONTRACT.md](CONTRACT.md) for the full behavioural spec.
+concept, [docs/onboarding.md](docs/onboarding.md) to onboard a repo,
+[docs/tooling.md](docs/tooling.md) to run the maintenance scripts, and
+[CONTRACT.md](CONTRACT.md) for the full behavioural spec. Read CONTRACT.md
+before changing how release control behaves.
 
 This repo holds no secrets and calls nothing at runtime. Consuming repos
 run the actual workflows in their own context using their own
@@ -34,69 +51,50 @@ uv run python scripts/compute_bump.py --format json          # dry-run the bump 
 uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version-string agreement
 ```
 
-## Architecture / Key Files
+## How the pieces fit
 
-- `CONTRACT.md` -- the behavioural spec: every script CLI, workflow input,
-  and the exact sequence `version.yml` performs, with the reasoning behind
-  each guarantee. Read it before changing how release control behaves.
-- `scripts/compute_bump.py` -- reads `changelog.d/` notes, returns the
-  release level/version that should be cut.
-- `scripts/sync_version.py` -- writes a version string into every location
-  a consuming repo declares via `[tool.em-release] version_files`.
-- `scripts/lint_gate.py` -- turns a consuming repo's lint gate on or off, or
-  reports its state. The gate has two halves that must agree (a
-  `continue-on-error` line in the repo's ci.yml, and whether `lint` is a
-  required status check), and this moves both together. Maintenance tool,
-  run against a target repo; not copied into consumers.
-- `scripts/fleet_status.py` -- sweeps every repo pinned to this one and
-  reports drift: broken changelog stubs, inconsistent lint gates, Node 20
-  action pins, missing required checks. Reads over the API, no clones.
-  Onboarding happens once per repo; `templates/` is copied and never
-  re-synced, so drift is the recurring problem and this is what watches it.
-  Exits non-zero on any finding, so it can run on a schedule.
-- `changelog-check/action.yml` -- the PR gate, a **composite action**
-  consuming repos call as `uses: EmergentMatter/actions/changelog-check@v1`
-  inside a normal job. Composite rather than `workflow_call` so it reaches
-  `scripts/` via `github.action_path` (no `actions-ref` to keep in sync)
-  and so its check name is two segments rather than three.
-- `.github/workflows/{version,build-release}.yml` -- the two reusable
-  `workflow_call` workflows consuming repos pin to `@v1`.
-- `verify-wheel/action.yml` and `scripts/verify_wheel.py` -- the composite
-  action that installs the built wheel in a clean venv and imports it, so a
-  repo that is green on tests but broken to install fails before release.
-  Never invoked directly; the action calls the script.
-- `templates/manifest.toml` -- the single declaration of what a consuming
-  repo receives: one entry per file, each giving a source under `templates/`, the
-  `dest` it lands at, and a policy. `managed` means it should always match
-  the template; `seed-once` means written at onboarding if absent and never
-  touched again. `ci.yml` is the only `seed-once` entry, because repos
-  legitimately customise their own CI. Read by `onboard.py`, `sync.py` and
-  `fleet_status.py`, so adding a template is one entry in one file.
-- `templates/` -- the files themselves: the workflow stubs,
-  `changeset.py` (→ `scripts/changeset.py` at the consumer's root,
-  **not** inside their package), `CONTRIBUTING.md`, `ci.yml`,
-  `pyproject-snippet.toml` (the `[tool.towncrier]` + `[tool.em-release]`
-  block, copy-pasted rather than synced, so not in the manifest), and the
-  community-health set: `SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`,
-  `NOTICE`, `LICENSE`, `CODEOWNERS`, `dependabot.yml`, a PR template and
-  three issue templates.
-- `scripts/onboard.py` -- installs everything in the manifest into a repo,
-  writes the config block, creates the `skip-changelog` label, and on a
-  public repo enables private vulnerability reporting (because it just
-  installed a `SECURITY.md` promising that route). Records
-  `templates_version` so later syncs have a merge base.
-- `scripts/sync.py` -- re-syncs an already-onboarded repo. A copied file
-  that differs from its template is either stale or deliberately edited,
-  and a two-way diff cannot tell those apart, so it three-way compares
-  against the template as it was at the repo's recorded
-  `templates_version`. Stale copies update silently, deliberate edits are
-  left alone and reported, and only a real conflict asks a human. The
-  stamp must name an immutable ref: the moving `v1` alias would collapse
-  `base` toward `theirs` and silently stop detecting staleness.
-- `docs/tooling.md` -- how to run the maintenance scripts above against a
-  target repo, and what each check means.
-- `docs/onboarding.md` -- the human walkthrough for onboarding a repo,
-  worked through `emergent-matter-materials`'s three-version-strings case.
+Each script opens with a module docstring stating why it exists. What
+follows is only the reasoning that spans files, which no single docstring
+can hold.
+
+**Where a script runs decides what it may assume**, and the split is
+described in README.md's "The scripts" section. Keep a script on one side
+of it. A change that lets a workflow-called script reach for `gh`, or that
+wires a maintenance script into any repo's CI, is the one to catch in
+review.
+
+**Onboarding is one-time; drift is forever.** `onboard.py` copies
+`templates/` into a repo once, and nothing about that snapshot re-checks
+itself. `sync.py` closes that gap and `fleet_status.py` watches it. This
+is why a template change is not finished when the template changes: it
+lands in a consumer only when someone runs sync.
+
+**The `templates_version` stamp is what makes sync possible.** A copied
+file that differs from its template is either stale or deliberately
+edited, and a two-way diff cannot tell those apart, so `sync.py` compares
+three ways against the template as it stood at the repo's recorded
+version. That stamp must name an immutable ref. Pointing it at the moving
+`v1` alias collapses the merge base toward the current template and
+silently stops detecting staleness, which looks like success. See the
+`usable_stamp` docstring in `scripts/sync.py`.
+
+**Adding a template is one entry in `templates/manifest.toml`.** The
+manifest is the single declaration of what a consumer receives, read at
+runtime by `onboard.py`, `sync.py`, and `fleet_status.py`; its header
+comment defines the policies. `pyproject-snippet.toml` is deliberately
+absent from it: consumers copy-paste that block into their own
+`pyproject.toml`, so there is nothing to sync.
+
+**`onboard.py` enables private vulnerability reporting on a public repo**
+because it has just installed a `SECURITY.md` promising that route. The
+promise and the setting have to land together.
+
+**`changelog-check` is a composite action, not a `workflow_call`
+workflow.** Composite so it reaches `scripts/` through
+`github.action_path`, with no `actions-ref` input to keep in sync, and so
+its required-check name is the short `EmergentMatter/actions/changelog-check`
+form rather than the longer reusable-workflow path a consumer's branch
+protection would otherwise have to match.
 
 ## Technical Context
 
@@ -107,39 +105,30 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   PATs, no GitHub App, in v1.
 - **No special handling below 1.0.** A major-level note on `0.4.2` bumps
   to `1.0.0` like any other major bump. Semver, no exceptions.
-- **The known limitation:** a PR opened with `GITHUB_TOKEN` doesn't trigger
-  further workflow runs, so the release PR's own checks show as not-run.
-  This is accepted (not worked around) because the consuming repo's own CI
-  already gated the code on `main` before the release PR was drafted, via
-  the `needs: ci` edge in its `version.yml` stub. The escape hatch for a
-  human who wants the checks to actually run: close the release PR and
-  immediately reopen it. Every consumer-facing doc states this plainly --
-  see `templates/CONTRIBUTING.md`.
-- **Silent no-ops are the bug to avoid**, not the failure to avoid: both
+- **Silent no-ops are the bug to avoid**, not the failure to avoid: the
   scripts exit 1 loudly on anything ambiguous (unparseable bump level,
   missing declared file/symbol) rather than guessing or skipping.
-- **The release is not tag-triggered.** A tag pushed with `GITHUB_TOKEN`
-  never triggers a workflow (GitHub suppresses it to prevent recursion),
-  so the obvious design (push a `v*` tag, let `build-release.yml`
-  fire) silently never runs on the automated path.
-  `version.yml` pushes the tag **and** builds/publishes
-  the release **in the same run** instead. `build-release.yml` still
-  exists, but only for a human-pushed tag (which does trigger normally)
-  or a manual `workflow_dispatch` rebuild. It is deliberately not the
-  automatic path, not a redundant leftover.
-- **`scripts/changeset.py` must live at a consumer repo's root, outside
-  the package, invoked as `uv run scripts/changeset.py`**, never as a
-  `[project.scripts]` console entry. Putting it inside `src/<package>/`,
-  or wiring the console script, ships a `changeset` command onto the PATH
-  of anyone who installs the library. A contributor-only tool has no
-  business in a published package.
-- **No stub grants secrets to a shared workflow.** None of the three
-  reusable workflows reads `secrets.*`; they use only the auto-injected
-  `github.token`, and `build-release.yml` and `version.yml` publish over
-  OIDC trusted publishing (`id-token: write`) when configured, not a
-  token. `stub-changelog-check.yml`
-  omits `secrets: inherit` because it triggers on `pull_request` (which
-  can be a fork PR in a public repo) and there's nothing to grant.
+- **The release PR's own checks show as not-run, and that is accepted.**
+  The full account, including why it is not worked around and the escape
+  hatch for a human who wants the checks to run, is in `CONTRACT.md`,
+  under its section on the known limitation.
+- **`build-release.yml` is not a redundant leftover.** `version.yml`
+  tags and builds in one run because the tag-triggered design silently
+  never fires on the automated path; `build-release.yml` covers the
+  human-pushed tag and the manual rebuild. Do not fold it away. The
+  behaviour it works around is in `CONTRACT.md`, under its section on why
+  the release is not tag-triggered.
+- **`scripts/changeset.py` belongs at a consumer repo's root, outside
+  the package.** Moving it, or wiring a console entry point, ships a
+  contributor-only tool onto the PATH of everyone who installs the
+  library. The reasoning is in `templates/changeset.py`'s module
+  docstring, which travels with the file.
+- **No stub grants secrets to a shared workflow.** The reusable workflows
+  read no `secrets.*`; they use only the auto-injected `github.token`, and
+  publishing goes over OIDC trusted publishing (`id-token: write`) when
+  configured, not a token. `stub-changelog-check.yml` omits
+  `secrets: inherit` because it triggers on `pull_request`, which can be a
+  fork PR in a public repo, and there is nothing to grant.
   `stub-build-release.yml` omits it for the OIDC reason above.
   `stub-version.yml` puts `secrets: inherit` on the *consumer's own* `ci:`
   job, conditionally, only if that repo's own CI needs a named secret
@@ -149,21 +138,15 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   movable `v1` tag your org's secrets would make that tag equivalent to
   secret access everywhere it's pinned; see `docs/onboarding.md` for the
   full explanation aimed at onboarders.
-- **A `permissions:` ceiling on `workflow_call` is checked at parse
-  time, before any `if:` runs. Getting this wrong doesn't degrade, it
-  breaks the whole workflow.** A job declaring
-  `permissions: {id-token: write}` that the caller has not granted breaks
-  **every** run of `version.yml` for **every** onboarded repo, publish on
-  or off, with `startup_failure` and no message via the API. The publish
-  job therefore declares no `permissions:` at all and inherits whatever
-  the *consumer's own stub* grants. Likewise `environment:`
-  (required on that job even when `publish` is `false`, since GitHub
-  validates it at the same parse step) used to default to an empty
-  string, which is invalid there too and broke every run the same way --
-  fixed by shipping a non-empty default (`release`). See the publish
-  job's own comment in `.github/workflows/version.yml` for the full
-  account; `docs/onboarding.md`'s "Publishing to a package index"
-  section is written to give this the prominence it earned.
+- **Never add a `permissions:` or `environment:` value to a job in
+  `version.yml` without reading the publish job's own comment first.**
+  Both are validated at parse time, before any `if:` runs, so getting one
+  wrong does not degrade: it breaks every run for every onboarded repo
+  with `startup_failure` and no message via the API. The comment on that
+  job in `.github/workflows/version.yml` records what happened and why the
+  job declares no permissions of its own; `docs/onboarding.md`'s
+  "Publishing to a package index" section gives it the prominence it
+  earned.
 - **Every stub with an `actions-ref` input must set it to match the
   `@ref` it's pinned to** (`version.yml` and `changelog-check.yml`'s
   stubs; `build-release.yml`'s doesn't take this input, since it never
@@ -183,36 +166,13 @@ uv run python scripts/sync_version.py --version 1.2.3 --check  # dry-run version
   pinned at without a hardcoded ref, and a `./`-relative path's
   resolution for a reusable workflow called cross-repo was never tested
   in isolation. The build/release steps are therefore duplicated between
-  `version.yml` and `build-release.yml` on purpose (four steps, verified
-  working end to end). Keep the two copies in step when either changes,
-  and only revisit sharing them with an isolated test of the `./`
-  resolution question specifically.
+  `version.yml` and `build-release.yml` on purpose, and verified working
+  end to end. Keep the two copies in step when either changes, and only
+  revisit sharing them with an isolated test of the `./` resolution
+  question specifically.
 
 ## Naming Conventions
 
 Standard playbook conventions apply (`../engineering-playbook/conventions/naming.md`);
 this repo is plain Python, not JAX/PicoGK, so the Hungarian-prefix table
 mostly doesn't come up outside scalar CLI args.
-
-## Known Issues
-
-None currently open. Two `CONTRACT.md` staleness findings from the
-2026-08-19 documentation sweep (its "Consumer stub" example missing the
-`with: { actions-ref: v1 }` block that `templates/stub-version.yml`
-actually carries, and its workflow-inputs table wrongly listing
-`actions-ref` as a `build-release.yml` input) were both fixed in
-`CONTRACT.md` the same day, by its owner.
-
-## Current Work
-
-In production. `v1.5.0` is the newest tag, and
-`emergent-matter-materials` is genuinely onboarded: real `[tool.em-release]`
-block with two declared `version_files`, all four stubs installed, releasing
-through this system since August and currently at `v1.11.0`.
-`emergent-matter-sdm-core` is next.
-
-`em-release-control-test` remains the rehearsal repo. It is a real consumer
-with four releases of its own, and it is where template changes get proven
-against real GitHub behaviour before production repos receive them. Issue
-forms only render from a default branch, so that repo is the only way to see
-them before they ship.

@@ -118,17 +118,17 @@ dest = ".github/workflows/ci.yml"
 policy = "seed-once"
 ```
 
-Two policies, and they mean opposite things:
+The policies mean opposite things:
 
 - **`managed`.** The target repo's copy should always equal this repo's `templates/` copy. A
   difference is either staleness or a local edit, distinguished the way `sync.py` above
-  describes. This is every entry except `ci.yml` today. `policy` has no default: every entry in
-  `manifest.toml` sets it explicitly, and `load_manifest()` raises on an unrecognised value rather
-  than guessing.
+  describes. `policy` has no default: every entry in `manifest.toml` sets it explicitly, and
+  `load_manifest()` raises on an unrecognised value rather than guessing.
 - **`seed-once`.** Written once, at onboarding, only if the target file doesn't already exist.
-  Nothing in this repo ever touches it again. `ci.yml` is the only `seed-once` entry: a repo's CI
-  is legitimately its own to shape, so neither `sync.py` nor `fleet_status.py`'s drift check
-  treats a difference there as a finding.
+  Nothing in this repo ever touches it again. It is the policy for a file a repo is entitled to
+  shape for itself, a repo's own CI being the case that drove it: neither `sync.py` nor
+  `fleet_status.py`'s drift check treats a difference there as a finding. `manifest.toml` is where
+  each entry's policy is declared, and the only place that says which are which.
 
 ## Workflow `workflow_call` inputs (.github/workflows/)
 
@@ -140,6 +140,10 @@ Two policies, and they mean opposite things:
 `build-release.yml` takes **no `actions-ref`**, because it never checks out this repo's
 `scripts/`. The changelog check is not in this table: it is a composite action, not a
 `workflow_call` workflow. See "Composite action inputs" below.
+
+`version.yml`'s `environment` must be **non-empty**, whether or not that repo publishes. The
+publish job's own comment in `.github/workflows/version.yml` says why an empty name is not merely
+ignored.
 
 Consumers pin `@v1`, never a branch (P1). `version.yml` additionally passes `actions-ref`
 matching that pin.
@@ -179,10 +183,6 @@ Composite actions also cannot declare `permissions:`: there is no `runs.permissi
 `gh api`) this action needs come from the **calling job's** own `permissions:` block instead; see
 `templates/stub-changelog-check.yml`.
 
-`environment` must be **non-empty**: `environment:` is validated when the workflow is parsed,
-before any `if:` runs, so an empty name fails every run with `startup_failure` even with
-publishing off.
-
 ## version.yml behaviour
 
 On push to `main` in the consuming repo:
@@ -210,35 +210,52 @@ On push to `main` in the consuming repo:
 7. **Same run:** `uv build` produces a GitHub Release with wheel and sdist attached, plus an
    optional index publish over OIDC, opt-in and off by default. (S2/S3/S4)
 
-### Why the release is not tag-triggered
-
-The obvious design (tag `v*` fires `build-release.yml`) cannot work. **A tag pushed with
-`GITHUB_TOKEN` never triggers a workflow**; GitHub suppresses that to prevent recursion. Shipped
-as drawn, the tag would land and nothing would ever be built or published, silently.
-
-So the tag push and the release happen in the same `version.yml` run. `build-release.yml` is kept
-for a **human-pushed** tag (which does trigger workflows) and for `workflow_dispatch` rebuilds. It
-is deliberately not the automatic path.
-
-### The permissions ceiling on `workflow_call`
+### `publish: true` requires the consumer to grant `id-token: write`
 
 **`permissions:` on a `workflow_call` is a ceiling for every job in the called workflow**, not a
 per-job grant. So a repo setting `publish: true` must **also** add `id-token: write` to its
 stub's `permissions:` block, or OIDC yields an empty token and publishing fails. It is not granted
 by default, because publishing is opt-in (S3) and an unused elevated permission is worth avoiding.
 
+Why the shared workflow's publish job declares no `permissions:` of its own, and why getting this
+wrong takes down every run in a repo rather than only its publish step, is a comment on that job
+in `.github/workflows/version.yml`.
+
+## Why the release is not tag-triggered
+
+**An event created with `GITHUB_TOKEN` does not trigger further workflow runs.** GitHub suppresses
+that to prevent recursion. It is platform behaviour, not a permission anything can grant, and it
+is the same rule behind the known limitation below.
+
+Applied to tags: a tag pushed with `GITHUB_TOKEN` never fires a tag-triggered workflow. The
+obvious design (tag `v*` fires `build-release.yml`) would therefore push the tag and then build
+nothing, silently, on every release.
+
+So `version.yml` pushes the tag and builds, releases, and optionally publishes **in the same
+run**. `build-release.yml` is kept for a human-pushed tag (which does trigger workflows) and for
+`workflow_dispatch` rebuilds. It is deliberately not the automatic path. The reasoning for
+inlining those steps rather than delegating them lives in the header comment of
+`.github/workflows/version.yml` and is not repeated here.
+
 ## The known limitation: document it, don't work around it
 
-A PR opened with `GITHUB_TOKEN` does **not** trigger further workflow runs, so the release PR's
-own checks will not run. This is accepted, matching the precedent at `~/Sites/icon/satcom`:
+Stated here once. Everywhere else points at this section.
 
-1. Plain `GITHUB_TOKEN`.
-2. The consuming repo's stub runs its **own CI on `main` first**, via a `needs:` edge, before
-   `version.yml` drafts anything, so the code being released was verified.
-3. The escape hatch is documented for humans: **close and immediately reopen the release PR**
-   to force its checks to run.
+A pull request opened with `GITHUB_TOKEN` does **not** trigger further workflow runs, by the same
+platform rule as the section above, so the release PR `version.yml` opens shows its own checks as
+never run. This is accepted rather than worked around, matching the precedent at
+`~/Sites/icon/satcom`:
 
-Every consumer-facing doc must state #3 plainly.
+1. The bot stays on plain `GITHUB_TOKEN`. Every workaround needs a PAT or a GitHub App, and no
+   long-lived token is a non-negotiable above.
+2. The code being released was already verified: the consuming repo's stub runs its **own CI on
+   `main` first**, via a `needs:` edge, before `version.yml` drafts anything.
+3. The escape hatch, for a human who wants those checks to run: **close the release PR and
+   immediately reopen it.** Reopening it under your own account is not a `GITHUB_TOKEN` event, so
+   the checks run.
+
+`templates/CONTRIBUTING.md` states #3 for consumers, because a contributor in an onboarded repo
+reads that file and does not have this one.
 
 ## Consumer stub
 
@@ -318,7 +335,7 @@ that disagrees with what's checked out. A floating ref turns any
 merge into the sibling into a red run in **your** repo, on a change
 nobody made there. Bump the SHA and `uv.lock` in one commit.
 
-Omit all three inputs and the sibling steps skip entirely. The whole
+Omit the sibling inputs and those steps skip entirely. The whole
 block comes out when the dependency ships to an index.
 
 ### Second (nested) private sibling checkout (optional)
@@ -331,7 +348,7 @@ path `foo`'s own source entry names -- the identical failure mode as the
 single-sibling case, one link further down the chain.
 
 `sibling2-repo` / `sibling2-ref` / `sibling2-path` / `sibling2-token` are
-the same shape as the four `sibling-*` inputs, purely additive, and
+the same shape as the `sibling-*` inputs, purely additive, and
 **require `sibling-repo` to also be set** -- a nested sibling with no
 direct sibling is refused as a misconfigured stub:
 
@@ -364,12 +381,13 @@ checkout runs, not discovered afterward.
 
 Omit `sibling2-repo` and this whole block skips, exactly like the
 single-sibling case, and every existing single-sibling consumer is
-unaffected. The fleet's nesting depth is two today (a direct private
-sibling that itself pins a private sibling); there is no `sibling3`.
+unaffected. The deepest chain in the fleet today is a direct private
+sibling that itself pins a private sibling, and there is no `sibling3`
+input set.
 
 **`build-release.yml` has no sibling support at all, single or nested.**
 That's a pre-existing gap, not something this section's inputs cover; see
-that workflow's own header comment. It only matters for its two
+that workflow's own header comment. It only matters for that workflow's
 non-automatic triggers (a human-pushed tag, or `workflow_dispatch`), since
 `version.yml` is the automated release path and builds inline once it
 detects the release commit.
@@ -389,6 +407,6 @@ Changing `templates/` is still the expensive one relative to the reusable workfl
 does not reach an onboarded repo the moment it merges, the way a change to `version.yml` does
 just by every repo pinning `@v1`. `sync.py` closes most of that gap for `managed` entries, but
 someone still has to run it (or `fleet_status.py`'s `templates`/`stamp` checks have to flag that
-they should); it is not automatic. `seed-once` entries (`ci.yml`) never propagate after
-onboarding, deliberately. Prefer putting behaviour in the reusable workflows when the choice
+they should); it is not automatic. A `seed-once` entry never propagates after onboarding,
+deliberately. Prefer putting behaviour in the reusable workflows when the choice
 exists; reach for `templates/` when the repo genuinely needs its own copy.
