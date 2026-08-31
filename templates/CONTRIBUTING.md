@@ -10,8 +10,7 @@ This repo also uses release control: every PR that changes behavior adds a
 small note describing the change, and those notes become the next release.
 This file covers the part you actually do as a contributor. For how the
 release side works, see
-[EmergentMatter/actions](https://github.com/EmergentMatter/actions)'s
-`docs/onboarding.md`.
+[EmergentMatter/actions' onboarding guide](https://github.com/EmergentMatter/actions/blob/main/docs/onboarding.md).
 
 ## Dev setup
 
@@ -31,7 +30,7 @@ Before opening your PR:
 uv run scripts/changeset.py
 ```
 
-This asks you two things:
+It asks for:
 
 1. **A level**: press `1`-`3` to pick one outright, or move with the
    arrow keys (`k`/`j` also work) and press Enter. `q`, `Esc`, or Ctrl-C
@@ -43,13 +42,11 @@ PR. A check on the PR fails if this file is missing.
 
 ### Running it without a terminal
 
-`scripts/changeset.py` needs a real terminal for its arrow-key picker.
-Without one (stdin or stdout not a TTY), it drops to a plain numbered
-prompt instead: type a digit to pick the level, then type the summary
-line. If stdin has nothing to read at all (closed, or redirected from
-an empty source), each prompt hits end of file. The script then prints
-`Cancelled.` and exits 0. It never hangs waiting for input that can't
-arrive.
+The arrow-key picker needs a real terminal. Without one (stdin or stdout
+not a TTY), `scripts/changeset.py` drops to a plain numbered prompt: type
+the level's number, then the summary line. With nothing to read on stdin
+at all, it prints `Cancelled.` and exits 0 rather than hanging on input
+that can't arrive.
 
 ### Picking a level
 
@@ -109,23 +106,28 @@ ships without a maintainer choosing to merge that specific PR.
 
 ## The release PR's checks may show as "not run": this is expected
 
-The release PR is opened by the `GITHUB_TOKEN` used inside GitHub Actions.
-GitHub does not trigger further workflow runs from a PR opened this way, so
-its own status checks can appear as not having run at all, even though
-nothing is actually broken. The code being released was already verified
-on `main` before the PR was drafted (the release workflow only runs after
-this repo's own CI passes).
+You will see the release PR's status checks sitting as not having run at
+all. Nothing is broken. The PR was opened by `GITHUB_TOKEN`, and GitHub
+does not trigger further workflow runs from events created that way, so
+reopening it under your own account is what makes the checks run. The code
+being released was already checked on `main` before the PR was drafted.
 
 **To force the checks to run: close the release PR, then immediately
-reopen it.** That reopen event is enough to trigger the checks normally.
-This is a known GitHub Actions limitation (not specific to this repo; see
-[peter-evans/create-pull-request's
-notes](https://github.com/peter-evans/create-pull-request/blob/main/docs/concepts-guidelines.md#triggering-further-workflow-runs)
-on why PRs opened via `GITHUB_TOKEN` don't trigger further runs), and
-close-then-reopen is the accepted workaround, not a bug to chase further.
+reopen it.** That reopen event triggers them normally. Do this rather than
+chasing it further: it is documented platform behaviour, not a fault in
+this repo (see [peter-evans/create-pull-request's
+notes](https://github.com/peter-evans/create-pull-request/blob/main/docs/concepts-guidelines.md#triggering-further-workflow-runs)).
 
-If this repo has branch protection on (it should), the release PR also
-needs an approving review before it can merge, same as any other PR --
-close/reopen only fixes the checks, not the review requirement. See
-`EmergentMatter/actions`'s `docs/onboarding.md` for the full maintainer-
-facing walkthrough of releasing under protection.
+If this repo has branch protection on (it should), the release PR still
+needs an approving review before it can merge, the same as any other PR.
+Close and reopen fixes the checks, not the review requirement.
+
+This section deliberately states the cause inline rather than linking for
+it. It ships into repos where a contributor hits this mid-release and
+cannot follow a relative link, so it is exempt from the one-canonical-home
+rule on purpose. For why this is accepted rather than worked around, see
+"The known limitation" in
+[EmergentMatter/actions' CONTRACT.md](https://github.com/EmergentMatter/actions/blob/main/CONTRACT.md).
+The maintainer-facing walkthrough of releasing under branch protection is
+in [its onboarding
+guide](https://github.com/EmergentMatter/actions/blob/main/docs/onboarding.md).

@@ -6,7 +6,7 @@ of standard repo-hygiene files that need no decisions from you. This doc
 walks through all of it, using
 [`emergent-matter-materials`](https://github.com/EmergentMatter/emergent-matter-materials)
 as the worked example for the one genuinely hard decision: which version
-strings must move together. That repo has **three**, not one.
+strings must move together. That repo has more than one.
 
 If you haven't read the top-level concept yet, read the [README](../README.md)
 first. This doc assumes you know what a changelog note is and what the
@@ -17,9 +17,8 @@ release PR does.
 [`.github/RELEASING.md`](../.github/RELEASING.md). **Pin `@v1`**, not a
 point tag: `v1` is the ref this system is designed around, and it is what
 gets you fixes without editing anything. `git ls-remote --tags` on this
-repo lists what actually exists; this doc deliberately doesn't enumerate
-them, because an enumerated list here went stale and claimed a `v1.0.1`
-that was never cut.
+repo lists the tags that exist; read them there rather than from any
+document.
 
 **Most repos only need the [Quick path](#quick-path) below.** Everything
 after it is reference material: read a section when you hit the situation
@@ -57,9 +56,9 @@ it covers, not front-to-back.
    `--dry-run`, and it writes everything, including the files below,
    the config block, and the `skip-changelog` label.
 3. Commit the result and open the onboarding PR.
-4. Work through the three things `onboard.py` cannot do for you (table
-   below), in order: declare `version_files` correctly, set branch
-   protection, and [prove the gate actually
+4. Work through what `onboard.py` cannot do for you (table below), in
+   order: declare `version_files` correctly, set branch protection, and
+   [prove the gate actually
    works](#prove-the-gate-actually-works-before-you-trust-it) before you
    trust it.
 
@@ -74,8 +73,8 @@ What it cannot do for you, and why:
 The rest of this document is what the script is doing and why, which is
 worth reading once, particularly [the worked example](#worked-example-emergent-matter-materials)
 and [proving the gate](#prove-the-gate-actually-works-before-you-trust-it).
-Tool reference, including everything `onboard.py` does beyond these six
-files, lives in [tooling.md](tooling.md).
+Tool reference, including everything `onboard.py` does beyond the files
+below, lives in [tooling.md](tooling.md).
 
 ## Before you start
 
@@ -91,13 +90,13 @@ Two ways in, and most repos in this org are the first:
 ### You have no CI yet
 
 Copy [`templates/ci.yml`](../templates/ci.yml) to
-`.github/workflows/ci.yml`. It is file 6 in the list below, and it is not
-an afterthought: it is the floor every repo gets on day one. Three jobs,
-named `lint` / `test` / `build` identically across every repo that copies
-it, so "the build job" means the same thing everywhere. It already
-triggers on both `pull_request` and `workflow_call`, and its `test` job
-passes rather than erroring if the repo has no `tests/` directory yet, so
-a repo with no suite can still onboard today and grow one later.
+`.github/workflows/ci.yml`. It is not an afterthought: it is the floor
+every repo gets on day one. Its jobs are named identically across every
+repo that copies it, so "the build job" means the same thing everywhere.
+It already triggers on both `pull_request` and `workflow_call`, and its
+`test` job passes rather than erroring if the repo has no `tests/`
+directory yet, so a repo with no suite can still onboard today and grow
+one later.
 
 Adjust it to the repo afterwards. It is a starting point, not a contract:
 only the job *names* matter to anything outside the repo, because branch
@@ -105,7 +104,7 @@ protection matches them.
 
 ### You already have CI
 
-Two things to check, both easy to miss:
+Both of these are easy to miss:
 
 1. **Is it callable via `workflow_call`?** Most workflows written for a
    single repo are not. Add it alongside whatever triggers already exist:
@@ -121,7 +120,7 @@ Two things to check, both easy to miss:
 2. **What are its job names?** They become your required status check
    contexts, and they are almost certainly not `lint` / `test` / `build`.
    `emergent-matter-materials`, the worked example below, has a single job
-   called `test`, so its contexts are `test` and `changelog`, not the four
+   called `test`, so its contexts are `test` and `changelog`, not the set
    this doc's branch-protection section lists. Use *your* names. Nothing
    requires you to rename jobs to match the template.
 
@@ -136,7 +135,7 @@ template exists for repos starting from nothing.
 | `.github/workflows/version.yml` | On push to `main`: runs your own CI first, then either drafts/updates the release PR from pending notes, or, if HEAD is the release commit that PR's merge just created, tags the release and builds + publishes it, all in the same run. |
 | `.github/workflows/build-release.yml` | **Not** the automatic release path (see below). A fallback for a human-pushed tag or a manual `workflow_dispatch` rebuild. |
 | `scripts/changeset.py` | The interactive note-writing tool contributors run before opening a PR. Must live at the repo root, **outside** the package (see below). |
-| `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the three levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
+| `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
 | `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike the workflow stubs above, this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
 | `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
 | `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
@@ -159,14 +158,14 @@ needs its own explanation, below.
 cost worth understanding up front.** The workflow stubs point at code
 hosted here, so a fix lands in every consuming repo the moment `v1`
 moves, and nobody has to do anything. The rest is yours from the moment
-you copy it. `scripts/changeset.py`, `CONTRIBUTING.md`, `STYLE.md`, and
-`ruff-base.toml` are `managed` in
-[`templates/manifest.toml`](../templates/manifest.toml): `scripts/sync.py`
-can pull a later change in, but only when someone runs it. `ci.yml` and
-`ruff.toml` are `seed-once`: written if absent, then never touched again,
-because a repo's CI and its local ruff additions are legitimately its
-own. `scripts/fleet_status.py` makes managed-file drift visible; run it
-after onboarding, and periodically after that.
+you copy it, and how much of it stays yours depends on the `policy` each
+entry carries in [`templates/manifest.toml`](../templates/manifest.toml).
+A `managed` entry should always match its template: `scripts/sync.py` can
+pull a later change in, but only when someone runs it. A `seed-once` entry
+is written if absent and then never touched again, which is how a repo
+keeps its own CI and its own ruff additions. `scripts/fleet_status.py`
+makes managed-file drift visible; run it after onboarding, and
+periodically after that.
 
 One manual step goes with the copies: add a short "Code standard"
 section to your repo's `CLAUDE.md` pointing at `STYLE.md` and
@@ -177,11 +176,11 @@ session. Two sentences is enough:
 > Follow STYLE.md at the repo root for all code, comments, tests, and
 > docs. Pull request descriptions follow .github/PULL_REQUEST_TEMPLATE.md.
 
-`onboard.py` also seeds a set of standard repo-hygiene files:
-`SECURITY.md`, `SUPPORT.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `NOTICE`,
-`CODEOWNERS`, `dependabot.yml`, a PR template, and issue templates. They
-need no repo-specific decisions, so they don't get their own row above;
-the full, current list is [`templates/manifest.toml`](../templates/manifest.toml).
+`onboard.py` also seeds a set of standard repo-hygiene files: a security
+policy, a licence, code owners, issue and pull request templates, and the
+rest. They need no repo-specific decisions, so they don't get their own row
+above; [`templates/manifest.toml`](../templates/manifest.toml) is what says
+which files those are.
 One of them has a side effect worth knowing: on a **public** repo,
 `onboard.py` also turns on GitHub's private vulnerability reporting,
 because `SECURITY.md` tells a researcher to use it. On a private repo the
@@ -210,32 +209,25 @@ while `pyproject.toml` still carries the inline section.
 
 ### Why `build-release.yml` isn't the automatic path
 
-The obvious design looks like: push a `v*` tag, let `build-release.yml`
-fire, done. **That design doesn't work: a tag pushed with
-`GITHUB_TOKEN` never triggers a workflow**, because GitHub suppresses it
-to prevent recursion. Shipped that way, every onboarded repo would tag a
-version and nothing would ever build or publish it, silently. That is
-platform behaviour, not a permissions setting: no grant on `GITHUB_TOKEN`
-makes those tag-triggered runs occur.
+You will copy `build-release.yml` in and then never see it run on a
+release. That is correct, not a broken install. `version.yml` pushes the
+tag **and** builds and publishes the release **in the same run**, once it
+detects HEAD is the just-merged release commit. `build-release.yml` covers
+only a human-pushed tag or a manual `workflow_dispatch` rebuild: a
+deliberate fallback, not a redundant leftover you can skip copying.
 
-So `version.yml` pushes the tag **and** builds and publishes the release
-**in the same run** (its final step, once it detects HEAD is the
-just-merged release commit). `build-release.yml` still exists, but only
-for a **human-pushed** tag (which does trigger workflows normally) or a
-manual `workflow_dispatch` rebuild. It's a deliberate fallback, not a
-redundant leftover you can skip copying.
+The platform behaviour that forces this shape, and why the obvious
+tag-triggered design fails silently rather than loudly, is in CONTRACT.md
+under why the release is not tag-triggered.
 
-### Why `scripts/changeset.py` must live outside the package
+### `scripts/changeset.py` goes at your repo root
 
-**NEVER** put `changeset.py` inside `src/<package>/`, and **NEVER** wire
-it up as a `[project.scripts]` console-script entry. Do either and it
-**ships inside the wheel**, putting a `changeset` command on the PATH of
-anyone who installs the library. `changeset.py` is a contributor-only
-tool. It has no business in a package your users install.
-
-Copy `templates/changeset.py` to `scripts/changeset.py` at your repo
-root, and invoke it as `uv run scripts/changeset.py`. Do not shorten
-that invocation with a console-script entry.
+Copy `templates/changeset.py` to `scripts/changeset.py` at your repo root,
+outside the package, and invoke it as `uv run scripts/changeset.py`.
+**NEVER** put it inside `src/<package>/`, and **NEVER** shorten that
+invocation with a `[project.scripts]` console-script entry. The file's own
+docstring says what either of those ships to everyone who installs your
+library.
 
 The `version.yml` stub is the one to get exactly right, because it's the
 one that wires your own CI in as a gate. This is its exact shape:
@@ -259,19 +251,13 @@ jobs:
                               # deliberately NO secrets: inherit
 ```
 
-Pin `@v1`, never a branch. See CONTRACT.md's non-negotiables. **`version.yml`'s
-stub is now the only one with an `actions-ref` input** (`build-release.yml`'s
-never needed it, since that workflow never checks out this repo's
-`scripts/`; `changelog-check.yml`'s stub no longer needs it either, now
-that the changelog check is a composite action, covered below). There is no
-context field that lets a *reusable workflow* discover its own ref:
-`github.workflow_ref` resolves to the *caller's* ref, not this repo's,
-and `github.job_workflow_sha` does not exist, both confirmed live rather
-than assumed. An unresolvable ref is refused outright rather than
-silently defaulting to this repo's `main`, which is how an earlier
-version of this exact stub quietly ran unpinned code while believing it
-had pinned `@v1`. If you ever change the `@v1` at the end of `version.yml`'s
-`uses:` line, change the matching `actions-ref:` in the same edit.
+Pin `@v1`, never a branch. See CONTRACT.md's non-negotiables.
+**`version.yml`'s stub is the only one that takes an `actions-ref` input**,
+and its value must match the `@ref` at the end of the `uses:` line above
+it. If you ever change one, change the other in the same edit.
+CONTRACT.md's workflow-inputs section has why a reusable workflow cannot
+discover its own ref, and why an unresolvable one is refused outright
+rather than quietly resolved against a default branch.
 
 ### The changelog check doesn't need `actions-ref`
 
@@ -347,8 +333,8 @@ index yet:
 emergent-matter-materials = { path = "../emergent-matter-materials" }
 ```
 
-Two different jobs need that sibling on disk, and they're solved in two
-different places:
+Your own CI and the shared `version.yml` each need that sibling on disk,
+and they're solved in different places:
 
 1. **Your own `ci.yml`** resolves the path in every job that runs
    `uv sync --locked`. You own that file, so check the sibling out there
@@ -400,7 +386,7 @@ pinned sibling SHA on purpose. Then verify with `uv sync --locked` in a
 sandbox laid out the same way CI checks the two repos out.
 
 All of it is temporary: when the dependency ships to an index, drop the
-`[tool.uv.sources]` entry, the extra checkout in `ci.yml`, these three
+`[tool.uv.sources]` entry, the extra checkout in `ci.yml`, the sibling
 inputs, the secret, and the PAT.
 
 ### A second, nested sibling
@@ -423,7 +409,7 @@ which means materials has to be sitting there when `uv lock` runs.
 
 The shared `version.yml` covers this with a second, independent input set:
 `sibling2-repo` / `sibling2-ref` / `sibling2-path` / the `sibling2-token`
-secret, same shape as the four `sibling-*` ones above, checked out to the
+secret, same shape as the `sibling-*` ones above, checked out to the
 same level (a sibling of both your repo and `sibling-repo`, not nested
 inside it on disk -- see the diagram below). It requires `sibling-repo` to
 also be set; a nested sibling with no direct sibling is refused as a
@@ -461,8 +447,8 @@ $GITHUB_WORKSPACE/
     permissions: { contents: write, pull-requests: write }
 ```
 
-Two things worth being deliberate about, both consequences of the same
-"resolved relative to that repo's own checkout" rule:
+Both of these are worth being deliberate about, and both are consequences
+of the same "resolved relative to that repo's own checkout" rule:
 
 - **`sibling2-ref` pins the SHA your DIRECT sibling depends on, not
   whatever `main` happens to be.** Read it off `sibling-repo`'s own
@@ -477,20 +463,20 @@ Two things worth being deliberate about, both consequences of the same
   shared workflow refuses this before either checkout runs rather than
   discovering it after.
 
-The fleet's nesting depth is two today: a direct private sibling that
-itself pins one private sibling. There is no `sibling3` input, and adding
-one is not expected to be needed soon -- see CONTRACT.md if that changes.
+The deepest chain in the fleet today is a direct private sibling that
+itself pins one private sibling. There is no `sibling3` input set, and
+adding one is not expected to be needed soon. CONTRACT.md is where that
+would change.
 
 **`build-release.yml` does not support this (or the single-sibling case)
-at all.** It only matters for that workflow's two non-automatic triggers
-(a human-pushed tag, or manual `workflow_dispatch`); the automated release
-path is entirely `version.yml`, which builds and publishes inline once it
-detects the release commit. See that workflow's own header comment if you
-ever need the fallback path with a private sibling in play.
+at all.** It only matters for that workflow's non-automatic triggers (a
+human-pushed tag, or manual `workflow_dispatch`); the automated release
+path is entirely `version.yml`. See that workflow's own header comment if
+you ever need the fallback path with a private sibling in play.
 
 All of it is temporary, same as the single-sibling case: when both
 dependencies ship to an index, drop both `[tool.uv.sources]` entries, both
-extra checkouts in `ci.yml`, all six `sibling2-*`/`sibling-*` inputs, both
+extra checkouts in `ci.yml`, every `sibling-*` and `sibling2-*` input, both
 secrets, and both PATs.
 
 ## Publishing to a package index (optional)
@@ -498,29 +484,20 @@ secrets, and both PATs.
 Off by default. Most repos stop at "GitHub Release with a wheel and
 sdist attached" and never touch this. If you do want `version.yml` to
 also publish to a package index over OIDC trusted publishing, follow the
-steps below exactly. Getting the permission wrong does not fail the publish:
-it stops every workflow in the repo from loading at all.
+steps below exactly. Getting a permission wrong here does not fail the
+publish. It stops every workflow in the repo from loading at all.
 
 **The rule underneath everything here:** `permissions:` on a
-`workflow_call` is a **ceiling for every job inside the called
-workflow**, not a per-job grant, and it is checked when the workflow is
-**parsed**, before any `if:` condition is ever evaluated. Two consequences
-follow, both already handled on this repo's side:
-
-- The shared `version.yml`'s publish job declares **no `permissions:` of
-  its own** and inherits whatever the consumer's stub granted. A job
-  requesting more than its caller granted fails the whole workflow to
-  start, for every onboarded repo whether it publishes or not. It fails
-  as `startup_failure`, with no further message available via the API.
-- `environment:` is required on that job even when `publish` is `false`,
-  because GitHub validates it at the same parse-time step, and an empty
-  environment name is invalid. The shared workflow ships a non-empty
-  default (`release`).
+`workflow_call` is a **ceiling for every job inside the called workflow**,
+not a per-job grant, and GitHub checks it when the workflow is **parsed**,
+before any `if:` condition is evaluated. This repo's side of that is
+already handled; the publish job's own comment in
+[`.github/workflows/version.yml`](../.github/workflows/version.yml) is the
+account of how, including why `environment:` has a non-empty default.
 
 What is left on your side: **a repo enabling `publish: true` without also
 granting `id-token: write` on its own stub gets no clean error. The job
 runs, the OIDC token comes back empty, and the publish step fails.**
-
 
 1. **Add `id-token: write` to the `version:` job's `permissions:`
    block on your own stub.** This is the only place it can come from now:
@@ -573,8 +550,8 @@ slightly wrong the first time. See the worked example right below.
 
 ## Worked example: emergent-matter-materials
 
-`emergent-matter-materials` has its version recorded in three places, and
-all three have to agree:
+`emergent-matter-materials` has its version recorded in more than one
+place, and every copy has to agree:
 
 1. `pyproject.toml` -> `[project] version`
 2. `src/emergent_matter_materials/__init__.py` -> `__version__`
@@ -600,8 +577,8 @@ version_files = [
 ```
 
 This isn't hypothetical. A simulated `1.10.0 -> 1.11.0` bump run against a
-copy of this repo updated exactly those three lines across the two files
-above, and nothing else, and `emergent-matter-materials`'s own
+copy of this repo updated exactly the lines listed above, and nothing
+else, and `emergent-matter-materials`'s own
 pre-existing `tests/test_catalog_versioning.py` went **7 passed**
 afterward. That suite was written by someone who'd never heard of this
 tooling, so it passing on a synthetic bump is independent evidence that
@@ -737,7 +714,7 @@ stays exactly as it was. The marker string has to match
 
 ## Verifying it locally before you rely on it
 
-`compute_bump.py` and `sync_version.py` are the two scripts CI runs on
+`compute_bump.py` and `sync_version.py` are the scripts CI runs on
 your behalf, at PR-check time and at release time. They're plain Python
 (stdlib only), so you can run the same checks yourself before you push,
 from inside **your** repo (they read `changelog.d/` and `pyproject.toml`
@@ -768,7 +745,7 @@ doesn't exist as written, or you have a real drift to fix.
 `emergent-matter-materials` also has
 `test_installed_package_metadata_matches_module_version`, which checks
 `importlib.metadata.version(...)`: the **installed** package's metadata,
-not anything read from the source tree. That has two consequences worth
+not anything read from the source tree. That has consequences worth
 knowing before you bump a version locally:
 
 - If the package isn't installed at all, that test **skips** rather than
@@ -839,24 +816,17 @@ below); flip its `continue-on-error` line and required context by hand.
 
 `templates/ci.yml` ships each staged job with `continue-on-error: true`.
 That line is often misread as "the job can't block anything yet." It
-cannot do that, and the difference is worth being exact about, because it
-decides whether the rollout works:
+cannot do that: the **check run** still concludes `failure`, and the check
+run is what branch protection matches. So adding the job's name to
+required contexts blocks PRs immediately, `continue-on-error` or not,
+which is exactly the pile-of-unrelated-findings problem the staging exists
+to avoid. What the line buys is that a failure doesn't fail the whole
+*run*, so it can't take down `version.yml`'s `needs: ci` and stall a
+release while the backlog is still being cleared. The measured version of
+that, level by level, is in [tooling.md](tooling.md), under why
+`continue-on-error` is not the lever.
 
-| Level | On a failure |
-|---|---|
-| Job conclusion | `failure` |
-| Workflow **run** conclusion | `success`: the only thing `continue-on-error` changes |
-| **Check run** conclusion | `failure`: what branch protection matches |
-
-The check still fails. So adding the job's name to required contexts
-blocks PRs immediately, `continue-on-error` or not. That's exactly the
-pile-of-unrelated-findings problem the staging exists to avoid.
-
-What that line actually buys is that a failure doesn't fail the whole run,
-so it doesn't take down `version.yml`'s `needs: ci` and stall a release
-while the backlog is still being cleared.
-
-So the two levers move together, independently for each staged job
+So the levers move together, independently for each staged job
 (a repo can enforce `lint` while `format`/`typecheck` are still advisory):
 
 1. **Onboard.** Keep `continue-on-error` on every staged job, require
@@ -873,7 +843,7 @@ So the two levers move together, independently for each staged job
 
 `scripts/lint_gate.py` moves both halves together, so the two can't
 drift. It defaults to the `lint` job; pass `--job format` or
-`--job typecheck` for the other two:
+`--job typecheck` for the others:
 
 ```bash
 # from the target repo's root (or pass --repo-path)
@@ -888,8 +858,8 @@ python3 /path/to/actions/scripts/lint_gate.py --job typecheck on
 
 `status` reports both halves and the state they imply (`OFF`, `ON`, or
 `INCONSISTENT`), and exits non-zero on `INCONSISTENT`, so it works as a
-check in its own right. The two inconsistent states are reported
-differently, because they fail in opposite directions.
+check in its own right. Each inconsistent state is reported differently,
+because they fail in opposite directions.
 
 `on` **refuses if the repo still has findings for that job**, since
 enforcing over a dirty backlog blocks every open PR with errors unrelated
@@ -946,13 +916,13 @@ those names instead. Same bare-vs-prefixed rule, different strings.
 
 `templates/CONTRIBUTING.md` says merging the release PR is the release,
 and that's still true in spirit. But under branch protection it takes
-three manual actions, not one click, and it's worth knowing that going
-in rather than discovering it mid-release:
+several deliberate actions rather than one click, and it's worth knowing
+that going in rather than discovering it mid-release:
 
-1. **Close the release PR, then immediately reopen it.** It was opened by
-   `GITHUB_TOKEN`, which doesn't trigger further workflow runs on its own
-   PR. See `templates/CONTRIBUTING.md`'s section on this. Its checks
-   show as not-run until you do this.
+1. **Close the release PR, then immediately reopen it.** Its checks show
+   as never run until you do, because it was opened by `GITHUB_TOKEN`.
+   That is expected; CONTRACT.md's section on the known limitation is why
+   it is accepted rather than worked around.
 2. **Get it approved** (or merge it yourself if you're listed as a
    code owner for this repo, in which case CODEOWNERS review rules let
    you merge without waiting on someone else).
@@ -1003,10 +973,8 @@ green. That is exactly the state a gate that checks nothing produces.
 
 Read [`templates/CONTRIBUTING.md`](../templates/CONTRIBUTING.md). That's
 what you just copied into the repo, and it's what every future contributor
-(including you) will actually follow day to day. In particular, don't
-skip its section on the release PR's checks showing as "not run": that's
-expected, not broken, and the fix (close, then immediately reopen the PR)
-is easy to miss if you haven't seen it before.
+(including you) will actually follow day to day. Its section on the
+release PR's checks showing as "not run" is the one to not skip.
 
 Onboarding copies `templates/` in as a snapshot; it does not stay current on
 its own. When something in `templates/` changes later, run `scripts/sync.py`

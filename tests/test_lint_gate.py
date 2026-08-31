@@ -101,7 +101,7 @@ def test_turning_on_replaces_the_pre_v1_1_0_rollout_comment():
 
     Missing it leaves "non-blocking until the backlog is cleared" sitting
     directly above "Enforced:" -- a file that contradicts itself.
-    Caught on the first real run against em-release-control-test.
+    Caught on the first real run against a live consuming repo.
     """
     legacy = CI_OFF.replace(
         "    # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking.\n"

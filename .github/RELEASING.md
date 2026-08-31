@@ -11,12 +11,11 @@ Work lands on `main` through a reviewed pull request and **changes nothing for
 any consuming repo.** Moving `v1` is a separate, deliberate act.
 
 That separation is the entire point of the pin. The moment `v1` moves, every
-repo pinned to it runs the new code on its next run (around thirty of them),
-without any of them doing anything or being asked. It is the highest
-blast-radius action in this system, and it gets treated like a release rather
-than a side effect of merging. It is the same principle the product itself is
-built on, turned on the repo that implements it: merging a pull request never
-releases anything.
+repo pinned to it runs the new code on its next run, without any of them doing
+anything or being asked. It is the highest blast-radius action in this system,
+and it gets treated like a release rather than a side effect of merging. It
+is the same principle the product itself is built on, turned on the repo
+that implements it: merging a pull request never releases anything.
 
 So `main` can be a normal working branch. Land things there freely.
 
@@ -56,12 +55,11 @@ running.
 Do not push a breaking change out under `v1`.
 
 **Adding a `permissions:` requirement to a reusable workflow is a breaking
-change.** A
-caller's `permissions:` is a ceiling for every job in the called workflow, so a
-job asking for more than the caller granted does not degrade. Instead, GitHub
-rejects the entire workflow when it parses it, and every run in that repo fails
-with `startup_failure` before a single job starts, whether or not the job would
-have run. Same for adding a new required input with no default.
+change**, because a caller's `permissions:` is a ceiling for every job in the
+called workflow and a job asking for more than the caller granted does not
+degrade: it takes down every run in that repo. The publish job's comment in
+[`workflows/version.yml`](workflows/version.yml) has the mechanism. Adding a new
+required input with no default is breaking for the same reason.
 
 ## Why the promotion is not automated
 
@@ -131,40 +129,29 @@ is an escape hatch; using it to bypass a red check should be rare, deliberate,
 and explained in the pull request.
 
 [`.github/CODEOWNERS`](CODEOWNERS) is what makes "code-owner review" and the
-tag ruleset's admin bypass mean the same three people everywhere: it names
-@telafifi, @evanmj, @ecarrig for the repo as a whole, and calls out
-`.github/workflows/`, `scripts/`, `templates/`, and `CONTRACT.md` explicitly
--- the parts that execute inside other repos' CI or define the contract they
-depend on -- even though the repo-wide entry already covers them, so a reviewer
-skimming CODEOWNERS sees the highest-blast-radius paths named, not just
-implied.
+tag ruleset's admin bypass mean the same people everywhere. It sets owners for
+the repo as a whole, then names the highest-blast-radius paths again
+explicitly: the ones that execute inside other repos' CI, or define the
+contract those repos depend on. The repo-wide entry already covers them, so
+that repetition buys nothing mechanically. It exists so a reviewer skimming the
+file sees those paths named rather than implied.
 
 ## Build + release run inline in `version.yml`, not on tag push
 
-`version.yml` builds the wheel/sdist and creates the GitHub Release itself,
-in the same job run that pushes the release tag, not in a separately
-tag-triggered workflow. Reason: that tag is pushed using `GITHUB_TOKEN`
-credentials, and GitHub does not trigger further workflow runs from events
-created by `GITHUB_TOKEN`. A `build-release.yml` stub listening for
-`push: tags: ["v*"]` alone would simply never fire on the automated path.
-
-`build-release.yml` still exists, but only for the two cases that aren't
-that path: a human pushing a `v*` tag by hand (which does trigger
-workflows), and `workflow_dispatch` for manually rebuilding or
-republishing a past release. Don't be confused by its apparent redundancy
-with `version.yml`; they cover disjoint triggers.
+`version.yml` builds the wheel and sdist and creates the GitHub Release in
+the same run that pushes the release tag. `build-release.yml` covers the
+cases that are not that path: a human pushing a `v*` tag by hand, and
+`workflow_dispatch` for rebuilding or republishing a past release. The two
+look redundant and are not; they cover disjoint triggers. Why the automated
+path cannot be tag-triggered is in CONTRACT.md, under why the release is not
+tag-triggered.
 
 ## The known limitation, briefly
 
-Release PRs opened by `version.yml` use `secrets.GITHUB_TOKEN`, which does
-not trigger further workflow runs, so a release PR's own status checks
-can show as not run. This is intentional (see CONTRACT.md's "known
-limitation" section and `CLAUDE.md`), not a bug: the code being released
-was already gated by the consuming repo's own CI before the release PR was
-even drafted. The human escape hatch (close the release PR and
-immediately reopen it to force its checks to run) is documented in full
-in `templates/CONTRIBUTING.md`, which every consuming repo carries; this
-file doesn't repeat it beyond this pointer.
+A release PR's own status checks can show as never run. That is expected, and
+CONTRACT.md's section on the known limitation is the account of it: why it is
+accepted, and the close-and-reopen escape hatch for a human who wants those
+checks to run.
 
 ## What a consumer actually sees
 

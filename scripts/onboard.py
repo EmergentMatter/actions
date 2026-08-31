@@ -6,7 +6,7 @@ templates, adds the config block, creates `changelog.d/`, and creates the
 `skip-changelog` label. Everything it does is idempotent -- run it twice and
 the second run reports "already correct" rather than duplicating anything.
 
-It deliberately does NOT do three things:
+It deliberately does NOT do the following:
 
   version_files    proposed, never guessed. The doc's worked example exists
                    specifically to warn against declaring a version string
