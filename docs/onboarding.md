@@ -168,13 +168,16 @@ makes managed-file drift visible; run it after onboarding, and
 periodically after that.
 
 One manual step goes with the copies: add a short "Code standard"
-section to your repo's `CLAUDE.md` pointing at `STYLE.md` and
-`.github/PULL_REQUEST_TEMPLATE.md`. Agents read `CLAUDE.md` first, so a
-standard that is not named there gets rediscovered from scratch every
-session. Two sentences is enough:
+section to your repo's `CLAUDE.md` pointing at `STYLE.md`,
+`.github/PULL_REQUEST_TEMPLATE.md`, and the documentation standard in
+the SDM docs hub. Agents read `CLAUDE.md` first, so a standard that is
+not named there gets rediscovered from scratch every session. Three
+sentences is enough:
 
 > Follow STYLE.md at the repo root for all code, comments, tests, and
 > docs. Pull request descriptions follow .github/PULL_REQUEST_TEMPLATE.md.
+> For where a piece of documentation belongs, see
+> https://github.com/EmergentMatter/emergent-matter-sdm/blob/main/docs/documentation-standard.md.
 
 `onboard.py` also seeds a set of standard repo-hygiene files: a security
 policy, a licence, code owners, issue and pull request templates, and the
