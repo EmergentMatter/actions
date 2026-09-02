@@ -204,6 +204,11 @@ For repos with a TypeScript package:
   moment the set changes. Name things by role or filename instead. A
   configuration value (a line length, a version number, a timeout) is
   not a count of things, and stating it directly is fine.
+- **Expand an acronym on first use in a file**, then link the
+  [glossary](https://github.com/EmergentMatter/emergent-matter-sdm/blob/main/docs/glossary.md)
+  rather than redefining the term. The glossary in the docs hub holds
+  the canonical entry; a second definition somewhere else is the one
+  that goes stale.
 
 ## Open-source hygiene
 
