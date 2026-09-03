@@ -203,6 +203,26 @@ jobs:
       # sync and test.
       - run: uv sync --locked
 
+      # If the test job becomes the slow part of CI, two levers are worth
+      # knowing about, in this order. Both were measured on sdm-core, whose
+      # suite ran 286s here:
+      #
+      #   1. `uv run pytest -n auto` splits the suite across the runner's
+      #      cores with pytest-xdist (add it to the dev dependency group).
+      #      Check for ordering dependencies first -- run the suite serial
+      #      and parallel and compare the pass/fail/skip counts. Expect less
+      #      than a laptop suggests: a standard runner is 2-core on a private
+      #      repo, 4-core on a public one. This took sdm-core to 241s.
+      #
+      #   2. If the suite is dominated by compilation rather than by the code
+      #      under test (JAX/XLA, numba, heavy imports), cache the compiler's
+      #      output between runs with actions/cache. That is what actually
+      #      moved sdm-core: 241s to 149s. Key it on uv.lock, so a dependency
+      #      bump starts cold instead of restoring artifacts built against a
+      #      different compiler.
+      #
+      # Neither is a default. On a suite that already finishes in 15s, worker
+      # startup costs more than it saves.
       - name: Run tests
         run: |
           if [ -d tests ]; then
