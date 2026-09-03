@@ -85,12 +85,12 @@ Three-way compare per entry, not two-way:
 | different | different (and ours != theirs) | Both sides moved since the last sync: a genuine **conflict** | Prompts, unless `--ours` or `--theirs` says which side wins outright |
 
 **Why base matters**: comparing only ours vs. theirs can't tell "stale" from "deliberately
-customized," because both just look like "differs from the template." `fleet_status.py`'s
-`templates` check used to make exactly that mistake, before it had a `templates_version` stamp to
-compare against: every divergent file was flagged the same way, stale copy or knowing edit alike.
-A repo with no `templates_version` stamp at all (onboarded before this existed) still has no base
-to compare against, so every diff there is treated as a possible edit and reported, never
-overwritten.
+customized," because both just look like "differs from the template." A repo with no
+`templates_version` stamp at all (onboarded before this existed) has no base to compare against,
+so every diff there is treated as a possible edit and reported, never overwritten.
+
+The decision and the constraint it puts on the stamp (it must name an immutable ref, never the
+moving `v1`) are recorded in [ADR 0005](docs/adr/0005-sync-uses-a-three-way-compare.md).
 
 - `--dry-run` reports what would change and writes nothing.
 - `--ours` / `--theirs` resolve every conflict for this run without prompting; mutually
@@ -175,8 +175,9 @@ resolve, and no fallback to reason about.
 That's why the whole `actions-ref` / `job.workflow_sha`-fallback apparatus above (the one where
 an empty checkout ref silently means the default branch) exists only for `version.yml`. A
 reusable `workflow_call` workflow genuinely has no way to discover its own ref; a composite
-action does, automatically. That difference is why this check moved to the composite-action
-shape.
+action does, automatically. The decision to move this check to the composite-action shape, and
+what it bought, are recorded in
+[ADR 0004](docs/adr/0004-changelog-check-is-a-composite-action.md).
 
 Composite actions also cannot declare `permissions:`: there is no `runs.permissions` key. The
 `contents: read` (to check out the PR head commit) and `pull-requests: read` (to list PR files via
@@ -227,15 +228,13 @@ in `.github/workflows/version.yml`.
 that to prevent recursion. It is platform behaviour, not a permission anything can grant, and it
 is the same rule behind the known limitation below.
 
-Applied to tags: a tag pushed with `GITHUB_TOKEN` never fires a tag-triggered workflow. The
-obvious design (tag `v*` fires `build-release.yml`) would therefore push the tag and then build
-nothing, silently, on every release.
+The behaviour that follows: `version.yml` pushes the tag and builds, releases, and optionally
+publishes **in the same run**. `build-release.yml` is kept for a human-pushed tag (which does
+trigger workflows) and for `workflow_dispatch` rebuilds. It is deliberately not the automatic
+path.
 
-So `version.yml` pushes the tag and builds, releases, and optionally publishes **in the same
-run**. `build-release.yml` is kept for a human-pushed tag (which does trigger workflows) and for
-`workflow_dispatch` rebuilds. It is deliberately not the automatic path. The reasoning for
-inlining those steps rather than delegating them lives in the header comment of
-`.github/workflows/version.yml` and is not repeated here.
+The decision, the design that was rejected, and why the resulting duplication is deliberate are
+recorded in [ADR 0002](docs/adr/0002-build-and-release-run-inline-not-on-tag-push.md).
 
 ## The known limitation: document it, don't work around it
 
@@ -243,8 +242,8 @@ Stated here once. Everywhere else points at this section.
 
 A pull request opened with `GITHUB_TOKEN` does **not** trigger further workflow runs, by the same
 platform rule as the section above, so the release PR `version.yml` opens shows its own checks as
-never run. This is accepted rather than worked around, matching the precedent at
-`~/Sites/icon/satcom`:
+never run. This is accepted rather than worked around, matching the precedent set by an earlier
+internal repo that hit the same platform rule:
 
 1. The bot stays on plain `GITHUB_TOKEN`. Every workaround needs a PAT or a GitHub App, and no
    long-lived token is a non-negotiable above.
