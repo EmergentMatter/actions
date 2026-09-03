@@ -15,7 +15,8 @@ location means:
 
 ## Adding to this directory
 
-- Recording a **decision** and the reasoning behind it: write an ADR.
+- Recording a **decision** and the reasoning behind it: write an ADR
+  (architecture decision record).
 - Describing **how the system behaves**, as a contract a consumer can rely on:
   that is [`CONTRACT.md`](../CONTRACT.md), not here.
 - Telling someone **how to carry out a procedure**: a reference page at this
