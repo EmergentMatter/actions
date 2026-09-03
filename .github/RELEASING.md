@@ -57,23 +57,19 @@ Do not push a breaking change out under `v1`.
 **Adding a `permissions:` requirement to a reusable workflow is a breaking
 change**, because a caller's `permissions:` is a ceiling for every job in the
 called workflow and a job asking for more than the caller granted does not
-degrade: it takes down every run in that repo. The publish job's comment in
-[`workflows/version.yml`](workflows/version.yml) has the mechanism. Adding a new
-required input with no default is breaking for the same reason.
+degrade: it takes down every run in that repo. Adding a new required input with
+no default is breaking for the same reason. The mechanism, and the incident that
+established it, are in
+[ADR 0003](../docs/adr/0003-the-publish-job-declares-no-permissions.md).
 
 ## Why the promotion is not automated
 
-Deliberate, not an oversight. A workflow could move `v1` whenever a `v1.x.y`
-tag is pushed, but `GITHUB_TOKEN` runs as `github-actions[bot]`, which is not a
-repository admin, so the tag ruleset blocks it. Granting an Integration bypass
-would let *any* workflow in this repo move `v1`, which gives away exactly the
-protection the ruleset exists to provide.
+Deliberate, not an oversight, and recorded in
+[ADR 0001](../docs/adr/0001-consumers-pin-a-moving-major-tag.md) along with the
+alternatives that were rejected.
 
 Worth revisiting when this repo is quieter. Do not weaken the tag rules to get
 there.
-
-Dogfooding release control on this repo is also circular: it would need a
-working `v1` to release itself with.
 
 ## Tag strategy
 
@@ -89,27 +85,17 @@ working `v1` to release itself with.
 - **The `v1` tag is protected** by a repository ruleset ("Protect v1 release
   tags") covering `refs/tags/v1` and `refs/tags/v1.*`, blocking deletion,
   non-fast-forward and update, with bypass limited to repository admins, in
-  practice the owners in [`CODEOWNERS`](CODEOWNERS). Consumer stubs deliberately
-  carry **no** `secrets: inherit` on the jobs that call this repo's
-  workflows (CONTRACT.md's Consumer stub block -- `secrets: inherit`, where
-  it appears at all, sits on the consumer's own local `ci:` job, never on
-  the call into `EmergentMatter/actions/...@v1`), so a compromised or
-  force-pushed `v1` cannot read a consuming repo's named secrets. It is
-  still a real blast radius, just a smaller one: whatever `v1` resolves to
-  runs with the `contents: write` / `pull-requests: write` /
-  (when a repo has opted into `publish: true`) `id-token: write`
-  permissions that repo's own stub grants -- enough to push arbitrary tags,
-  open or merge PRs, and, for any repo that publishes, mint an OIDC token
-  scoped to that repo's trusted-publisher config. `id-token: write` is
-  granted directly by the consumer's stub and doesn't route through
-  `secrets: inherit` at all, so it isn't mitigated by the point above.
-  It's the reason tag protection stays a hard prerequisite (see the risk
-  list already raised with the user) rather than something the
-  `secrets: inherit` removal made optional.
-  Point releases (`v1.x.y`) should be protected too, for the same reason
-  applied to anyone who pinned one directly during testing, but `v1` is
-  the one that matters in the common case, since it's what every stub
-  actually references.
+  practice the owners in [`CODEOWNERS`](CODEOWNERS).
+  Point releases (`v1.x.y`) are protected too, for the same reason applied to
+  anyone who pinned one directly during testing, but `v1` is the one that
+  matters in the common case, since it's what every stub actually references.
+
+Why the pin has this shape, and what the protection is guarding against, are in
+[ADR 0001](../docs/adr/0001-consumers-pin-a-moving-major-tag.md). Consumer stubs
+deliberately carry no `secrets: inherit` on the jobs that call this repo's
+workflows; what that does and does not close, and why tag protection stays a
+hard prerequisite rather than an optional extra, are in
+[ADR 0006](../docs/adr/0006-no-stub-grants-secrets-to-a-shared-workflow.md).
 
 ## Branch protection, as configured
 
@@ -143,8 +129,8 @@ the same run that pushes the release tag. `build-release.yml` covers the
 cases that are not that path: a human pushing a `v*` tag by hand, and
 `workflow_dispatch` for rebuilding or republishing a past release. The two
 look redundant and are not; they cover disjoint triggers. Why the automated
-path cannot be tag-triggered is in CONTRACT.md, under why the release is not
-tag-triggered.
+path cannot be tag-triggered is in
+[ADR 0002](../docs/adr/0002-build-and-release-run-inline-not-on-tag-push.md).
 
 ## The known limitation, briefly
 

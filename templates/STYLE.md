@@ -189,8 +189,10 @@ For repos with a TypeScript package:
 - **Keep `CLAUDE.md` to the stable guide**: build/run commands,
   architecture, naming, constraints. Put dated journals, roadmaps, and
   sign-off notes in GitHub issues or `docs/journal/`.
-- **Write ADRs** at `docs/adr/NNNN-kebab-title.md`, with `Status`,
-  `Context`, `Decision`, and `Consequences` sections.
+- **Write ADRs (architecture decision records)** at
+  `docs/adr/NNNN-kebab-title.md`, with `Status`, `Context`, `Decision`, and
+  `Consequences` sections. A record states what was true when it was
+  accepted, so it is superseded by a later one rather than rewritten.
 - **For where a piece of documentation belongs**, not how to write it, see
   [`documentation-standard.md`](https://github.com/EmergentMatter/emergent-matter-sdm/blob/main/docs/documentation-standard.md)
   in the docs hub.

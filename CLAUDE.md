@@ -73,10 +73,9 @@ lands in a consumer only when someone runs sync.
 file that differs from its template is either stale or deliberately
 edited, and a two-way diff cannot tell those apart, so `sync.py` compares
 three ways against the template as it stood at the repo's recorded
-version. That stamp must name an immutable ref. Pointing it at the moving
-`v1` alias collapses the merge base toward the current template and
-silently stops detecting staleness, which looks like success. See the
-`usable_stamp` docstring in `scripts/sync.py`.
+version. That stamp must name an immutable ref, never the moving `v1`
+alias. See [ADR 0005](docs/adr/0005-sync-uses-a-three-way-compare.md) and
+the `usable_stamp` docstring in `scripts/sync.py`.
 
 **Adding a template is one entry in `templates/manifest.toml`.** The
 manifest is the single declaration of what a consumer receives, read at
@@ -93,8 +92,8 @@ promise and the setting have to land together.
 workflow.** Composite so it reaches `scripts/` through
 `github.action_path`, with no `actions-ref` input to keep in sync, and so
 its required-check name is the short `EmergentMatter/actions/changelog-check`
-form rather than the longer reusable-workflow path a consumer's branch
-protection would otherwise have to match.
+form. See
+[ADR 0004](docs/adr/0004-changelog-check-is-a-composite-action.md).
 
 ## Technical Context
 
@@ -115,9 +114,8 @@ protection would otherwise have to match.
 - **`build-release.yml` is not a redundant leftover.** `version.yml`
   tags and builds in one run because the tag-triggered design silently
   never fires on the automated path; `build-release.yml` covers the
-  human-pushed tag and the manual rebuild. Do not fold it away. The
-  behaviour it works around is in `CONTRACT.md`, under its section on why
-  the release is not tag-triggered.
+  human-pushed tag and the manual rebuild. Do not fold it away. See
+  [ADR 0002](docs/adr/0002-build-and-release-run-inline-not-on-tag-push.md).
 - **`scripts/changeset.py` belongs at a consumer repo's root, outside
   the package.** Moving it, or wiring a console entry point, ships a
   contributor-only tool onto the PATH of everyone who installs the
@@ -126,27 +124,21 @@ protection would otherwise have to match.
 - **No stub grants secrets to a shared workflow.** The reusable workflows
   read no `secrets.*`; they use only the auto-injected `github.token`, and
   publishing goes over OIDC trusted publishing (`id-token: write`) when
-  configured, not a token. `stub-changelog-check.yml` omits
-  `secrets: inherit` because it triggers on `pull_request`, which can be a
-  fork PR in a public repo, and there is nothing to grant.
-  `stub-build-release.yml` omits it for the OIDC reason above.
-  `stub-version.yml` puts `secrets: inherit` on the *consumer's own* `ci:`
-  job, conditionally, only if that repo's own CI needs a named secret
-  (concrete example: `sdm-core`'s CI needs `MATERIALS_REPO_TOKEN` to
-  check out the private `emergent-matter-materials` sibling), never on
-  the job that calls into this repo. Granting a public repo pinned by a
-  movable `v1` tag your org's secrets would make that tag equivalent to
-  secret access everywhere it's pinned; see `docs/onboarding.md` for the
-  full explanation aimed at onboarders.
+  configured, not a token. `secrets: inherit` appears only on a
+  *consumer's own* `ci:` job, conditionally, never on the job that calls
+  into this repo. See
+  [ADR 0006](docs/adr/0006-no-stub-grants-secrets-to-a-shared-workflow.md)
+  for the residual blast radius this does and does not close, and
+  `docs/onboarding.md` for the explanation aimed at onboarders.
 - **Never add a `permissions:` or `environment:` value to a job in
-  `version.yml` without reading the publish job's own comment first.**
-  Both are validated at parse time, before any `if:` runs, so getting one
-  wrong does not degrade: it breaks every run for every onboarded repo
-  with `startup_failure` and no message via the API. The comment on that
-  job in `.github/workflows/version.yml` records what happened and why the
-  job declares no permissions of its own; `docs/onboarding.md`'s
-  "Publishing to a package index" section gives it the prominence it
-  earned.
+  `version.yml` without reading
+  [ADR 0003](docs/adr/0003-the-publish-job-declares-no-permissions.md)
+  first.** Both are validated at parse time, before any `if:` runs, so
+  getting one wrong does not degrade: it breaks every run for every
+  onboarded repo with `startup_failure` and no message via the API. The
+  comment on that job in `.github/workflows/version.yml` carries the
+  mechanism inline, and `docs/onboarding.md`'s "Publishing to a package
+  index" section gives it the prominence it earned.
 - **Every stub with an `actions-ref` input must set it to match the
   `@ref` it's pinned to** (`version.yml` and `changelog-check.yml`'s
   stubs; `build-release.yml`'s doesn't take this input, since it never
@@ -156,20 +148,20 @@ protection would otherwise have to match.
   exist, both confirmed live. An unresolvable ref is refused rather than
   silently falling back to this repo's default branch.
 - **A shared composite action for the build/release steps was tried and
-  withdrawn, but not because it was proven broken.** It was removed
-  while chasing the `startup_failure` above, whose real cause was the
-  publish-job permissions issue, not the composite action. Don't restate
-  "a local `./` action can't work in a reusable workflow" as settled fact
-  in any doc; it was never isolated as the actual problem. What's
-  genuinely awkward is that `uses:` can't take a templated ref, so a
-  composite action couldn't follow the same `@ref` this workflow is
-  pinned at without a hardcoded ref, and a `./`-relative path's
-  resolution for a reusable workflow called cross-repo was never tested
-  in isolation. The build/release steps are therefore duplicated between
-  `version.yml` and `build-release.yml` on purpose, and verified working
-  end to end. Keep the two copies in step when either changes, and only
-  revisit sharing them with an isolated test of the `./` resolution
-  question specifically.
+  withdrawn, but not because it was proven broken.** The build/release
+  steps are duplicated between `version.yml` and `build-release.yml` on
+  purpose. Keep the two copies in step when either changes, and read
+  [ADR 0007](docs/adr/0007-shared-composite-action-for-build-steps-withdrawn.md)
+  before reintroducing a shared action: it records what was actually
+  established, and what was only assumed during an incident.
+
+## Decisions
+
+Major decisions are recorded in [`docs/adr/`](docs/adr/), one per file,
+and are not restated here. A record states what was true when it was
+accepted, so it does not go stale the way the same reasoning written as
+ordinary prose does. Add one when a decision is made rather than
+explaining it again in this file.
 
 ## Naming Conventions
 
