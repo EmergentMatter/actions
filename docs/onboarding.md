@@ -38,6 +38,7 @@ it covers, not front-to-back.
 - [Verifying it locally before you rely on it](#verifying-it-locally-before-you-rely-on-it)
 - [Installed metadata versus the source tree](#installed-metadata-versus-the-source-tree)
 - [Setting up branch protection](#setting-up-branch-protection)
+- [Draft pull requests do not run CI](#draft-pull-requests-do-not-run-ci)
 - [Releasing under branch protection](#releasing-under-branch-protection)
 - [Prove the gate actually works](#prove-the-gate-actually-works-before-you-trust-it)
 - [After onboarding](#after-onboarding)
@@ -914,6 +915,46 @@ The exact names above assume `templates/ci.yml` and
 `format` / `typecheck` / `test` / `build` / `changelog`). If your repo
 already had its own CI with different job names before onboarding, use
 those names instead. Same bare-vs-prefixed rule, different strings.
+
+## Draft pull requests do not run CI
+
+Both `templates/ci.yml` and `templates/stub-changelog-check.yml` skip every
+job while a pull request is a draft, so a required check shows as
+**"expected"** (waiting, not failing) instead of running against
+work-in-progress code that isn't ready to be checked yet.
+
+Two mechanisms make that happen:
+
+- **`pull_request.types` includes `ready_for_review`.** That's the event
+  GitHub fires the moment a draft is marked ready, and without it in the
+  list the trigger never fires for that transition at all -- the checks
+  would stay stuck at "expected" forever, even after the PR is ready.
+- **Every job carries a guard**, keyed off `github.event.pull_request.draft`.
+  `ci.yml`'s guard is two-part --
+  `github.event_name != 'pull_request' || github.event.pull_request.draft
+  == false` -- because `version.yml` also calls this file via
+  `workflow_call` on every push to `main`, where `github.event.pull_request`
+  doesn't exist at all. A bare `draft == false` there evaluates `false` on
+  every release, silently skipping every release-path check with no error
+  and no warning. `changelog-check.yml`'s stub needs only the second half:
+  it triggers on `pull_request` alone, never `workflow_call`, so
+  `github.event.pull_request` is always present when it runs.
+
+**Running CI on a draft anyway** -- to check work in progress before
+marking it ready -- is what `workflow_dispatch` is for: trigger a run by
+hand from the Actions tab or `gh workflow run ci.yml --ref <branch>`. It
+bypasses the draft guard entirely, since the guard only reads
+`github.event.pull_request`, which a manually dispatched run never has.
+
+**Repos onboarded before this change** get it differently depending on
+which file it's in. `stub-changelog-check.yml` is `managed`
+(`templates/manifest.toml`), so the next `sync.py` run on that repo
+carries the new trigger and guard automatically. `ci.yml` is `seed-once`:
+sync.py never touches a repo's copy again after onboarding, on purpose (a
+repo owns its CI once it has one), so an already-onboarded repo keeps
+running every `ci.yml` job on its drafts until someone edits that repo's
+own `.github/workflows/ci.yml` by hand to add the same trigger types and
+guard.
 
 ## Releasing under branch protection
 
