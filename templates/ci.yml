@@ -49,15 +49,24 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Every job below carries the same `if:`, skipping a draft PR's checks until it is
+  # marked ready (or run by hand via workflow_dispatch). The `github.event_name !=
+  # 'pull_request' ||` half is essential, not decorative: version.yml calls this file
+  # via workflow_call on pushes to main, where `github.event.pull_request` does not
+  # exist and a bare `draft == false` would evaluate false, silently skipping every
+  # release-path check.
   lint:
     name: lint
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking
     # on pull requests, and believing otherwise gets the rollout backwards.
     # Verified on a real run, not assumed:
@@ -104,6 +113,7 @@ jobs:
   format:
     name: format
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job format.
     continue-on-error: true
     steps:
@@ -122,6 +132,7 @@ jobs:
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job typecheck.
     continue-on-error: true
     steps:
@@ -149,6 +160,7 @@ jobs:
   # ts:
   #   name: ts
   #   runs-on: ubuntu-latest
+  #   if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
   #   # STAGED ROLLOUT. Same as lint above. lint_gate.py doesn't manage
   #   # this job (its working directory isn't the repo root) -- flip
   #   # continue-on-error and the required context by hand.
@@ -181,6 +193,7 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -234,6 +247,7 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
