@@ -791,7 +791,11 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         stamp = fetch_stamp(repo)
         contexts = fetch_contexts(repo)
         security = fetch_file(repo, SECURITY_FILE)
-        readme = fetch_file(repo, README_FILE)
+        # Only spend the extra `gh api` call when there's actually a promise
+        # to verify -- most repos won't have DISCLAIMER.md yet.
+        readme = (
+            fetch_file(repo, README_FILE) if dest_texts.get(DISCLAIMER_FILE) is not None else None
+        )
         pyproject = fetch_file(repo, "pyproject.toml")
         bun_lock_present = fetch_file(repo, BUN_LOCK_FILE) is not None
         ruff_toml_present = fetch_file(repo, RUFF_TOML_FILE) is not None
