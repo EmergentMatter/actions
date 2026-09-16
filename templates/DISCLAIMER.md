@@ -1,6 +1,6 @@
 # Safety and Accuracy Notice
 
-The software EmergentMatter publishes, including this repository,
+The software Emergent Matter publishes, including this repository,
 provides schemas, geometric primitives, computational models, reference
 data, tooling, and conventions for describing, analysing, and producing
 manufactured parts. Any analysis it performs is a computational aid,
