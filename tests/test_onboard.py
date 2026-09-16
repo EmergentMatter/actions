@@ -348,6 +348,7 @@ def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files
         "ISSUE_TEMPLATE/bug_report.yml",
         "ISSUE_TEMPLATE/feature_request.yml",
         "ISSUE_TEMPLATE/config.yml",
+        "DISCLAIMER.md",
     }
     for entry in onboard.load_manifest():
         if (onboard.TEMPLATES / entry.source).is_file():
@@ -624,3 +625,13 @@ def test_print_next_steps_is_silent_about_pvr_by_default(capsys):
     onboard.print_next_steps(_blank_plan(), [])
     out = capsys.readouterr().out
     assert onboard.PVR_NAME not in out
+
+
+def test_print_next_steps_tells_the_repo_to_link_the_disclaimer(capsys):
+    """README.md can't be templated -- it's each repo's own file -- so the
+    link from it to DISCLAIMER.md has to be a manual next step, the same
+    way the config block review and PVR reminder are."""
+    onboard.print_next_steps(_blank_plan(), [])
+    out = capsys.readouterr().out
+    assert "DISCLAIMER.md" in out
+    assert "README.md" in out

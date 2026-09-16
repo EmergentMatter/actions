@@ -32,6 +32,10 @@ Checks, per repo:
               the repo actually has it turned on. It's a per-repo setting
               nothing inherits, so a public repo can carry a policy
               promising a route it doesn't have. (Private repos: N/A.)
+  disclaimer  if DISCLAIMER.md is installed, README.md actually links it.
+              The link can't be templated -- README.md is each repo's own
+              -- so it's enforced the same way as the security promise
+              above: a per-repo fact nothing inherits.
   tooling     pyproject.toml declares [tool.mypy] and
               [tool.pytest.ini_options] (existence only)
   ruff_config ruff-base.toml present with no ruff.toml to `extend` it, or
@@ -123,6 +127,8 @@ TEMPLATES = REPO_ROOT / "templates"
 CI_FILE = ".github/workflows/ci.yml"
 CHANGELOG_STUB = ".github/workflows/changelog-check.yml"
 SECURITY_FILE = "SECURITY.md"
+README_FILE = "README.md"
+DISCLAIMER_FILE = "DISCLAIMER.md"
 BUN_LOCK_FILE = "ui/bun.lock"  # the conventional path; a package elsewhere isn't detected
 RUFF_BASE_FILE = "ruff-base.toml"
 RUFF_TOML_FILE = "ruff.toml"
@@ -275,6 +281,45 @@ def check_security_reporting(security_text: str | None, pvr_status: str) -> list
             "warn",
             "SECURITY.md documents private vulnerability reporting but it is "
             "disabled on this repo; enable it in Settings or re-run onboard.py",
+        )
+    ]
+
+
+def check_disclaimer(disclaimer_text: str | None, readme_text: str | None) -> list[Finding]:
+    """DISCLAIMER.md is a managed template, but the pointer to it is not --
+    it has to live in README.md, which is each repo's own file and can't be
+    synced. So the file existing and the pointer existing are two separate
+    facts, verified separately.
+
+    A missing DISCLAIMER.md is already reported by the `templates` check
+    (it's a `managed` manifest entry); this check has nothing to add there,
+    so it stays silent rather than doubling up on the same finding under a
+    different name.
+
+    An absent or unreadable README.md is ambiguous the same way an
+    ambiguous PVR API response is in check_security_reporting(): the repo
+    may simply have no README, or the fetch may have failed. Never guess
+    "no link" from that -- report it as info, not warn.
+    """
+    if disclaimer_text is None:
+        return []
+    if readme_text is None:
+        return [
+            Finding(
+                "disclaimer",
+                "info",
+                "DISCLAIMER.md is present but README.md could not be read, so "
+                "whether it links DISCLAIMER.md is unknown",
+            )
+        ]
+    if DISCLAIMER_FILE in readme_text:
+        return []
+    return [
+        Finding(
+            "disclaimer",
+            "warn",
+            "DISCLAIMER.md is present but README.md does not link it; add a "
+            "sentence pointing at it (see docs/onboarding.md)",
         )
     ]
 
@@ -599,6 +644,7 @@ def evaluate(
     tags: list[str] | None = None,
     security_text: str | None = None,
     pvr_status: str = "unknown",
+    readme_text: str | None = None,
     pyproject_text: str | None = None,
     bun_lock_present: bool = False,
     ruff_toml_present: bool = False,
@@ -623,6 +669,7 @@ def evaluate(
         *check_templates(manifest, dest_texts, _stamp_status(stamp, tags)),
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
+        *check_disclaimer(dest_texts.get(DISCLAIMER_FILE), readme_text),
         *check_pyproject_tooling(pyproject_text),
         *check_ruff_config_adoption(
             dest_texts.get(RUFF_BASE_FILE) is not None, ruff_toml_present, pyproject_text
@@ -744,6 +791,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
         stamp = fetch_stamp(repo)
         contexts = fetch_contexts(repo)
         security = fetch_file(repo, SECURITY_FILE)
+        readme = fetch_file(repo, README_FILE)
         pyproject = fetch_file(repo, "pyproject.toml")
         bun_lock_present = fetch_file(repo, BUN_LOCK_FILE) is not None
         ruff_toml_present = fetch_file(repo, RUFF_TOML_FILE) is not None
@@ -766,6 +814,7 @@ def inspect(repo: str, manifest: list[TemplateEntry], tags: list[str]) -> RepoRe
                 tags=tags,
                 security_text=security,
                 pvr_status=pvr_status,
+                readme_text=readme,
                 pyproject_text=pyproject,
                 bun_lock_present=bun_lock_present,
                 ruff_toml_present=ruff_toml_present,
