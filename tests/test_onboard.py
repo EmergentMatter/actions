@@ -624,3 +624,13 @@ def test_print_next_steps_is_silent_about_pvr_by_default(capsys):
     onboard.print_next_steps(_blank_plan(), [])
     out = capsys.readouterr().out
     assert onboard.PVR_NAME not in out
+
+
+def test_print_next_steps_tells_the_repo_to_link_the_disclaimer(capsys):
+    """README.md can't be templated -- it's each repo's own file -- so the
+    link from it to DISCLAIMER.md has to be a manual next step, the same
+    way the config block review and PVR reminder are."""
+    onboard.print_next_steps(_blank_plan(), [])
+    out = capsys.readouterr().out
+    assert "DISCLAIMER.md" in out
+    assert "README.md" in out

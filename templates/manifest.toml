@@ -110,3 +110,8 @@ policy = "managed"
 source = "ruff.toml"
 dest   = "ruff.toml"
 policy = "seed-once"
+
+[[template]]
+source = "DISCLAIMER.md"
+dest   = "DISCLAIMER.md"
+policy = "managed"
