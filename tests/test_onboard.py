@@ -348,7 +348,6 @@ def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files
         "ISSUE_TEMPLATE/bug_report.yml",
         "ISSUE_TEMPLATE/feature_request.yml",
         "ISSUE_TEMPLATE/config.yml",
-        "DISCLAIMER.md",
     }
     for entry in onboard.load_manifest():
         if (onboard.TEMPLATES / entry.source).is_file():
