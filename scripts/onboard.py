@@ -655,8 +655,8 @@ def print_next_steps(plan: Plan, version_files: list[str], *, private_repo: bool
     n += 1
     print(f"  {n}. Verify from outside: fleet_status.py --repo <owner>/<name>")
     n += 1
-    print(f"  {n}. Link DISCLAIMER.md from README.md, with a one-clause description of")
-    print("     what this repo is; see docs/onboarding.md.")
+    print(f'  {n}. Add "See [DISCLAIMER.md](DISCLAIMER.md) for notes on use." near the top')
+    print("     of README.md; see docs/onboarding.md.")
     if private_repo:
         n += 1
         print(f"  {n}. This repo is private, so {PVR_NAME} was NOT enabled -- SECURITY.md")
