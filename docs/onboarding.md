@@ -181,28 +181,15 @@ sentences is enough:
 > For where a piece of documentation belongs, see
 > https://github.com/EmergentMatter/emergent-matter-sdm/blob/main/docs/documentation-standard.md.
 
-A second manual step goes with `DISCLAIMER.md`: add a sentence to your
-repo's `README.md`, in its Links section (see the playbook's
-`../engineering-playbook/conventions/readme-and-screenshots.md`), that
-frames the repo in one clause and links `DISCLAIMER.md`. For
-`sdm-core`:
+A second manual step goes with `DISCLAIMER.md`: add one sentence near
+the top of your repo's `README.md`:
 
-> sdm-core provides a schema, geometric primitives, and conventions for
-> describing manufactured parts; it performs no engineering analysis.
-> Read [DISCLAIMER.md](DISCLAIMER.md) before relying on anything
-> expressed in it.
+> See [DISCLAIMER.md](DISCLAIMER.md) for notes on use.
 
-That framing has to be repo-specific -- a schema repo performs no
-analysis, a solver does, and only someone editing that repo's README
-knows which is true -- which is exactly why it isn't in the template
-itself: `DISCLAIMER.md` is a managed file, copied byte-for-byte into
-every onboarded repo, and a managed file can't say something different
-per repo without stopping being managed.
-`scripts/fleet_status.py`'s `disclaimer` check is what catches a repo
-that forgot, the same way its `security` check (described just below)
-catches a repo that forgot to turn on private vulnerability reporting:
-it warns when `DISCLAIMER.md` is present but `README.md` doesn't
-reference it.
+`README.md` isn't a template this repo ships, so that sentence has
+nowhere else to live. `scripts/fleet_status.py`'s `disclaimer` check is
+what catches a repo that forgot: it warns when `DISCLAIMER.md` is
+present but `README.md` doesn't reference it.
 
 `onboard.py` also seeds a set of standard repo-hygiene files: a security
 policy, a licence, code owners, issue and pull request templates, and the
