@@ -73,11 +73,6 @@ The `policy` is the part worth understanding before you edit anything:
   every repo that customized them, which is the whole reason they are
   seeded rather than managed.
 
-`DISCLAIMER.md` is one such managed template: a safety-and-accuracy
-notice, byte-identical across the fleet. `README.md` isn't a template
-this repo ships, so linking `DISCLAIMER.md` from it is the consumer's
-own job -- see [`docs/onboarding.md`](docs/onboarding.md) for that step.
-
 ## Architecture
 
 This repo is **passive**: it holds no secrets, and nothing that ships to a

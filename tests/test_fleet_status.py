@@ -627,39 +627,6 @@ def test_ambiguous_api_response_is_never_read_as_disabled():
     assert "could not determine" in messages(findings, "security")
 
 
-# ---------------------------------------------------------------- disclaimer
-
-DISCLAIMER_TEXT = "# Disclaimer\n\nThis is not professional advice.\n"
-
-
-def test_absent_disclaimer_is_never_flagged_even_without_a_readme_link():
-    """A missing DISCLAIMER.md is already reported by the `templates` check
-    (it's a managed manifest entry) -- this check must not double-report it,
-    regardless of what README.md does or doesn't say."""
-    assert fleet_status.check_disclaimer(None, "# Some Repo\n") == []
-    assert fleet_status.check_disclaimer(None, None) == []
-
-
-def test_disclaimer_linked_from_readme_is_clean():
-    readme = "# Some Repo\n\nSee [DISCLAIMER.md](DISCLAIMER.md) for terms.\n"
-    assert fleet_status.check_disclaimer(DISCLAIMER_TEXT, readme) == []
-
-
-def test_disclaimer_present_but_unlinked_warns():
-    findings = fleet_status.check_disclaimer(DISCLAIMER_TEXT, "# Some Repo\n\nNo mention here.\n")
-    assert severities(findings, "disclaimer") == ["warn"]
-    assert "does not link it" in messages(findings, "disclaimer")
-
-
-def test_disclaimer_present_with_unreadable_readme_is_info_not_warn():
-    """An absent or unfetchable README is ambiguous -- the repo may have no
-    README at all, or the fetch may have failed. Never guess "no link" from
-    that; report it as info, the same way an ambiguous PVR response is."""
-    findings = fleet_status.check_disclaimer(DISCLAIMER_TEXT, None)
-    assert severities(findings, "disclaimer") == ["info"]
-    assert "warn" not in [f.severity for f in findings]
-
-
 # ------------------------------------------------------------- roll-up logic
 
 
@@ -706,20 +673,6 @@ def test_evaluate_wires_templates_and_stamp_checks_together():
     )
     assert severities(findings, "templates") == ["info"]
     assert severities(findings, "stamp") == []
-
-
-def test_evaluate_wires_disclaimer_text_from_dest_texts():
-    """The disclaimer text isn't fetched separately -- DISCLAIMER.md is a
-    managed manifest entry, so evaluate() finds it in dest_texts the same
-    way check_templates() does, keyed by the manifest dest."""
-    findings = fleet_status.evaluate(
-        None,
-        None,
-        None,
-        dest_texts={fleet_status.DISCLAIMER_FILE: DISCLAIMER_TEXT},
-        readme_text="# Some Repo\n\nNo mention here.\n",
-    )
-    assert severities(findings, "disclaimer") == ["warn"]
 
 
 def test_broken_outranks_warn_in_the_roll_up():
