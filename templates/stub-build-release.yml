@@ -30,3 +30,10 @@ jobs:
       # to a GitHub Environment wired to a PyPI trusted publisher) once
       # this repo is ready to publish releases to an index.
       publish: false
+      # DELETE this line unless this repo's pyproject.toml sets
+      # `[tool.uv] package = false` -- a "virtual" project with no
+      # `[project.scripts]`, nothing meant to be installed or
+      # distributed. `has-wheel: false` is what lets this workflow create
+      # a tag-only GitHub Release instead of failing on an empty
+      # wheel/sdist glob; must not be combined with `publish: true`.
+      # has-wheel: false

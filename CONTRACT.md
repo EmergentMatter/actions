@@ -211,6 +211,16 @@ On push to `main` in the consuming repo:
 7. **Same run:** `uv build` produces a GitHub Release with wheel and sdist attached, plus an
    optional index publish over OIDC, opt-in and off by default. (S2/S3/S4)
 
+### `has-wheel: false` for a repo with nothing to build
+
+Both `version.yml` (step 7 above) and `build-release.yml` default to `has-wheel: true`: the
+common case, a repo whose `pyproject.toml` declares a real package. A "virtual" project
+(`[tool.uv] package = false`, no `[project.scripts]`) has nothing for `uv build` to build, and
+without this input both workflows failed on the resulting empty wheel/sdist glob rather than
+producing a tag-only GitHub Release. `publish: true` combined with `has-wheel: false` is refused
+outright (there is nothing to publish); both workflows validate this before ever reaching `uv
+build`.
+
 ### `publish: true` requires the consumer to grant `id-token: write`
 
 **`permissions:` on a `workflow_call` is a ceiling for every job in the called workflow**, not a
@@ -380,9 +390,55 @@ checkout runs, not discovered afterward.
 
 Omit `sibling2-repo` and this whole block skips, exactly like the
 single-sibling case, and every existing single-sibling consumer is
-unaffected. The deepest chain in the fleet today is a direct private
-sibling that itself pins a private sibling, and there is no `sibling3`
-input set.
+unaffected.
+
+### Third (doubly nested) private sibling checkout (optional)
+
+For the one hop further out again: `bar`'s **own** `pyproject.toml` pins
+a private path dependency too (`consumer -> foo -> bar -> baz`). The
+identical failure mode as the second-sibling case, one link further down
+the chain.
+
+`sibling3-repo` / `sibling3-ref` / `sibling3-path` / `sibling3-token` are
+the same shape as the `sibling2-*` inputs, purely additive, and
+**require `sibling2-repo` to also be set** -- a doubly nested sibling
+with no direct nested sibling is refused as a misconfigured stub:
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/foo
+      sibling-ref: <SHA>
+      sibling-path: foo
+      sibling2-repo: EmergentMatter/bar
+      sibling2-ref: <SHA>
+      sibling2-path: bar
+      sibling3-repo: EmergentMatter/baz
+      sibling3-ref: <SHA>          # required; a float breaks `uv sync --locked`
+      sibling3-path: baz           # must differ from sibling-path and sibling2-path;
+                                    # must match bar's OWN `[tool.uv.sources]` entry for baz
+    secrets:
+      sibling-token: ${{ secrets.FOO_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.BAR_REPO_TOKEN }}
+      sibling3-token: ${{ secrets.BAZ_REPO_TOKEN }}
+    permissions: { contents: write, pull-requests: write }
+```
+
+All three siblings land at the same staging level -- as siblings of each
+other and of the consumer, for the same "each repo's `[tool.uv.sources]`
+resolves relative to its own checkout" reason the second sibling does.
+`sibling3-path` must differ from both `sibling-path` and `sibling2-path`.
+
+Omit `sibling3-repo` and this whole block skips, exactly like the
+second-sibling case, and every existing consumer (with zero, one, or two
+siblings) is unaffected. The deepest chain in the fleet today is a
+direct private sibling that itself pins a private sibling that itself
+pins a private sibling (`emergent-matter-sdm-ui -> emergent-matter-sdm-sidecar
+-> emergent-matter-sdm-core -> emergent-matter-materials`); there is no
+`sibling4` input set.
 
 **`build-release.yml` has no sibling support at all, single or nested.**
 That's a pre-existing gap, not something this section's inputs cover; see

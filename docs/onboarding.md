@@ -29,6 +29,7 @@ it covers, not front-to-back.
 - [The files](#the-files)
 - [A private sibling your package depends on (optional)](#a-private-sibling-your-package-depends-on-optional)
 - [A second, nested sibling](#a-second-nested-sibling)
+- [A third, doubly nested sibling](#a-third-doubly-nested-sibling)
 - [Publishing to a package index (optional)](#publishing-to-a-package-index-optional)
 - [The config block](#the-config-block)
 - [Worked example: emergent-matter-materials](#worked-example-emergent-matter-materials)
@@ -491,21 +492,101 @@ of the same "resolved relative to that repo's own checkout" rule:
   shared workflow refuses this before either checkout runs rather than
   discovering it after.
 
-The deepest chain in the fleet today is a direct private sibling that
-itself pins one private sibling. There is no `sibling3` input set, and
-adding one is not expected to be needed soon. CONTRACT.md is where that
-would change.
-
-**`build-release.yml` does not support this (or the single-sibling case)
-at all.** It only matters for that workflow's non-automatic triggers (a
-human-pushed tag, or manual `workflow_dispatch`); the automated release
-path is entirely `version.yml`. See that workflow's own header comment if
-you ever need the fallback path with a private sibling in play.
+Omit `sibling2-repo` and this whole block skips, exactly like the
+single-sibling case, and every existing single-sibling consumer is
+unaffected.
 
 All of it is temporary, same as the single-sibling case: when both
 dependencies ship to an index, drop both `[tool.uv.sources]` entries, both
 extra checkouts in `ci.yml`, every `sibling-*` and `sibling2-*` input, both
 secrets, and both PATs.
+
+### A third, doubly nested sibling
+
+Skip this too unless your **direct** sibling's own sibling **itself** has
+a `[tool.uv.sources]` entry pointing at a local path -- i.e. a chain three
+hops deep:
+
+```
+your repo  ->  emergent-matter-sdm-sidecar  ->  emergent-matter-sdm-core  ->  emergent-matter-materials
+```
+
+This is a real, current case: `emergent-matter-sdm-ui` pins
+`emergent-matter-sdm-sidecar` as a path source, `sdm-sidecar`'s own
+`pyproject.toml` pins `emergent-matter-sdm-core` the same way, and
+`sdm-core`'s own `pyproject.toml` pins `emergent-matter-materials` the
+same way again. Resolving sdm-ui needs **all three** siblings on disk --
+the identical reasoning as the second-sibling case, one link further
+down the chain.
+
+The shared `version.yml` covers this with a third, independent input
+set: `sibling3-repo` / `sibling3-ref` / `sibling3-path` / the
+`sibling3-token` secret, same shape as the `sibling2-*` ones, checked out
+to the same level (a sibling of your repo, `sibling-repo`, AND
+`sibling2-repo`). It requires `sibling2-repo` to also be set; a doubly
+nested sibling with no direct nested sibling is refused as a likely
+misconfigured stub.
+
+**Your own `ci.yml` still has to check out all three siblings itself**,
+for the same "your CI resolves it for the `ci` job, the shared workflow
+resolves it again for the `version` job" reason as the second-sibling
+case. All three land as siblings of your own checkout in `ci.yml`, and
+the same layout again in `version.yml`:
+
+```
+$GITHUB_WORKSPACE/
+├── emergent-matter-sdm-ui/          (this repo)
+├── emergent-matter-sdm-sidecar/     (sibling-repo -- your DIRECT dependency)
+├── emergent-matter-sdm-core/        (sibling2-repo -- sdm-sidecar's OWN dependency)
+└── emergent-matter-materials/       (sibling3-repo -- sdm-core's OWN dependency)
+```
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      sibling-repo: EmergentMatter/emergent-matter-sdm-sidecar
+      sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
+      sibling-path: emergent-matter-sdm-sidecar
+      sibling2-repo: EmergentMatter/emergent-matter-sdm-core
+      sibling2-ref: <SHA -- pinned, matching sdm-sidecar's OWN ci.yml>
+      sibling2-path: emergent-matter-sdm-core
+      sibling3-repo: EmergentMatter/emergent-matter-materials
+      sibling3-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
+      sibling3-path: emergent-matter-materials
+    secrets:
+      sibling-token: ${{ secrets.SDM_SIDECAR_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
+      sibling3-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+    permissions: { contents: write, pull-requests: write }
+```
+
+`sibling3-ref` pins the SHA your DIRECT nested sibling (`sibling2-repo`)
+depends on, the same "read it off the dependency's own `ci.yml`, not
+`main`" rule as `sibling2-ref`. `sibling3-path` must differ from both
+`sibling-path` and `sibling2-path` -- all three land in the same parent
+directory, and a collision would silently overwrite one checkout with
+another.
+
+**`build-release.yml` does not support this (or either of the shallower
+sibling cases) at all.** It only matters for that workflow's
+non-automatic triggers (a human-pushed tag, or manual
+`workflow_dispatch`); the automated release path is entirely
+`version.yml`. See that workflow's own header comment if you ever need
+the fallback path with a private sibling in play.
+
+The deepest chain in the fleet today is three hops
+(`emergent-matter-sdm-ui -> emergent-matter-sdm-sidecar ->
+emergent-matter-sdm-core -> emergent-matter-materials`). There is no
+`sibling4` input set, and adding one is not expected to be needed soon.
+CONTRACT.md is where that would change.
+
+All of it is temporary, same as the shallower cases: when every
+dependency ships to an index, drop every `[tool.uv.sources]` entry, every
+extra checkout in `ci.yml`, every `sibling-*` / `sibling2-*` / `sibling3-*`
+input, all three secrets, and all three PATs.
 
 ## Publishing to a package index (optional)
 

@@ -80,6 +80,20 @@ on:
           already exempts independently.)
         type: string
         default: skip-changelog
+      has-wheel:
+        description: >-
+          Whether this repository's pyproject.toml declares a real
+          package to build (the common case, and the default). Set to
+          false for a "virtual" project (`[tool.uv] package = false` --
+          no `[project.scripts]`, nothing meant to be installed or
+          distributed): `uv build` has nothing to build there, and this
+          workflow creates the GitHub Release with no attached wheel/sdist
+          instead of failing on an unmatched glob. Mirrors
+          build-release.yml's own has-wheel input -- see that workflow for
+          why. `publish` must not be true when this is false -- validated
+          below, since there is nothing to publish.
+        type: boolean
+        default: true
       publish:
         description: Publish to a package index via OIDC trusted publishing. Opt-in, off by default. (S3)
         type: boolean
@@ -146,10 +160,8 @@ on:
       #
       # Unset (the default), every sibling2 step below is skipped and a
       # consumer using only the single-sibling case above is unaffected --
-      # this input set is purely additive. The fleet's nesting depth is two
-      # today (a direct private sibling that itself pins a private
-      # sibling); there is no sibling3. See docs/onboarding.md, "A second,
-      # nested sibling".
+      # this input set is purely additive. See docs/onboarding.md, "A
+      # second, nested sibling".
       sibling2-repo:
         description: >-
           owner/name of a second private repo to check out alongside the
@@ -180,6 +192,50 @@ on:
         type: string
         default: ""
 
+      # ── Third (doubly nested) private sibling ─────────────────────────
+      #
+      # One hop further out again: sibling2-repo's OWN pyproject.toml pins
+      # a private path dependency too (consumer -> sibling -> sibling2 ->
+      # sibling3). Same failure mode, one link further down the chain:
+      #
+      #   error: Distribution not found at: file:///.../sibling3
+      #
+      # Unset (the default), every sibling3 step below is skipped and a
+      # consumer using only the sibling/sibling2 cases above is unaffected
+      # -- this input set is purely additive. See docs/onboarding.md, "A
+      # third, doubly nested sibling".
+      sibling3-repo:
+        description: >-
+          owner/name of a third private repo to check out alongside the
+          consumer's checkout, sibling-repo, and sibling2-repo (same
+          staging level as both, not nested inside either -- uv resolves
+          each repo's path sources relative to ITS OWN checkout, so all
+          four have to be siblings on disk). Empty (the default) disables
+          this third checkout. Requires sibling2-repo to also be set --
+          validated below, because a doubly nested sibling with no direct
+          nested sibling makes no sense and is almost certainly a
+          misconfigured stub.
+        type: string
+        default: ""
+      sibling3-ref:
+        description: >-
+          Exact ref of sibling3-repo. Required when sibling3-repo is set,
+          for the same reason sibling2-ref is required -- an empty
+          checkout ref silently means "the default branch". Pin a SHA:
+          sibling2-repo's own uv.lock (and transitively the consumer's)
+          embeds sibling3's resolved version.
+        type: string
+        default: ""
+      sibling3-path:
+        description: >-
+          Directory sibling3 lands in, as a SINGLE path segment. Must
+          match sibling2-repo's OWN path source for it, and must differ
+          from both sibling-path and sibling2-path -- all three land in
+          the same parent directory, and a collision would silently
+          overwrite one checkout with another.
+        type: string
+        default: ""
+
     secrets:
       sibling-token:
         description: >-
@@ -199,6 +255,13 @@ on:
           Same rules as sibling-token: a fine-grained PAT scoped to that one
           repo, mapped by name, never via `secrets: inherit`. Optional; a
           public sibling2 falls back to `github.token`.
+        required: false
+      sibling3-token:
+        description: >-
+          Token used to read sibling3-repo, needed when it is private.
+          Same rules as sibling-token: a fine-grained PAT scoped to that one
+          repo, mapped by name, never via `secrets: inherit`. Optional; a
+          public sibling3 falls back to `github.token`.
         required: false
 
 permissions: {}
@@ -430,6 +493,108 @@ jobs:
           rmdir .em-sibling2
           echo "sibling2 checked out at ${dest}"
 
+      # ---------------------------------------------------------------
+      # Third (doubly nested) private sibling -- see the sibling3-* inputs
+      # for why. Mirrors the sibling2 block exactly, one link further down
+      # the chain and staged through its own .em-sibling3/ directory so
+      # none of the three checkouts can collide even transiently. All
+      # steps no-op when sibling3-repo is unset.
+      # ---------------------------------------------------------------
+      - name: Validate the sibling3 inputs
+        if: inputs.sibling3-repo != ''
+        env:
+          SIBLING2_REPO: ${{ inputs.sibling2-repo }}
+          SIBLING_PATH: ${{ inputs.sibling-path }}
+          SIBLING2_PATH: ${{ inputs.sibling2-path }}
+          SIBLING3_REF: ${{ inputs.sibling3-ref }}
+          SIBLING3_PATH: ${{ inputs.sibling3-path }}
+        run: |
+          set -euo pipefail
+          # A doubly nested sibling with no direct nested sibling is almost
+          # certainly a misconfigured stub -- e.g. sibling2-repo/-ref/-path
+          # accidentally left off while only the sibling3-* block was
+          # filled in.
+          if [ -z "${SIBLING2_REPO}" ]; then
+            echo "::error::sibling3-repo is set but sibling2-repo is not. sibling3 is the THIRD sibling in a nested chain (consumer -> sibling -> sibling2 -> sibling3) -- set sibling2-repo/-ref/-path first."
+            exit 1
+          fi
+          # Checked BEFORE the checkout: an empty ref doesn't fail checkout, it
+          # silently resolves to the sibling's default branch.
+          if [ -z "${SIBLING3_REF}" ]; then
+            echo "::error::sibling3-ref is required when sibling3-repo is set -- an empty ref silently means the sibling's default branch."
+            exit 1
+          fi
+          # Becomes a destination OUTSIDE the workspace in the relocate step,
+          # so it is constrained to one plain segment.
+          case "${SIBLING3_PATH}" in
+            "" | */* | . | ..)
+              echo "::error::sibling3-path must be a single directory name with no slashes (got: '${SIBLING3_PATH}')."
+              exit 1
+              ;;
+          esac
+          # All three siblings land in the same parent directory (dirname
+          # $GITHUB_WORKSPACE) -- a shared path would mean a later move
+          # silently overwrites an earlier checkout.
+          if [ "${SIBLING3_PATH}" = "${SIBLING_PATH}" ]; then
+            echo "::error::sibling3-path ('${SIBLING3_PATH}') is the same as sibling-path. All three siblings land in the same parent directory and would collide -- give sibling3 its own path segment."
+            exit 1
+          fi
+          if [ "${SIBLING3_PATH}" = "${SIBLING2_PATH}" ]; then
+            echo "::error::sibling3-path ('${SIBLING3_PATH}') is the same as sibling2-path. All three siblings land in the same parent directory and would collide -- give sibling3 its own path segment."
+            exit 1
+          fi
+
+      - name: Check out the third private sibling
+        if: inputs.sibling3-repo != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.sibling3-repo }}
+          ref: ${{ inputs.sibling3-ref }}
+          # Falls back to github.token so a PUBLIC sibling3 needs no secret.
+          token: ${{ secrets.sibling3-token || github.token }}
+          # One-shot clone -- no reason to leave the token in its git config.
+          persist-credentials: false
+          # Staged INSIDE the workspace, in its OWN directory (not
+          # .em-sibling/ or .em-sibling2/) so it can never collide with
+          # either earlier sibling's in-flight staging area. The next step
+          # moves it out.
+          path: .em-sibling3/${{ inputs.sibling3-path }}
+
+      - name: Move the third sibling alongside the consumer checkout
+        if: inputs.sibling3-repo != ''
+        env:
+          SIBLING3_PATH: ${{ inputs.sibling3-path }}
+        run: |
+          set -euo pipefail
+          # Same layout as the first two siblings -- all three land one
+          # level ABOVE $GITHUB_WORKSPACE, as siblings of each other and of
+          # the consumer, matching the local dev layout the doubly nested
+          # repo's own ci.yml uses (see docs/onboarding.md, "A third,
+          # doubly nested sibling"):
+          #
+          #   /home/runner/work/<repo>/            <- dirname, destination
+          #   ├── <repo>/                          <- $GITHUB_WORKSPACE
+          #   ├── foo/                             <- sibling-repo
+          #   ├── bar/                             <- sibling2-repo
+          #   └── baz/                             <- sibling3-repo
+          #
+          dest="$(dirname "${GITHUB_WORKSPACE}")/${SIBLING3_PATH}"
+          # A sibling3-path equal to the consumer's OWN repo name puts dest
+          # on $GITHUB_WORKSPACE, and the rm below would delete the checkout
+          # this job is releasing from. Cheap assert, catastrophic miss.
+          if [ "${dest}" = "${GITHUB_WORKSPACE}" ]; then
+            echo "::error::sibling3-path '${SIBLING3_PATH}' resolves to the consumer checkout itself (${GITHUB_WORKSPACE})."
+            exit 1
+          fi
+          rm -rf "${dest}"
+          mv ".em-sibling3/${SIBLING3_PATH}" "${dest}"
+          # .em-sibling3 must not survive: create-pull-request sweeps stray
+          # dirs into the release PR as gitlinks -- the same bug the
+          # '.em-actions' cleanup step below fixes. rmdir over rm -rf so it
+          # also asserts the mv took everything.
+          rmdir .em-sibling3
+          echo "sibling3 checked out at ${dest}"
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -522,12 +687,18 @@ jobs:
       # the runner resolves it from, which for a reusable workflow called
       # cross-repo is not obvious and was never isolated on its own.
       # Revisit only with a test of that `./` resolution question alone.
+      - name: Refuse publish without a wheel to publish
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.publish && !inputs.has-wheel
+        run: |
+          echo "::error::publish is true but has-wheel is false -- there is nothing for the publish job below to publish."
+          exit 1
+
       - name: Build wheel + sdist
-        if: steps.detect.outputs.is-release-commit == 'true'
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
         run: uv build
 
-      - name: Create the GitHub Release
-        if: steps.detect.outputs.is-release-commit == 'true'
+      - name: Create the GitHub Release (with build artifacts)
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
@@ -540,13 +711,24 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+      - name: Create the GitHub Release (no build artifacts)
+        # has-wheel: false -- see build-release.yml's identical pair of
+        # release steps for why this is a separate step rather than a
+        # conditional `files:` on the one above.
+        if: steps.detect.outputs.is-release-commit == 'true' && !inputs.has-wheel
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+
       - name: Upload build artifact for the publish job
         # Only needed when publish is actually enabled -- the publish job
         # runs on a separate, fresh runner and can't see this job's dist/.
         # Short retention: this bridges the two jobs within one run, it is
         # not meant as a long-lived download -- the GitHub Release above is
-        # the permanent artifact.
-        if: steps.detect.outputs.is-release-commit == 'true' && inputs.publish
+        # the permanent artifact. `&& inputs.has-wheel` repeats the guard
+        # above rather than relying on it alone to have run first.
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.publish && inputs.has-wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist

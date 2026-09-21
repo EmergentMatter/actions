@@ -15,18 +15,26 @@ name: Build & Release
 # shared; see the comment above those steps in version.yml for why, and keep
 # the two copies in step when either changes.
 #
-# KNOWN GAP: this workflow has no sibling-repo / sibling2-repo checkout of
-# any kind, unlike version.yml (see that workflow's sibling-* / sibling2-*
-# inputs and CONTRACT.md's "Private sibling checkout" sections). `uv build`
-# below resolves `[tool.uv.sources]` the same way `uv version --bump` /
-# `uv lock` do, so a repo with a private path dependency (nested or not)
-# hits the identical `Distribution not found` failure here, on the rare
-# path that reaches this workflow at all: a human-pushed tag, or manual
-# `workflow_dispatch`. Not fixed here -- flagged, deliberately, rather than
-# implemented alongside version.yml's nested-sibling support, because it
-# would duplicate the checkout/validation machinery a second time in a
-# second reusable workflow for a fallback path nobody has hit yet. Revisit
-# if a repo with a private sibling actually needs this trigger.
+# KNOWN GAP: this workflow has no sibling-repo / sibling2-repo / sibling3-repo
+# checkout of any kind, unlike version.yml (see that workflow's sibling-* /
+# sibling2-* / sibling3-* inputs and CONTRACT.md's "Private sibling checkout"
+# sections). `uv build` below resolves `[tool.uv.sources]` the same way
+# `uv version --bump` / `uv lock` do, so a repo with a private path
+# dependency (nested or not) hits the identical `Distribution not found`
+# failure here, on the rare path that reaches this workflow at all: a
+# human-pushed tag, or manual `workflow_dispatch`. Not fixed here --
+# flagged, deliberately, rather than implemented alongside version.yml's
+# nested-sibling support, because it would duplicate the checkout/validation
+# machinery a second time in a second reusable workflow for a fallback path
+# nobody has hit yet. Revisit if a repo with a private sibling actually
+# needs this trigger.
+#
+# has-wheel (below) fixes a narrower, already-real gap: a "virtual" project
+# (`[tool.uv] package = false`, no `[project.scripts]`) has nothing for `uv
+# build` to build, and this workflow used to fail on the resulting empty
+# wheel/sdist glob. version.yml's own inline build/release steps had the
+# identical gap and got the identical fix in the same change -- "keep the
+# two copies in step when either changes" (above) applies to this one too.
 
 on:
   workflow_call:
@@ -39,6 +47,19 @@ on:
         description: Exact uv version to install (never "latest").
         type: string
         default: "0.12.5"
+      has-wheel:
+        description: >-
+          Whether this repository's pyproject.toml declares a real
+          package to build (the common case, and the default). Set to
+          false for a "virtual" project (`[tool.uv] package = false` --
+          no `[project.scripts]`, nothing meant to be installed or
+          distributed): `uv build` has nothing to build there, and would
+          otherwise fail this workflow on an unmatched wheel/sdist glob
+          for a repo that never had one to attach. `publish` must not be
+          true when this is false -- validated below, since there is
+          nothing to publish.
+        type: boolean
+        default: true
       publish:
         description: Publish to a package index via OIDC trusted publishing. Opt-in, off by default.
         type: boolean
@@ -74,10 +95,18 @@ jobs:
         id: tag
         run: echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
 
+      - name: Refuse publish without a wheel to publish
+        if: inputs.publish && !inputs.has-wheel
+        run: |
+          echo "::error::publish is true but has-wheel is false -- there is nothing for the publish job below to publish."
+          exit 1
+
       - name: Build wheel + sdist
+        if: inputs.has-wheel
         run: uv build
 
-      - name: Create the GitHub Release
+      - name: Create the GitHub Release (with build artifacts)
+        if: inputs.has-wheel
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
@@ -90,10 +119,26 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
 
+      - name: Create the GitHub Release (no build artifacts)
+        # has-wheel: false -- a "virtual" project with nothing for `uv
+        # build` to build. A separate step, not a conditional `files:` on
+        # the one above: `fail_on_unmatched_files: true` with an empty
+        # glob list still fails, and this repository genuinely has no
+        # wheel or sdist to attach, ever, not a build that merely produced
+        # none this run.
+        if: ${{ !inputs.has-wheel }}
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+
       - name: Upload build artifact for the publish job
-        # Only needed when publish is enabled. See version.yml's identical
-        # step for why (separate job/runner, and why retention is short).
-        if: inputs.publish
+        # Only needed when publish is enabled -- which the guard above
+        # already refuses unless has-wheel is also true, but the condition
+        # repeats has-wheel anyway rather than relying on that guard alone
+        # to have run first. See version.yml's identical step for why
+        # (separate job/runner, and why retention is short).
+        if: inputs.publish && inputs.has-wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
