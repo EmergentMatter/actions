@@ -24,7 +24,10 @@ jobs:
       # bump step fails on that path source -- and CI stays GREEN while it
       # happens, so the miss shows up only as a release that never gets cut.
       # Pin sibling-ref to a SHA. See docs/onboarding.md, "A private sibling
-      # your package depends on".
+      # your package depends on". Real example below (uncomment only this
+      # block if your one private dependency is NOT itself nested):
+      # emergent-matter-sdm-core -> emergent-matter-materials, i.e.
+      # sibling-repo would be materials.
       # sibling-repo: EmergentMatter/emergent-matter-materials
       # sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
       # sibling-path: emergent-matter-materials
@@ -33,23 +36,51 @@ jobs:
       # ABOVE itself pins a private path dependency (consumer -> sibling ->
       # sibling2). Requires sibling-repo to also be set -- if you uncomment
       # this block, sibling-repo above names your DIRECT dependency, not
-      # necessarily emergent-matter-materials. Real example:
-      # emergent-matter-web-sdm-tool -> emergent-matter-sdm-core ->
-      # emergent-matter-materials, i.e. sibling-repo would be sdm-core and
-      # sibling2-repo would be materials. See docs/onboarding.md, "A second,
-      # nested sibling".
-      # sibling2-repo: EmergentMatter/emergent-matter-materials
-      # sibling2-ref: <SHA -- pinned, matching sibling-repo's own ci.yml>
-      # sibling2-path: emergent-matter-materials
+      # necessarily emergent-matter-materials: the single-sibling example
+      # just above is one real case (a direct sibling with no nesting of
+      # its own); this block and the one after it are a DIFFERENT real
+      # case, one chain deeper, and the sibling-repo/-ref/-path example
+      # above would need to change to match it (see the third block's own
+      # comment for the one consistent worked chain across all three).
+
+      # ── Third (doubly nested) private sibling: DELETE unless sibling2-repo
+      # ABOVE itself pins a private path dependency (consumer -> sibling ->
+      # sibling2 -> sibling3). Requires sibling2-repo to also be set.
+      #
+      # THE THREE BLOCKS ABOVE, TOGETHER, ARE ONE CONSISTENT WORKED CHAIN if
+      # you uncomment all of them: emergent-matter-sdm-ui ->
+      # emergent-matter-sdm-sidecar -> emergent-matter-sdm-core ->
+      # emergent-matter-materials. Using this chain (not the single-sibling
+      # block's own "materials" example above) means REPLACING the first
+      # block's sibling-repo/-ref/-path with sdm-sidecar's own values:
+      #
+      #   sibling-repo: EmergentMatter/emergent-matter-sdm-sidecar
+      #   sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
+      #   sibling-path: emergent-matter-sdm-sidecar
+      #   sibling2-repo: EmergentMatter/emergent-matter-sdm-core
+      #   sibling2-ref: <SHA -- pinned, matching sdm-sidecar's own ci.yml>
+      #   sibling2-path: emergent-matter-sdm-core
+      #   sibling3-repo: EmergentMatter/emergent-matter-materials
+      #   sibling3-ref: <SHA -- pinned, matching sdm-core's own ci.yml>
+      #   sibling3-path: emergent-matter-materials
+      #
+      # See docs/onboarding.md, "A third, doubly nested sibling", for the
+      # same chain written out in full (not commented-out) with its own
+      # secrets: block.
     permissions: { contents: write, pull-requests: write }
 
     # ── DELETE alongside the sibling-* inputs above if you aren't using them.
-    # If you uncommented the nested block, sibling-token also names a
-    # DIFFERENT secret than the single-hop default below -- one per repo,
-    # matching whatever you set sibling-repo / sibling2-repo to.
+    # sibling-token / sibling2-token / sibling3-token each name a DIFFERENT
+    # secret, one per repo. Below is the single-sibling block's own example
+    # (uncomment only this line if you used only the first sibling-* block
+    # above); the three-block chain's own secrets are
+    # SDM_SIDECAR_REPO_TOKEN / SDM_CORE_REPO_TOKEN / MATERIALS_REPO_TOKEN
+    # (see docs/onboarding.md, "A third, doubly nested sibling", for that
+    # secrets: block written out in full).
     # secrets:
     #   sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
-    #   sibling2-token: ${{ secrets.MATERIALS_REPO_TOKEN }}  # only with the nested block above
+    #   sibling2-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}  # only with the nested chain above
+    #   sibling3-token: ${{ secrets.MATERIALS_REPO_TOKEN }}  # only with the doubly nested chain above
 
     # NO `secrets: inherit` here, deliberately. `sibling-token` above is the
     # only secret the shared workflows read, and it is mapped BY NAME;
