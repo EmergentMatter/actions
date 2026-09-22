@@ -167,7 +167,6 @@ to see info findings without deciding they're worth a nonzero exit.
 | `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
 | `stamp` | info / warn | the `templates_version` provenance stamp against this repo's newest release tag: `info` if there's no stamp at all (onboarded before it existed), `warn` if it names an unrecognised tag or is behind |
 | `security` | warn | `SECURITY.md` documents private vulnerability reporting but the repo has it turned off. Not applicable to private repos, which can't have the feature at all |
-| `disclaimer` | warn | `DISCLAIMER.md` is present but `README.md` does not link it |
 | `tooling` | warn | `pyproject.toml` is missing `[tool.mypy]` or `[tool.pytest.ini_options]`; existence only, not exact content (see `templates/pyproject-snippet.toml`) |
 | `pins` | warn | an action pinned to a version targeting Node 20 |
 | `ruff_config` | warn | `ruff-base.toml` is installed but inert: no `ruff.toml` extends it, or `pyproject.toml` still carries an inline `[tool.ruff]` section |
