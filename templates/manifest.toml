@@ -12,6 +12,16 @@
 #                            touched again, by onboard.py or sync.py.
 
 [[template]]
+source = "scripts/em-dev.py"
+dest   = "scripts/em-dev.py"
+policy = "managed"
+
+[[template]]
+source = "scripts/em-dev.cmd"
+dest   = "scripts/em-dev.cmd"
+policy = "managed"
+
+[[template]]
 source = "stub-changelog-check.yml"
 dest   = ".github/workflows/changelog-check.yml"
 policy = "managed"
