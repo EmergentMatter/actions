@@ -114,6 +114,36 @@ def test_tool_on_refuses_while_serve_is_running(
         em_dev.tool_on(sidecar_tool_repo, pyproject, tool_cfg)
 
 
+def test_tool_off_refuses_while_serve_is_running(
+    em_dev, sidecar_tool_repo, toy_sibling_src, isolated_tool_env, monkeypatch
+):
+    # `off` reinstalls the published command over the same locked
+    # executable `on` would -- the guard has to apply to both directions.
+    monkeypatch.setattr(em_dev, "sidecar_serve_running", lambda port=None: True)
+    pyproject = em_dev.toml_load(sidecar_tool_repo / "pyproject.toml")
+    tool_cfg = em_dev.em_dev_tool_config(pyproject)
+    with pytest.raises(em_dev.EmDevError, match="already listening"):
+        em_dev.tool_off(sidecar_tool_repo, pyproject, tool_cfg)
+
+
+def test_turn_off_refuses_before_removing_venv_local_when_serve_running(
+    em_dev, sidecar_tool_repo, toy_sibling_src, isolated_tool_env, monkeypatch
+):
+    # The refusal must happen BEFORE .venv-local is removed, so a refused
+    # `em-dev off` leaves the repo exactly as it was, not half switched-off
+    # (.venv-local gone, but the tool still on local code, or vice versa).
+    shutil.copytree(toy_sibling_src / CORE, sidecar_tool_repo.parent / CORE)
+    assert em_dev.make_local(sidecar_tool_repo) == 0
+    venv_dir = sidecar_tool_repo / em_dev.VENV_LOCAL
+    assert venv_dir.exists()
+
+    monkeypatch.setattr(em_dev, "sidecar_serve_running", lambda port=None: True)
+    with pytest.raises(em_dev.EmDevError, match="already listening"):
+        em_dev.turn_off(sidecar_tool_repo)
+
+    assert venv_dir.exists(), ".venv-local must survive a refused `off`"
+
+
 def test_tool_on_refuses_when_script_removed_from_local_checkout(
     em_dev, sidecar_tool_repo, isolated_tool_env
 ):

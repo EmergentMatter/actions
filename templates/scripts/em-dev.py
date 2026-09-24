@@ -1044,6 +1044,14 @@ def turn_off(repo: Path, *, quiet: bool = False) -> int:
         if not quiet:
             print(msg)
 
+    # Checked before anything is touched: refusing after .venv-local is
+    # already gone would leave the repo half switched-off (published
+    # .venv-local state lost, but the tool still on local code).
+    pyproject = toml_load(repo / "pyproject.toml")
+    tool_cfg = em_dev_tool_config(pyproject)
+    if tool_cfg is not None:
+        refuse_if_serve_running()
+
     venv_dir = repo / VENV_LOCAL
     if venv_dir.exists():
         shutil.rmtree(venv_dir)
@@ -1051,8 +1059,6 @@ def turn_off(repo: Path, *, quiet: bool = False) -> int:
     else:
         out(f"{VENV_LOCAL} was not present")
 
-    pyproject = toml_load(repo / "pyproject.toml")
-    tool_cfg = em_dev_tool_config(pyproject)
     if tool_cfg is not None:
         return tool_off(repo, pyproject, tool_cfg, quiet=quiet)
     return 0
@@ -1147,16 +1153,24 @@ def index_args(pyproject: dict) -> list[str]:
     return args
 
 
-def tool_on(repo: Path, pyproject: dict, tool_cfg: dict, *, quiet: bool = False) -> int:
-    def out(msg: str = "") -> None:
-        if not quiet:
-            print(msg)
-
+def refuse_if_serve_running() -> None:
+    """Guard shared by every tool reinstall, on or off: `serve` holds its
+    own executable open (a locked file on Windows, an in-use binary
+    everywhere else), so reinstalling it from under a running process is
+    unsafe regardless of which direction the reinstall goes."""
     if sidecar_serve_running():
         raise EmDevError(
             f"refusing to reinstall: something is already listening on "
             f"127.0.0.1:{SIDECAR_PORT} (sdm-sidecar serve?) -- stop it first"
         )
+
+
+def tool_on(repo: Path, pyproject: dict, tool_cfg: dict, *, quiet: bool = False) -> int:
+    def out(msg: str = "") -> None:
+        if not quiet:
+            print(msg)
+
+    refuse_if_serve_running()
 
     own_name = own_project_name(pyproject)
     script_name = console_script_name(pyproject)
@@ -1204,6 +1218,8 @@ def tool_off(repo: Path, pyproject: dict, tool_cfg: dict, *, quiet: bool = False
     def out(msg: str = "") -> None:
         if not quiet:
             print(msg)
+
+    refuse_if_serve_running()
 
     own_name = own_project_name(pyproject)
     version = own_project_version(pyproject)
