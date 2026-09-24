@@ -43,3 +43,6 @@ warn_redundant_casts = true
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 filterwarnings = ["error"]
+markers = [
+    "integration: builds a real uv venv against a local test index (slow; deselect with -m 'not integration')",
+]

@@ -73,6 +73,51 @@ The `policy` is the part worth understanding before you edit anything:
   every repo that customized them, which is the whole reason they are
   seeded rather than managed.
 
+### `scripts/em-dev.py`: local sibling checkouts for internal developers
+
+External users install the published `emergent-matter-*` packages. Internal
+developers keep siblings (`emergent-matter-sdm-core`,
+`emergent-matter-sdm-materials`, ...) checked out next to a repo and want
+their edits to show up immediately, without touching that repo's
+`pyproject.toml`, `uv.lock`, or `.venv`. `em-dev.py` is a `managed` template
+(see `templates/manifest.toml`), so it lands at `scripts/em-dev.py` (plus
+`scripts/em-dev.cmd` on Windows) in every onboarded repo and stays current
+through `sync.py` like anything else here. It is stdlib-only and runs on
+Python 3.9+ (macOS's system `python3`), which is why it carries its own
+minimal TOML reader instead of `tomllib` (3.11+ only) -- see its module
+docstring for the full design.
+
+From inside a consuming repo:
+
+```bash
+python3 scripts/em-dev.py            # build/refresh .venv-local from local siblings
+python3 scripts/em-dev.py run pytest # run a command inside .venv-local (never re-syncs it)
+python3 scripts/em-dev.py status     # local vs published, per package
+python3 scripts/em-dev.py off        # back to published
+```
+
+`python3 scripts/em-dev.py` (not `uv run`) is the documented, portable
+invocation: the whole point is to work before anything is synced, which
+rules out a tool that itself needs a synced environment to run. A repo with
+no `emergent-matter-*` dependency prints "nothing here to make local" and
+exits 0 -- the manifest has no per-repo targeting, so every onboarded repo
+receives the same file.
+
+A repo opts into also reinstalling its own console script from local code
+(the sidecar's `sdm-sidecar` command) with a `[tool.em-dev]` table in its
+`pyproject.toml`:
+
+```toml
+[tool.em-dev]
+tool = true
+tool-extras = { win32 = ["terminal-windows"] }
+```
+
+Full behavior -- the two-pass install, `EM_DEV_ROOT`/`.em-dev.toml`
+resolution, freshness tracking, and tool mode -- is documented in
+`em-dev.py`'s own module docstring and pinned by `tests/test_em_dev_*.py`
+in this repo.
+
 ## Architecture
 
 This repo is **passive**: it holds no secrets, and nothing that ships to a
@@ -99,6 +144,7 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── .github/workflows/ci.yml                 seeded once, then the repo's own to keep
  ├── pyproject.toml   [tool.towncrier] + [tool.em-release] (+ templates_version)
  ├── scripts/changeset.py                     not inside the package, see docs/onboarding.md
+ ├── scripts/em-dev.py, scripts/em-dev.cmd    local sibling checkouts for developers, see above
  ├── CONTRIBUTING.md, SECURITY.md, SUPPORT.md, and the rest of the community-health files
  └── changelog.d/                             pending notes, one per unreleased PR
 
