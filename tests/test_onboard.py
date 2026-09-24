@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
 """
 
-# emergent-matter-materials' actual shape: no workflow_call, one job.
+# emergent-matter-sdm-materials' actual shape: no workflow_call, one job.
 CI_MATERIALS = """\
 name: CI
 on:

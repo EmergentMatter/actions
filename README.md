@@ -94,7 +94,7 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
         │ uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1
         │ uses: EmergentMatter/actions/changelog-check@v1
         │
- consuming repo (e.g. emergent-matter-materials)
+ consuming repo (e.g. emergent-matter-sdm-materials)
  ├── .github/workflows/{changelog-check,version,build-release}.yml   thin stubs, pinned @v1
  ├── .github/workflows/ci.yml                 seeded once, then the repo's own to keep
  ├── pyproject.toml   [tool.towncrier] + [tool.em-release] (+ templates_version)
@@ -128,7 +128,7 @@ and why it exists. Full CLIs, flags, and exit codes are in
 Onboarding a repo is **the release-control files, a config block, and a label**, plus the
 community-health files the manifest declares, which need no repo-specific
 decisions. The
-full walkthrough, using `emergent-matter-materials`'s several declared
+full walkthrough, using `emergent-matter-sdm-materials`'s several declared
 version strings as the worked example, is
 [`docs/onboarding.md`](docs/onboarding.md).
 The contributor-facing half (what you do day to day once a repo is

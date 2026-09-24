@@ -9,7 +9,7 @@ jobs:
     # `secrets: inherit` belongs HERE, and only if your own ci.yml needs a repo
     # secret. A local reusable-workflow call does not inherit secrets implicitly
     # either. Real example: sdm-core's CI fetches the private sibling
-    # emergent-matter-materials with MATERIALS_REPO_TOKEN, so its ci job needs it.
+    # emergent-matter-sdm-materials with MATERIALS_REPO_TOKEN, so its ci job needs it.
     # A repo whose CI needs no secrets should omit this line.
     secrets: inherit
   version:
@@ -26,17 +26,17 @@ jobs:
       # Pin sibling-ref to a SHA. See docs/onboarding.md, "A private sibling
       # your package depends on". Real example below (uncomment only this
       # block if your one private dependency is NOT itself nested):
-      # emergent-matter-sdm-core -> emergent-matter-materials, i.e.
-      # sibling-repo would be materials.
-      # sibling-repo: EmergentMatter/emergent-matter-materials
+      # emergent-matter-sdm-core -> emergent-matter-sdm-materials, i.e.
+      # sibling-repo would be sdm-materials.
+      # sibling-repo: EmergentMatter/emergent-matter-sdm-materials
       # sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
-      # sibling-path: emergent-matter-materials
+      # sibling-path: emergent-matter-sdm-materials
 
       # ── Second (nested) private sibling: DELETE unless sibling-repo
       # ABOVE itself pins a private path dependency (consumer -> sibling ->
       # sibling2). Requires sibling-repo to also be set -- if you uncomment
       # this block, sibling-repo above names your DIRECT dependency, not
-      # necessarily emergent-matter-materials: the single-sibling example
+      # necessarily emergent-matter-sdm-materials: the single-sibling example
       # just above is one real case (a direct sibling with no nesting of
       # its own); this block and the one after it are a DIFFERENT real
       # case, one chain deeper, and the sibling-repo/-ref/-path example
@@ -50,8 +50,8 @@ jobs:
       # THE THREE BLOCKS ABOVE, TOGETHER, ARE ONE CONSISTENT WORKED CHAIN if
       # you uncomment all of them: emergent-matter-sdm-ui ->
       # emergent-matter-sdm-sidecar -> emergent-matter-sdm-core ->
-      # emergent-matter-materials. Using this chain (not the single-sibling
-      # block's own "materials" example above) means REPLACING the first
+      # emergent-matter-sdm-materials. Using this chain (not the single-sibling
+      # block's own "sdm-materials" example above) means REPLACING the first
       # block's sibling-repo/-ref/-path with sdm-sidecar's own values:
       #
       #   sibling-repo: EmergentMatter/emergent-matter-sdm-sidecar
@@ -60,9 +60,9 @@ jobs:
       #   sibling2-repo: EmergentMatter/emergent-matter-sdm-core
       #   sibling2-ref: <SHA -- pinned, matching sdm-sidecar's own ci.yml>
       #   sibling2-path: emergent-matter-sdm-core
-      #   sibling3-repo: EmergentMatter/emergent-matter-materials
+      #   sibling3-repo: EmergentMatter/emergent-matter-sdm-materials
       #   sibling3-ref: <SHA -- pinned, matching sdm-core's own ci.yml>
-      #   sibling3-path: emergent-matter-materials
+      #   sibling3-path: emergent-matter-sdm-materials
       #
       # See docs/onboarding.md, "A third, doubly nested sibling", for the
       # same chain written out in full (not commented-out) with its own

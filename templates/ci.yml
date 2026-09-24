@@ -206,7 +206,7 @@ jobs:
       # Install must be the step immediately before the test run, with
       # nothing that writes a version string in between. Some repos have
       # tests that read INSTALLED package metadata (importlib.metadata),
-      # not the source tree. E.g. emergent-matter-materials asserts
+      # not the source tree. E.g. emergent-matter-sdm-materials asserts
       # importlib.metadata.version() agrees with the module's __version__.
       # A fresh sync right before the test step, on every run, makes that
       # class of "environment vs. tree" drift structurally impossible.
