@@ -4,7 +4,7 @@ Onboarding a repo into release control means installing **the files that
 carry real behavior, a config block, and a label**. It also seeds a set
 of standard repo-hygiene files that need no decisions from you. This doc
 walks through all of it, using
-[`emergent-matter-materials`](https://github.com/EmergentMatter/emergent-matter-materials)
+[`emergent-matter-sdm-materials`](https://github.com/EmergentMatter/emergent-matter-sdm-materials)
 as the worked example for the one genuinely hard decision: which version
 strings must move together. That repo has more than one.
 
@@ -32,7 +32,7 @@ it covers, not front-to-back.
 - [A third, doubly nested sibling](#a-third-doubly-nested-sibling)
 - [Publishing to a package index (optional)](#publishing-to-a-package-index-optional)
 - [The config block](#the-config-block)
-- [Worked example: emergent-matter-materials](#worked-example-emergent-matter-materials)
+- [Worked example: emergent-matter-sdm-materials](#worked-example-emergent-matter-sdm-materials)
 - [The label](#the-label)
 - [`changelog.d/`: nothing but notes and `.gitkeep`](#changelogd-nothing-but-notes-and-gitkeep)
 - [Inserting the towncrier marker](#inserting-the-towncrier-marker-into-an-existing-changelogmd)
@@ -68,12 +68,12 @@ What it cannot do for you, and why:
 
 | Step | Why it stays manual |
 |---|---|
-| Declaring `version_files` | Whether a data version should track the package version is a judgement about *your* repo. See the [worked example](#worked-example-emergent-matter-materials) below, which exists to prevent one specific mistake. |
+| Declaring `version_files` | Whether a data version should track the package version is a judgement about *your* repo. See the [worked example](#worked-example-emergent-matter-sdm-materials) below, which exists to prevent one specific mistake. |
 | Branch protection | The required contexts have to be read off a real pull request run, not predicted. |
 | Proving the gate works | You have to watch it go red. |
 
 The rest of this document is what the script is doing and why, which is
-worth reading once, particularly [the worked example](#worked-example-emergent-matter-materials)
+worth reading once, particularly [the worked example](#worked-example-emergent-matter-sdm-materials)
 and [proving the gate](#prove-the-gate-actually-works-before-you-trust-it).
 Tool reference, including everything `onboard.py` does beyond the files
 below, lives in [tooling.md](tooling.md).
@@ -121,7 +121,7 @@ Both of these are easy to miss:
 
 2. **What are its job names?** They become your required status check
    contexts, and they are almost certainly not `lint` / `test` / `build`.
-   `emergent-matter-materials`, the worked example below, has a single job
+   `emergent-matter-sdm-materials`, the worked example below, has a single job
    called `test`, so its contexts are `test` and `changelog`, not the set
    this doc's branch-protection section lists. Use *your* names. Nothing
    requires you to rename jobs to match the template.
@@ -310,7 +310,7 @@ it's conditional even there:
   doesn't inherit secrets implicitly either: `workflow_call` never does,
   local or remote. If your own `ci.yml` needs a repo secret to run (the
   concrete example: `sdm-core`'s CI checks out the private sibling
-  `emergent-matter-materials`, which needs a `MATERIALS_REPO_TOKEN`),
+  `emergent-matter-sdm-materials`, which needs a `MATERIALS_REPO_TOKEN`),
   the `ci:` job has to say so explicitly. If your CI needs no secrets,
   **omit the line entirely** rather than adding it out of habit.
 - **On `version:`, deliberately absent: this is a security decision,
@@ -335,7 +335,7 @@ index yet:
 
 ```toml
 [tool.uv.sources]
-emergent-matter-materials = { path = "../emergent-matter-materials" }
+emergent-matter-sdm-materials = { path = "../emergent-matter-sdm-materials" }
 ```
 
 Your own CI and the shared `version.yml` each need that sibling on disk,
@@ -358,9 +358,9 @@ and they're solved in different places:
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
     with:
       actions-ref: v1
-      sibling-repo: EmergentMatter/emergent-matter-materials
+      sibling-repo: EmergentMatter/emergent-matter-sdm-materials
       sibling-ref: 9834441a6a4b95d6f491e129893fb37d5cecf320
-      sibling-path: emergent-matter-materials
+      sibling-path: emergent-matter-sdm-materials
     secrets:
       sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
     permissions: { contents: write, pull-requests: write }
@@ -401,16 +401,16 @@ Skip this too unless your sibling's **own** `pyproject.toml` also has a
 one private dependency, and that dependency itself pins another:
 
 ```
-your repo  ->  emergent-matter-sdm-core  ->  emergent-matter-materials
+your repo  ->  emergent-matter-sdm-core  ->  emergent-matter-sdm-materials
 ```
 
 This is a real, current case: `emergent-matter-web-sdm-tool` pins
 `emergent-matter-sdm-core` as a path source, and `sdm-core`'s own
-`pyproject.toml` pins `emergent-matter-materials` the same way. Resolving
+`pyproject.toml` pins `emergent-matter-sdm-materials` the same way. Resolving
 web-sdm-tool needs **both** siblings on disk, not just the direct one --
 `uv` resolves each repo's `[tool.uv.sources]` relative to that repo's own
-checkout, so sdm-core's own path source for materials has to resolve too,
-which means materials has to be sitting there when `uv lock` runs.
+checkout, so sdm-core's own path source for sdm-materials has to resolve too,
+which means sdm-materials has to be sitting there when `uv lock` runs.
 
 The shared `version.yml` covers this with a second, independent input set:
 `sibling2-repo` / `sibling2-ref` / `sibling2-path` / the `sibling2-token`
@@ -431,7 +431,7 @@ checkout in `ci.yml`, and the same layout again in `version.yml`:
 $GITHUB_WORKSPACE/
 ├── emergent-matter-web-sdm-tool/   (this repo)
 ├── emergent-matter-sdm-core/       (sibling-repo -- your DIRECT dependency)
-└── emergent-matter-materials/      (sibling2-repo -- sdm-core's OWN dependency)
+└── emergent-matter-sdm-materials/  (sibling2-repo -- sdm-core's OWN dependency)
 ```
 
 ```yaml
@@ -443,9 +443,9 @@ $GITHUB_WORKSPACE/
       sibling-repo: EmergentMatter/emergent-matter-sdm-core
       sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
       sibling-path: emergent-matter-sdm-core
-      sibling2-repo: EmergentMatter/emergent-matter-materials
+      sibling2-repo: EmergentMatter/emergent-matter-sdm-materials
       sibling2-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
-      sibling2-path: emergent-matter-materials
+      sibling2-path: emergent-matter-sdm-materials
     secrets:
       sibling-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
       sibling2-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
@@ -484,13 +484,13 @@ a `[tool.uv.sources]` entry pointing at a local path -- i.e. a chain three
 hops deep:
 
 ```
-your repo  ->  emergent-matter-sdm-sidecar  ->  emergent-matter-sdm-core  ->  emergent-matter-materials
+your repo  ->  emergent-matter-sdm-sidecar  ->  emergent-matter-sdm-core  ->  emergent-matter-sdm-materials
 ```
 
 This is a real, current case: `emergent-matter-sdm-ui` pins
 `emergent-matter-sdm-sidecar` as a path source, `sdm-sidecar`'s own
 `pyproject.toml` pins `emergent-matter-sdm-core` the same way, and
-`sdm-core`'s own `pyproject.toml` pins `emergent-matter-materials` the
+`sdm-core`'s own `pyproject.toml` pins `emergent-matter-sdm-materials` the
 same way again. Resolving sdm-ui needs **all three** siblings on disk --
 the identical reasoning as the second-sibling case, one link further
 down the chain.
@@ -514,7 +514,7 @@ $GITHUB_WORKSPACE/
 ├── emergent-matter-sdm-ui/          (this repo)
 ├── emergent-matter-sdm-sidecar/     (sibling-repo -- your DIRECT dependency)
 ├── emergent-matter-sdm-core/        (sibling2-repo -- sdm-sidecar's OWN dependency)
-└── emergent-matter-materials/       (sibling3-repo -- sdm-core's OWN dependency)
+└── emergent-matter-sdm-materials/   (sibling3-repo -- sdm-core's OWN dependency)
 ```
 
 ```yaml
@@ -529,9 +529,9 @@ $GITHUB_WORKSPACE/
       sibling2-repo: EmergentMatter/emergent-matter-sdm-core
       sibling2-ref: <SHA -- pinned, matching sdm-sidecar's OWN ci.yml>
       sibling2-path: emergent-matter-sdm-core
-      sibling3-repo: EmergentMatter/emergent-matter-materials
+      sibling3-repo: EmergentMatter/emergent-matter-sdm-materials
       sibling3-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
-      sibling3-path: emergent-matter-materials
+      sibling3-path: emergent-matter-sdm-materials
     secrets:
       sibling-token: ${{ secrets.SDM_SIDECAR_REPO_TOKEN }}
       sibling2-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
@@ -555,7 +555,7 @@ the fallback path with a private sibling in play.
 
 The deepest chain in the fleet today is three hops
 (`emergent-matter-sdm-ui -> emergent-matter-sdm-sidecar ->
-emergent-matter-sdm-core -> emergent-matter-materials`). There is no
+emergent-matter-sdm-core -> emergent-matter-sdm-materials`). There is no
 `sibling4` input set, and adding one is not expected to be needed soon.
 CONTRACT.md is where that would change.
 
@@ -633,9 +633,9 @@ to run it.
 That second section, `version_files`, is the part every repo gets
 slightly wrong the first time. See the worked example right below.
 
-## Worked example: emergent-matter-materials
+## Worked example: emergent-matter-sdm-materials
 
-`emergent-matter-materials` has its version recorded in more than one
+`emergent-matter-sdm-materials` has its version recorded in more than one
 place, and every copy has to agree:
 
 1. `pyproject.toml` -> `[project] version`
@@ -648,7 +648,7 @@ separately from the Python package's own API version. In this repo the two
 are documented as deliberately kept in lockstep (see the repo's own
 `tests/test_catalog_versioning.py`, which asserts `__version__ ==
 __catalog_version__` and explains why: an optimizer artifact that records
-"ran against `emergent-matter-materials` `__version__=X`,
+"ran against `emergent-matter-sdm-materials` `__version__=X`,
 `__catalog_version__=Y`" with `X != Y` is a provenance-recording footgun
 waiting to happen). So `__catalog_version__` belongs on the declared list,
 right alongside `__version__`:
@@ -663,7 +663,7 @@ version_files = [
 
 This isn't hypothetical. A simulated `1.10.0 -> 1.11.0` bump run against a
 copy of this repo updated exactly the lines listed above, and nothing
-else, and `emergent-matter-materials`'s own
+else, and `emergent-matter-sdm-materials`'s own
 pre-existing `tests/test_catalog_versioning.py` went **7 passed**
 afterward. That suite was written by someone who'd never heard of this
 tooling, so it passing on a synthetic bump is independent evidence that
@@ -827,7 +827,7 @@ doesn't exist as written, or you have a real drift to fix.
 
 ## Installed metadata versus the source tree
 
-`emergent-matter-materials` also has
+`emergent-matter-sdm-materials` also has
 `test_installed_package_metadata_matches_module_version`, which checks
 `importlib.metadata.version(...)`: the **installed** package's metadata,
 not anything read from the source tree. That has consequences worth
@@ -868,7 +868,7 @@ protection for `main` (repo Settings -> Branches) with:
 
   If you brought your own CI, use **your** job names. They are almost
   certainly different, and nothing requires you to rename them.
-  `emergent-matter-materials` has a single job called `test`, so its list
+  `emergent-matter-sdm-materials` has a single job called `test`, so its list
   is:
 
   ```

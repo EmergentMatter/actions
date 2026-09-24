@@ -285,7 +285,7 @@ jobs:
     # `secrets: inherit` belongs HERE, and only if your own ci.yml needs a repo
     # secret. A local reusable-workflow call does not inherit secrets implicitly
     # either. Real example: sdm-core's CI fetches the private sibling
-    # emergent-matter-materials with MATERIALS_REPO_TOKEN, so its ci job needs it.
+    # emergent-matter-sdm-materials with MATERIALS_REPO_TOKEN, so its ci job needs it.
     # A repo whose CI needs no secrets should omit this line.
     secrets: inherit
   version:
@@ -437,7 +437,7 @@ second-sibling case, and every existing consumer (with zero, one, or two
 siblings) is unaffected. The deepest chain in the fleet today is a
 direct private sibling that itself pins a private sibling that itself
 pins a private sibling (`emergent-matter-sdm-ui -> emergent-matter-sdm-sidecar
--> emergent-matter-sdm-core -> emergent-matter-materials`); there is no
+-> emergent-matter-sdm-core -> emergent-matter-sdm-materials`); there is no
 `sibling4` input set.
 
 **`build-release.yml` has no sibling support at all, single or nested.**
