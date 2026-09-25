@@ -179,8 +179,8 @@ to see info findings without deciding they're worth a nonzero exit.
 | `gate` | broken (else info) | the halves of the `lint` gate disagree, per `lint_gate.py`. Reported at `info` when they agree |
 | `format_gate` | broken (else info) | same, for the `format` job. `info` if the repo has no `format:` job yet |
 | `typecheck_gate` | broken (else info) | same, for the `typecheck` job |
-| `contexts` | warn | required checks missing, or no branch protection at all |
-| `verify` | warn | build job runs `uv build` with no `verify-wheel`; a wheel that builds and installs nothing would pass |
+| `contexts` | warn | required checks missing, or no branch protection at all. `build` is not required for a virtual project (`[tool.uv] package = false`) |
+| `verify` | warn | build job runs `uv build` with no `verify-wheel`; a wheel that builds and installs nothing would pass. Not applicable to a virtual project (`[tool.uv] package = false`) |
 | `templates` | warn (info if deliberate) | a managed template (any entry in `templates/manifest.toml`) differs from its source. `info` only when `templates_version` is current, meaning the diff is a known, deliberate edit rather than drift |
 | `stamp` | info / warn | the `templates_version` provenance stamp against this repo's newest release tag: `info` if there's no stamp at all (onboarded before it existed), `warn` if it names an unrecognised tag or is behind |
 | `security` | warn | `SECURITY.md` documents private vulnerability reporting but the repo has it turned off. Not applicable to private repos, which can't have the feature at all |

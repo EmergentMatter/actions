@@ -20,7 +20,11 @@ Checks, per repo:
               `workflow_call` path removed in v1.1.0. A repo still on
               that path is BROKEN right now, not merely stale.
   pins        no action pinned to a version targeting Node 20
-  contexts    required status checks look like a recognised configuration
+  contexts    required status checks look like a recognised configuration.
+              `build` is not required for a virtual project
+              ([tool.uv] package = false) -- it has no wheel to build.
+  verify      a `build` job's `uv build` step is followed by verify-wheel.
+              Not applicable to a virtual project, same reason as above.
   naming      ci.yml declares `name:`, so checks read `CI / lint` rather
               than `.github/workflows/ci.yml / lint`
   templates   every `managed` file in templates/manifest.toml matches its
@@ -305,13 +309,22 @@ def check_workflow_call(text: str | None) -> list[Finding]:
     ]
 
 
-def check_verify_wheel(text: str | None) -> list[Finding]:
+def check_verify_wheel(text: str | None, *, is_virtual: bool = False) -> list[Finding]:
     """A build job that only runs `uv build` proves less than it looks.
 
     `uv build` reports success for a wheel containing nothing importable, so
     without the verify step the build stage catches only builds that fail
     outright -- not the "green tests, broken package" case it exists for.
+
+    `is_virtual` (`[tool.uv] package = false`) skips this outright: a
+    virtual project has no wheel to build in the first place, so there is
+    nothing for `verify-wheel` to check. Without this, a `uv build`
+    mentioned only in a comment (explaining why the job was removed, for
+    example) still matched the naive substring check below and produced a
+    false alarm on a repo with no `build` job at all.
     """
+    if is_virtual:
+        return []
     if text is None or "uv build" not in text:
         return []
     if VERIFY_WHEEL_PATH in text:
@@ -531,6 +544,26 @@ def _declared_tier(pyproject_text: str | None) -> str | None:
     return data.get("tool", {}).get("em-release", {}).get("tier")
 
 
+def _is_virtual_project(pyproject_text: str | None) -> bool:
+    """True iff `[tool.uv] package = false` -- the same declaration
+    version.yml's/build-release.yml's own `has-wheel` input exists for
+    (CONTRACT.md, "`has-wheel: false` for a repo with nothing to build").
+    A virtual project has no `[project.scripts]` and nothing for `uv
+    build` to build, so the checks that assume a wheel (`contexts`'
+    `build` requirement, `verify`) have nothing to ask for here.
+
+    Unknown (no pyproject.toml, or it doesn't parse) reads as False, the
+    same conservative default as a repo that never declared the key at
+    all: absence of information must not silently waive a real check."""
+    if pyproject_text is None:
+        return False
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return False
+    return data.get("tool", {}).get("uv", {}).get("package") is False
+
+
 def check_tier(pyproject_text: str | None) -> list[Finding]:
     """`[tool.em-release] tier` is declared and one of "open" / "closed".
 
@@ -647,11 +680,16 @@ def check_ts_job(bun_lock_present: bool, ci_text: str | None) -> list[Finding]:
     ]
 
 
-def check_contexts(contexts: list[str] | None) -> list[Finding]:
-    """Required status checks look like a recognised configuration."""
+def check_contexts(contexts: list[str] | None, *, is_virtual: bool = False) -> list[Finding]:
+    """Required status checks look like a recognised configuration.
+
+    `is_virtual` (`[tool.uv] package = false`) drops `build` from what's
+    required: a virtual project has no wheel to build, so `templates/ci.yml`
+    (and any repo's own CI) has no `build` job to require a context for.
+    """
     if contexts is None:
         return [Finding("contexts", "warn", "no required status checks on the default branch")]
-    expected = {"test", "build", "changelog"}
+    expected = {"test", "build", "changelog"} - ({"build"} if is_virtual else set())
     # A matrixed job reports one context per leg, named "job (variant)" --
     # sdm-physics requires "test (3.11)" and "test (3.13)" and has no bare
     # "test" context at all. Each leg satisfies the base-name requirement.
@@ -689,14 +727,15 @@ def evaluate(
     dest_texts = dest_texts or {}
     tags = tags or []
     tier = _declared_tier(pyproject_text)
+    is_virtual = _is_virtual_project(pyproject_text)
     return [
         *check_stub(stub_text),
         *check_workflow_call(ci_text),
         *check_gate(ci_text, contexts),
         *check_format_gate(ci_text, contexts),
         *check_typecheck_gate(ci_text, contexts),
-        *check_contexts(contexts),
-        *check_verify_wheel(ci_text),
+        *check_contexts(contexts, is_virtual=is_virtual),
+        *check_verify_wheel(ci_text, is_virtual=is_virtual),
         *check_templates(manifest, dest_texts, _stamp_status(stamp, tags), tier=tier),
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
