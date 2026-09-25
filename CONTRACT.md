@@ -319,16 +319,20 @@ own `pyproject.toml` (see "Licence tier" below) and refuses:
 
 **Static index.** `scripts/publish_static_index.py` uploads the release's wheel/sdist to
 `downloads/<normalized-package-name>/` in `static-index-bucket`, refusing (never silently
-overwriting) a filename already there with different content -- a published wheel/sdist is
-immutable. It then regenerates `simple/<package>/index.html` from that prefix's own listing (the
-per-repo role can `ListBucket` only its own prefix) merged with this release's new files, using
-`scripts/generate_index_page.py` for the actual PEP 503 page (one `<a href>` per file, normalized
-per PEP 503, a `#sha256=` fragment on every link, and `data-requires-python` when a wheel declares
-one). If `static-index-distribution-id` is set, the publish job invalidates
-`/simple/<package>/*` on CloudFront afterward; if it's empty, the page still uploads and nothing
-is invalidated. **The root `simple/index.html` is never written by this job**, by design: a
-per-repo role's `ListBucket` grant is scoped to its own `downloads/<package>/` prefix, and the root
-index aggregates across every package's prefix, which no single per-repo role can list.
+overwriting, and never trusting an unverified match) a filename already there with different
+content, or with no recorded sha256 metadata at all -- a published wheel/sdist is immutable, and
+an object this script never uploaded is not a safe retry just because a key with that name exists.
+It then regenerates `simple/<package>/index.html` from that prefix's own listing merged with this
+release's new files, using `scripts/generate_index_page.py` for the actual PEP 503 page (one
+`<a href>` per file, normalized per PEP 503, a `#sha256=` fragment on every link, and
+`data-requires-python` when a wheel declares one). If `static-index-distribution-id` is set, the
+publish job invalidates `/simple/<package>/*` on CloudFront afterward; if it's empty, the page
+still uploads and nothing is invalidated. **The root `simple/index.html` is never written by this
+job**, by design: a per-repo role's `ListBucket` grant is scoped to its own
+`downloads/<package>/*` AND `simple/<package>/*` prefixes, never the bucket root or any other
+package's prefixes, and the root index aggregates across every package's prefix, which no single
+per-repo role can list. See "Rebuilding the root index" below for how that page is maintained
+instead.
 
 **CodeArtifact.** The publish job calls `aws codeartifact get-repository-endpoint` (`--format
 pypi`) and `aws codeartifact get-authorization-token` for `codeartifact-domain` /
@@ -336,6 +340,27 @@ pypi`) and `aws codeartifact get-authorization-token` for `codeartifact-domain` 
 it can appear in any log line, and runs `uv publish --publish-url <endpoint>` with the token in
 `UV_PUBLISH_PASSWORD`. No long-lived token, no secret: the authorization token is minted fresh,
 per run, from the OIDC-assumed role.
+
+### Rebuilding the root index
+
+`simple/index.html` (the index of indexes PEP 503 expects at the root) is never written by the
+publish job, on purpose: it aggregates across every package's prefix, and every per-repo role's
+`ListBucket` grant is scoped to its own package's prefixes, never the bucket root or another
+package's. Onboarding a new package (or any change to the bucket's package list outside a normal
+release) needs this page rebuilt separately, by hand, with credentials that CAN list the whole
+`simple/` prefix:
+
+```bash
+publish_static_index.py --root --bucket <the downloads bucket name> \
+  --distribution-id <the CloudFront distribution id>
+```
+
+`--root` lists every `simple/<package>/` prefix in the bucket (`list_package_prefixes()`), rebuilds
+`simple/index.html` from that listing (`generate_index_page.py`'s `render_root_index()`, a plain
+list of package links with no hashes -- those live one level down, on each package's own page), and
+invalidates `/simple/*` on the given distribution. `--distribution-id` is optional: omit it to
+write the page without invalidating anything. Never invoked from a publish job; this is an
+operator-run command, the same category as `onboard.py`/`sync.py`/`fleet_status.py`.
 
 ## Why the release is not tag-triggered
 

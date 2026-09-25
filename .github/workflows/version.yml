@@ -148,10 +148,12 @@ on:
         description: >-
           S3 bucket backing the static index, for "static-index" / "both".
           Required for those targets. The role in aws-role-arn must have
-          upload access scoped to this repo's own downloads/<package>/
-          prefix, and read (ListBucket) on that same prefix only -- see
-          publish_static_index.py's module docstring for why the root
-          simple/index.html is never written here.
+          upload access scoped to this repo's own downloads/<package>/*
+          prefix, and read (ListBucket) on that prefix AND its own
+          simple/<package>/* prefix -- not the bucket root, and not any
+          other package's prefixes. See publish_static_index.py's module
+          docstring for why the root simple/index.html is never written
+          here.
         type: string
         default: ""
       static-index-distribution-id:

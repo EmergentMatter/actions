@@ -657,6 +657,24 @@ there's no correct default to assume. The refusal happens before any AWS
 credentials are assumed or anything uploads, with a clear error naming
 which rule it hit.
 
+#### Rebuilding the root index after the first `static-index` publish
+
+The publish job never writes `simple/index.html`, the root index of every
+package (see CONTRACT.md's "Rebuilding the root index" for why: a per-repo
+role can't list the whole bucket). The first time a NEW package publishes
+to `static-index`, or any time the bucket's package list changes outside a
+normal release, an operator with admin S3 + CloudFront credentials runs
+this by hand, from a clone of this repo:
+
+```bash
+uv run python scripts/publish_static_index.py --root \
+  --bucket <the downloads bucket name> \
+  --distribution-id <the CloudFront distribution id>
+```
+
+This is the only piece of `static-index` publishing that isn't automatic.
+Nothing in a consuming repo's stub triggers it.
+
 ## The config block
 
 One block, added to your existing `pyproject.toml`, copied from

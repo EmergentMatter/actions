@@ -43,6 +43,7 @@ __all__ = [
     "DistFile",
     "normalize_name",
     "render_index",
+    "render_root_index",
     "sha256_of",
     "requires_python_of",
 ]
@@ -129,6 +130,33 @@ def render_index(package_name: str, files: list[DistFile]) -> str:
         "  </head>\n"
         "  <body>\n"
         f"    <h1>Links for {html.escape(normalized)}</h1>\n"
+        f"{body}\n"
+        "  </body>\n"
+        "</html>\n"
+    )
+
+
+def render_root_index(package_names: list[str]) -> str:
+    """The root `simple/index.html`: PEP 503's index of every package this
+    static index serves, one `<a href="<name>/">` per package, no hashes
+    (those live one level down, on each package's own render_index() page).
+
+    Normalized and de-duplicated the same way render_index() normalizes a
+    single package's name, so two spellings of the same package collapse
+    to the one link `pip`/`uv` will actually request. Deterministic
+    ordering for the same reason render_index() sorts its links.
+    """
+    names = sorted({normalize_name(n) for n in package_names})
+    links = [f'    <a href="{html.escape(n)}/">{html.escape(n)}</a><br/>' for n in names]
+    body = "\n".join(links)
+    return (
+        "<!DOCTYPE html>\n"
+        "<html>\n"
+        "  <head>\n"
+        '    <meta name="pypi:repository-version" content="1.0">\n'
+        "    <title>Simple index</title>\n"
+        "  </head>\n"
+        "  <body>\n"
         f"{body}\n"
         "  </body>\n"
         "</html>\n"

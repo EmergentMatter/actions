@@ -144,6 +144,38 @@ def test_render_index_is_deterministic_for_the_same_input():
     assert gip.render_index("pkg", files) == gip.render_index("pkg", list(reversed(files)))
 
 
+# ------------------------------------------------------------- render_root_index
+
+
+def test_render_root_index_links_every_package():
+    page = gip.render_root_index(["pkg-a", "pkg-b"])
+    assert '<a href="pkg-a/">pkg-a</a><br/>' in page
+    assert '<a href="pkg-b/">pkg-b</a><br/>' in page
+
+
+def test_render_root_index_normalizes_and_deduplicates_names():
+    page = gip.render_root_index(["Emergent_Matter.SDM-Core", "emergent-matter-sdm-core"])
+    assert page.count('<a href="emergent-matter-sdm-core/">') == 1
+
+
+def test_render_root_index_carries_no_sha256_fragments():
+    """Hashes belong on each package's own page (render_index()), not the
+    root index of indexes."""
+    page = gip.render_root_index(["pkg"])
+    assert "#sha256=" not in page
+
+
+def test_render_root_index_orders_links_deterministically():
+    page = gip.render_root_index(["z-pkg", "a-pkg"])
+    assert page.index("a-pkg") < page.index("z-pkg")
+
+
+def test_render_root_index_is_empty_but_valid_for_no_packages():
+    page = gip.render_root_index([])
+    assert page.startswith("<!DOCTYPE html>")
+    assert "<title>Simple index</title>" in page
+
+
 # --------------------------------------------------------------- dist_files_in
 
 
