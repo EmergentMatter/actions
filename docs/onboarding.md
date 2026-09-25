@@ -227,6 +227,15 @@ The platform behaviour that forces this shape, and why the obvious
 tag-triggered design fails silently rather than loudly, is in CONTRACT.md
 under why the release is not tag-triggered.
 
+**If you publish, `workflow_dispatch` is not how you re-publish a failed
+release.** A publish-enabled repo's `environment` restricts deployment to
+`main`, and `workflow_dispatch` (and the human-pushed-tag trigger) both
+run against a tag, so a dispatched run can never pass that gate with
+`publish: true`. Re-publish by re-running the ORIGINAL `version.yml`
+run's failed publish job instead (Actions tab -> that run -> "Re-run
+failed jobs", or `gh run rerun --failed`) -- it keeps the run's original
+`main` ref. See CONTRACT.md's "Re-publishing a release" for the full rule.
+
 ### `scripts/changeset.py` goes at your repo root
 
 Copy `templates/changeset.py` to `scripts/changeset.py` at your repo root,
@@ -597,7 +606,12 @@ runs, the OIDC token comes back empty, and the publish step fails.**
 3. **Create that GitHub Environment in your repo's own settings** (named
    `release` unless you overrode it in step 2), **and attach its PyPI
    trusted publisher** in PyPI's project settings, pointing at this
-   repo, this workflow, and this environment name.
+   repo, this workflow, and this environment name. Restrict its
+   deployment branch policy to `main`. That restriction is also why
+   `workflow_dispatch` and a human-pushed tag can never complete a
+   publish: both run against a tag, not `main`. Re-publish a release by
+   re-running the original `version.yml` run's failed publish job
+   instead -- see CONTRACT.md's "Re-publishing a release".
 
 ```yaml
   version:

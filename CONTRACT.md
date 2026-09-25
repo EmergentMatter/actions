@@ -363,6 +363,18 @@ invalidates `/simple/*` on the given distribution. `--distribution-id` is option
 write the page without invalidating anything. Never invoked from a publish job; this is an
 operator-run command, the same category as `onboard.py`/`sync.py`/`fleet_status.py`.
 
+### Re-publishing a release means re-running the failed publish job, not `workflow_dispatch`
+
+A publish-enabled consumer's `environment` (`production` by convention) has a deployment branch
+policy restricting it to `main`. `build-release.yml`'s `workflow_dispatch` trigger and its
+human-pushed-tag trigger both run against a tag, not `main`, so a dispatched or tag-triggered run
+cannot pass that environment's branch policy when `publish: true` -- the job never starts, gated by
+the environment itself, regardless of anything this repo's workflows do. Re-publishing a release
+whose publish job failed means re-running that same, original `version.yml` run's failed job (from
+the Actions UI or `gh run rerun --failed`), which keeps the run's original `main` ref and so still
+satisfies the branch policy. `build-release.yml`'s non-automatic triggers remain useful for a
+tag-only rebuild with `publish: false`, which never touches the environment gate.
+
 ## Why the release is not tag-triggered
 
 **An event created with `GITHUB_TOKEN` does not trigger further workflow runs.** GitHub suppresses

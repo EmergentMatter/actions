@@ -146,28 +146,48 @@ def list_existing_keys(run: Runner, bucket: str, prefix: str) -> list[str]:
     return [obj["Key"] for obj in data.get("Contents", [])]
 
 
-def _metadata_arg(sha256: str, requires_python: str | None) -> str:
-    metadata = f"sha256={sha256}"
+def _metadata_dict(sha256: str, requires_python: str | None) -> dict[str, str]:
+    metadata = {"sha256": sha256}
     if requires_python:
-        metadata += f",requires-python={requires_python}"
+        metadata["requires-python"] = requires_python
     return metadata
 
 
+def _s3_cp_argv(
+    bucket: str, key: str, path: Path, *, content_type: str, metadata: dict[str, str] | None
+) -> list[str]:
+    """The argv for one `aws s3 cp`, split out of upload_file() so a test
+    can hand this exact list to the real `aws` CLI (with `--dryrun`
+    appended) and confirm it's accepted, without going through the Runner
+    seam at all.
+
+    `--metadata` takes JSON (`aws s3 cp`'s `--metadata` accepts either the
+    comma-separated `key=value` shorthand or a JSON object), never the
+    shorthand: a `requires-python` value like `>=3.10,<4` contains a comma,
+    which the shorthand parser reads as a second `key=value` pair and
+    fails on (`Expected: '=', received: 'EOF'`). JSON has no such
+    ambiguity. `metadata=None` (the index pages carry none) omits the flag
+    entirely rather than passing an empty value, which the CLI rejects the
+    same way.
+    """
+    argv = ["s3", "cp", str(path), f"s3://{bucket}/{key}", "--content-type", content_type]
+    if metadata:
+        argv += ["--metadata", json.dumps(metadata)]
+    return argv
+
+
 def upload_file(
-    run: Runner, bucket: str, key: str, path: Path, *, content_type: str, metadata: str
+    run: Runner,
+    bucket: str,
+    key: str,
+    path: Path,
+    *,
+    content_type: str,
+    metadata: dict[str, str] | None,
 ) -> None:
-    p = run(
-        [
-            "s3",
-            "cp",
-            str(path),
-            f"s3://{bucket}/{key}",
-            "--content-type",
-            content_type,
-            "--metadata",
-            metadata,
-        ]
-    )
+    """Upload `path` to `s3://{bucket}/{key}`. See _s3_cp_argv() for the
+    argv this builds and why."""
+    p = run(_s3_cp_argv(bucket, key, path, content_type=content_type, metadata=metadata))
     if p.returncode != 0:
         raise PublishStaticIndexError(f"upload of s3://{bucket}/{key} failed: {p.stderr.strip()}")
 
@@ -218,7 +238,7 @@ def sync_dist_files(
                 key,
                 dist_dir / dist_file.filename,
                 content_type="application/octet-stream",
-                metadata=_metadata_arg(dist_file.sha256, dist_file.requires_python),
+                metadata=_metadata_dict(dist_file.sha256, dist_file.requires_python),
             )
         uploaded.append(dist_file)
     return uploaded
@@ -257,7 +277,7 @@ def regenerate_index_page(
             f"simple/{normalized}/index.html",
             page_path,
             content_type="text/html",
-            metadata="",
+            metadata=None,
         )
     finally:
         page_path.unlink(missing_ok=True)
@@ -317,7 +337,7 @@ def regenerate_root_index_page(run: Runner, bucket: str) -> str:
         page_path = Path(f.name)
     try:
         upload_file(
-            run, bucket, "simple/index.html", page_path, content_type="text/html", metadata=""
+            run, bucket, "simple/index.html", page_path, content_type="text/html", metadata=None
         )
     finally:
         page_path.unlink(missing_ok=True)

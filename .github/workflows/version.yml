@@ -23,7 +23,9 @@ name: Version
 # build-release.yml as a nested reusable workflow at the actions-ref input
 # below. The steps are inlined instead. build-release.yml still exists,
 # retargeted at `workflow_dispatch` and human-pushed tags (which DO
-# trigger workflows), for manually rebuilding/republishing a past release.
+# trigger workflows), for manually rebuilding a past release's GitHub
+# Release/wheel -- not for re-publishing one; see CONTRACT.md,
+# "Re-publishing a release".
 #
 # Detecting "HEAD is the release commit": rather than parsing the merge
 # commit message (which differs by merge strategy: merge commit, squash,

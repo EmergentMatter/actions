@@ -7,9 +7,12 @@
 # https://github.com/EmergentMatter/actions/blob/main/CONTRACT.md
 #
 # This stub covers the paths that are not automated: a human pushing a
-# `v*` tag by hand (which DOES trigger workflows), and
-# `workflow_dispatch` for manually rebuilding or republishing a past
-# release (e.g. after a failed publish).
+# `v*` tag by hand (which DOES trigger workflows), and `workflow_dispatch`
+# for manually rebuilding a past release's GitHub Release/wheel. Neither
+# path can complete a PUBLISH once this repo's environment restricts
+# deployment to `main` (both run against a tag): re-publish a release
+# whose publish job failed by re-running that original version.yml run's
+# failed job instead. See CONTRACT.md, "Re-publishing a release".
 name: Build & Release
 on:
   push:
