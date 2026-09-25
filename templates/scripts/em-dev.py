@@ -628,13 +628,15 @@ def read_state(venv_dir: Path) -> dict | None:
     if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
 
 def write_state(venv_dir: Path, state: dict) -> None:
-    state_path(venv_dir).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+    state_path(venv_dir).write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _sibling_state_rows(locals_used: list[SiblingResolution]) -> list[dict]:
@@ -750,7 +752,7 @@ def is_editable_direct_url(dist_info_dir: Path) -> bool | None:
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     return bool(data.get("dir_info", {}).get("editable", False))
@@ -774,13 +776,13 @@ def ensure_local_gitignore(repo: Path) -> None:
     if not git_dir.is_dir():
         return
     exclude_path = git_dir / "info" / "exclude"
-    existing = exclude_path.read_text() if exclude_path.is_file() else ""
+    existing = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
     missing = [line for line in LOCAL_GITIGNORE_LINES if line not in existing.splitlines()]
     if not missing:
         return
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
     sep = "" if existing.endswith("\n") or not existing else "\n"
-    exclude_path.write_text(existing + sep + "\n".join(missing) + "\n")
+    exclude_path.write_text(existing + sep + "\n".join(missing) + "\n", encoding="utf-8")
 
 
 def git(args: list[str], cwd: Path) -> tuple[int, str]:

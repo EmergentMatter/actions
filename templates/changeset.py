@@ -295,7 +295,7 @@ def main() -> int:
 
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     note_path = NOTES_DIR / f"+{secrets.token_hex(4)}.{level}.md"
-    note_path.write_text(summary + "\n")
+    note_path.write_text(summary + "\n", encoding="utf-8")
 
     print(f"Created {note_path}")
     print("Commit it with your change.")
