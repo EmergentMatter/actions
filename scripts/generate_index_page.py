@@ -12,7 +12,9 @@ fragment on every link (so the installer verifies content, not just
 trusts the filename), and an optional `data-requires-python` attribute
 (PEP 345 environment marker string) that lets an installer skip a
 wheel/sdist that can't run on the interpreter it has, without downloading
-it first.
+it first. Each `href` is a relative path up to the bucket's
+`downloads/<package>/` prefix, not a bare filename -- see render_index()'s
+own docstring for why a bare filename 404s here.
 
 The functions here are pure: given a package name and a list of
 (filename, sha256, requires-python) tuples, render_index() returns the
@@ -106,6 +108,17 @@ def requires_python_of(wheel_path: Path) -> str | None:
 def render_index(package_name: str, files: list[DistFile]) -> str:
     """The full `simple/<package>/index.html` page for `files`.
 
+    Each link is relative, not a bare filename: this page is served from
+    `simple/<package>/`, but the wheel/sdist it links to lives at
+    `downloads/<package>/<filename>` (see publish_static_index.py's
+    upload prefix -- `<package>` here is the SAME normalize_name() result
+    that prefix uses, so the two can never drift apart). A bare filename
+    resolves against the page's own directory (`simple/<package>/`),
+    which is empty, and 404s. `../../downloads/<package>/<filename>` walks
+    back up to the bucket root and down into the actual location, and
+    works unqualified on any host (or under `file://`) since it names no
+    scheme or domain.
+
     Deterministic ordering (by filename) so a rebuild from the same
     inputs produces byte-identical output -- useful for the "upload only
     if different" check on the page itself, and for tests.
@@ -118,7 +131,7 @@ def render_index(package_name: str, files: list[DistFile]) -> str:
             if f.requires_python
             else ""
         )
-        href = f"{html.escape(f.filename)}#sha256={f.sha256}"
+        href = f"../../downloads/{normalized}/{html.escape(f.filename)}#sha256={f.sha256}"
         links.append(f'    <a href="{href}"{attr}>{html.escape(f.filename)}</a><br/>')
     body = "\n".join(links)
     return (

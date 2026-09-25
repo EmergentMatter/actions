@@ -325,8 +325,9 @@ content, or with no recorded sha256 metadata at all -- a published wheel/sdist i
 an object this script never uploaded is not a safe retry just because a key with that name exists.
 It then regenerates `simple/<package>/index.html` from that prefix's own listing merged with this
 release's new files, using `scripts/generate_index_page.py` for the actual PEP 503 page (one
-`<a href>` per file, normalized per PEP 503, a `#sha256=` fragment on every link, and
-`data-requires-python` when a wheel declares one). If `static-index-distribution-id` is set, the
+`<a href>` per file, each a RELATIVE path back to `../../downloads/<package>/<filename>` -- a bare
+filename resolves against the page's own directory, `simple/<package>/`, and 404s -- normalized per
+PEP 503, a `#sha256=` fragment on every link, and `data-requires-python` when a wheel declares one). If `static-index-distribution-id` is set, the
 publish job invalidates `/simple/<package>/*` on CloudFront afterward; if it's empty, the page
 still uploads and nothing is invalidated. **The root `simple/index.html` is never written by this
 job**, by design: a per-repo role's `ListBucket` grant is scoped to its own
