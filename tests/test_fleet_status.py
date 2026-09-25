@@ -237,6 +237,28 @@ def test_unparseable_pyproject_is_flagged_not_crashed_on():
     assert severities(findings, "tooling") == ["warn"]
 
 
+# ------------------------------------------------------------- virtual projects
+
+
+def test_is_virtual_project_true_for_package_false():
+    assert fleet_status._is_virtual_project("[tool.uv]\npackage = false\n") is True
+
+
+def test_is_virtual_project_false_for_a_normal_repo():
+    assert fleet_status._is_virtual_project('[project]\nname = "p"\n') is False
+
+
+def test_is_virtual_project_false_when_package_is_true():
+    assert fleet_status._is_virtual_project("[tool.uv]\npackage = true\n") is False
+
+
+def test_is_virtual_project_false_for_missing_or_unparseable_pyproject():
+    """Unknown reads as False -- the conservative default. Absence of
+    information must not silently waive the build/verify checks."""
+    assert fleet_status._is_virtual_project(None) is False
+    assert fleet_status._is_virtual_project("this is not [ valid toml") is False
+
+
 # --------------------------------------------------------------- licence tier
 
 
@@ -382,6 +404,28 @@ def test_matrix_normalisation_does_not_invent_missing_checks():
     assert "changelog" in messages(findings, "contexts")
 
 
+def test_virtual_project_does_not_require_a_build_context():
+    """sdm-ui-shaped case: [tool.uv] package = false, no build job, so no
+    build context to require -- must not be flagged missing."""
+    findings = fleet_status.check_contexts(["test", "changelog"], is_virtual=True)
+    assert findings == []
+
+
+def test_virtual_project_still_requires_test_and_changelog_contexts():
+    findings = fleet_status.check_contexts(["test"], is_virtual=True)
+    assert severities(findings, "contexts") == ["warn"]
+    assert "changelog" in messages(findings, "contexts")
+    assert "build" not in messages(findings, "contexts")
+
+
+def test_normal_project_still_requires_build_by_default():
+    """is_virtual defaults to False -- an existing caller that never
+    passes it keeps today's behaviour exactly."""
+    findings = fleet_status.check_contexts(["test", "changelog"])
+    assert severities(findings, "contexts") == ["warn"]
+    assert "build" in messages(findings, "contexts")
+
+
 # ------------------------------------------------------- workflow_call
 
 
@@ -421,6 +465,31 @@ def test_build_with_verify_wheel_is_clean():
 def test_a_repo_with_no_build_job_is_not_nagged():
     """Repos keeping their own CI may have no build stage at all."""
     assert fleet_status.check_verify_wheel(CI_MATERIALS_STYLE) == []
+
+
+def test_virtual_project_is_not_nagged_even_when_uv_build_appears_in_a_comment():
+    """sdm-ui-shaped case: [tool.uv] package = false, no build job at all,
+    but the string "uv build" appears in a comment explaining why the job
+    was removed. `is_virtual=True` must skip the check outright rather
+    than relying on the substring match to stay silent by luck."""
+    ci = "# `uv build` against an empty project fails outright, so there's no build job.\n"
+    assert fleet_status.check_verify_wheel(ci, is_virtual=True) == []
+
+
+def test_virtual_project_is_not_nagged_even_with_a_real_build_job():
+    """Belt and suspenders: is_virtual=True skips this check regardless of
+    what the CI text actually contains."""
+    ci = "jobs:\n  build:\n    steps:\n      - run: uv build\n"
+    assert fleet_status.check_verify_wheel(ci, is_virtual=True) == []
+
+
+def test_normal_project_is_unaffected_by_the_is_virtual_default():
+    """is_virtual defaults to False -- an existing caller that never
+    passes it keeps today's behaviour exactly."""
+    ci = "jobs:\n  build:\n    steps:\n      - run: uv build\n"
+    assert fleet_status.check_verify_wheel(ci) == fleet_status.check_verify_wheel(
+        ci, is_virtual=False
+    )
 
 
 # -------------------------------------------------------------- templates
@@ -756,6 +825,36 @@ def test_a_healthy_repo_has_no_actionable_findings():
     )
     actionable = [f for f in findings if f.severity != "info"]
     assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
+
+
+def test_evaluate_does_not_flag_a_virtual_project_missing_build():
+    """sdm-ui-shaped repo, end to end through evaluate(): [tool.uv]
+    package = false, no build job, no build context, and a comment
+    mentioning "uv build" to explain why the job is gone. Neither
+    `contexts` nor `verify` should fire."""
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    ci += "# NO build job: `uv build` against this virtual project has nothing to build.\n"
+    virtual_pyproject = HEALTHY_PYPROJECT + "\n[tool.uv]\npackage = false\n"
+    findings = fleet_status.evaluate(
+        ci,
+        GOOD_STUB,
+        ["test", "changelog"],
+        pyproject_text=virtual_pyproject,
+    )
+    actionable = [f for f in findings if f.severity != "info"]
+    assert actionable == [], [f"{f.check}: {f.message}" for f in actionable]
+
+
+def test_evaluate_still_flags_a_normal_project_missing_build():
+    """Same shape, but a normal (non-virtual) project: missing `build`
+    must still be flagged -- the fix must not silently waive this check
+    for everyone."""
+    ci = CI_LINT_OFF.replace("  pull_request:\n", "  pull_request:\n  workflow_call:\n")
+    findings = fleet_status.evaluate(
+        ci, GOOD_STUB, ["test", "changelog"], pyproject_text=HEALTHY_PYPROJECT
+    )
+    assert severities(findings, "contexts") == ["warn"]
+    assert "build" in messages(findings, "contexts")
 
 
 def test_evaluate_wires_templates_and_stamp_checks_together():
