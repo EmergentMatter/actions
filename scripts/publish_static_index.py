@@ -40,8 +40,8 @@ publish job. See regenerate_root_index_page() and docs/onboarding.md.
     publish_static_index.py --bucket downloads-em-prod-us-east-2 \\
         --package-name emergent-matter-sdm-core --dist-dir dist
 
-    # The admin-run root-index rebuild, after onboarding a new package or
-    # any time the bucket's package list changes outside a normal release:
+    # The admin-run root-index rebuild: the manual fallback for an empty
+    # bucket or a failed automatic rebuild (see CONTRACT.md):
     publish_static_index.py --root --bucket downloads-em-prod-us-east-2 \\
         --distribution-id <distribution-id>
 """

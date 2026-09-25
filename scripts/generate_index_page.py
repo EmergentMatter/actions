@@ -158,6 +158,12 @@ def render_root_index(package_names: list[str]) -> str:
     single package's name, so two spellings of the same package collapse
     to the one link `pip`/`uv` will actually request. Deterministic
     ordering for the same reason render_index() sorts its links.
+
+    em-platform-infra's root-index Lambda rebuilds this same page
+    automatically (see CONTRACT.md's "Rebuilding the root index") and
+    pins it against a golden copy of this function's output. A change to
+    this function's HTML shape must be mirrored there in the same change,
+    or the two implementations silently diverge.
     """
     names = sorted({normalize_name(n) for n in package_names})
     links = [f'    <a href="{html.escape(n)}/">{html.escape(n)}</a><br/>' for n in names]

@@ -20,12 +20,11 @@ on macOS is older than that, so use `uv run python`).
 | [`fleet_status.py`](#fleet_statuspy) | routinely, to catch drift |
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly; the `verify-wheel` action calls it |
-| [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | onboarding a new package to `static-index`, or any time the bucket's package list changes outside a normal release |
+| [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | manual fallback, for an empty bucket or after a failed automatic rebuild -- the downloads infrastructure rebuilds the root index automatically otherwise |
 
 `publish_static_index.py` is otherwise workflow-called (the publish job runs it per package, not a
-maintainer), so it isn't documented here beyond its `--root` mode -- see CONTRACT.md's "Rebuilding
-the root index" and docs/onboarding.md's "Rebuilding the root index after the first static-index
-publish" for the full command.
+maintainer), so it isn't documented here beyond its `--root` mode -- see CONTRACT.md's and
+docs/onboarding.md's "Rebuilding the root index" for the full command.
 
 ---
 

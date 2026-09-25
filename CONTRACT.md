@@ -346,11 +346,13 @@ per run, from the OIDC-assumed role.
 ### Rebuilding the root index
 
 `simple/index.html` (the index of indexes PEP 503 expects at the root) is never written by the
-publish job, on purpose: it aggregates across every package's prefix, and every per-repo role's
-`ListBucket` grant is scoped to its own package's prefixes, never the bucket root or another
-package's. Onboarding a new package (or any change to the bucket's package list outside a normal
-release) needs this page rebuilt separately, by hand, with credentials that CAN list the whole
-`simple/` prefix:
+publish job: it aggregates across every package's prefix, and every per-repo role's `ListBucket`
+grant is scoped to its own package's prefixes, never the bucket root or another package's. The
+downloads infrastructure (em-platform-infra) rebuilds this page automatically whenever a package's
+`simple/<package>/index.html` is written, so no repo or workflow here needs to do it.
+
+`publish_static_index.py --root` is the manual fallback, for an empty bucket or after a failed
+automatic rebuild:
 
 ```bash
 publish_static_index.py --root --bucket <the downloads bucket name> \
