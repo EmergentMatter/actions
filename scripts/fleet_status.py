@@ -34,6 +34,9 @@ Checks, per repo:
               promising a route it doesn't have. (Private repos: N/A.)
   tooling     pyproject.toml declares [tool.mypy] and
               [tool.pytest.ini_options] (existence only)
+  tier        pyproject.toml declares [tool.em-release] tier as "open" or
+              "closed". Missing on an onboarded repo means LICENSE/NOTICE
+              are not kept in sync by sync.py -- see templates/manifest.toml
   ruff_config ruff-base.toml present with no ruff.toml to `extend` it, or
               pyproject.toml still has an inline [tool.ruff] section
   ts_job      a `ui/bun.lock` exists but the `ts` job in ci.yml is still
@@ -115,6 +118,7 @@ else:
 
 TemplateEntry = onboard.TemplateEntry
 load_manifest = onboard.load_manifest
+entries_for_tier = onboard.entries_for_tier
 usable_stamp = sync.usable_stamp
 
 ACTIONS_REPO = "EmergentMatter/actions"
@@ -359,11 +363,22 @@ def check_templates(
     entries: list[TemplateEntry],
     dest_texts: dict[str, str | None],
     stamp_status: str | None,
+    *,
+    tier: str | None = None,
 ) -> list[Finding]:
     """Every `managed` template, compared to its live copy in the target repo.
 
     `seed-once` templates are skipped entirely -- repos legitimately
     customise their own CI, so a diff there is not a finding.
+
+    A tiered entry (templates/manifest.toml's `tier` column -- LICENSE and
+    NOTICE today) is resolved against `tier` first, through the same
+    `entries_for_tier()` onboard.py and sync.py already share. A repo with
+    no declared tier gets none of the tiered entries here, because there
+    is no correct default between them to compare a live file against --
+    the separate `tier` finding is the one place that reports the missing
+    declaration, so this check must not also report it, once per tiered
+    entry, as if it were ordinary drift.
 
     Whether a diff means a stale copy or a deliberate edit is known from
     the `stamp` check's verdict: a current stamp plus a diff is a choice
@@ -372,7 +387,7 @@ def check_templates(
     `stamp` finding for that.
     """
     out = []
-    for entry in entries:
+    for entry in entries_for_tier(entries, tier):
         if entry.policy != "managed":
             continue
         try:
@@ -495,6 +510,67 @@ def check_typecheck_gate(ci_text: str | None, contexts: list[str] | None) -> lis
     return _check_staged_job_gate("typecheck", "typecheck_gate", ci_text, contexts)
 
 
+_VALID_TIERS = {"open", "closed"}
+
+
+def _declared_tier(pyproject_text: str | None) -> str | None:
+    """The raw `[tool.em-release] tier` value, exactly as declared, or
+    None if it's absent, invalid TOML, or the repo has no
+    `[tool.em-release]` block at all. Shared between check_tier() (which
+    reports what's wrong with it) and check_templates() (which needs the
+    same value, unvalidated, to resolve manifest.toml's tiered entries
+    through entries_for_tier() -- an invalid value there correctly
+    resolves to no tiered entries at all, the same as no tier declared,
+    since it doesn't match either "open" or "closed")."""
+    if pyproject_text is None:
+        return None
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return None
+    return data.get("tool", {}).get("em-release", {}).get("tier")
+
+
+def check_tier(pyproject_text: str | None) -> list[Finding]:
+    """`[tool.em-release] tier` is declared and one of "open" / "closed".
+
+    Introduced alongside LICENSE/NOTICE's tiered manifest entries (see
+    templates/manifest.toml and onboard.entries_for_tier()): a repo with no
+    declared tier gets neither file kept in sync by sync.py, silently, from
+    that repo's point of view -- there is no correct default to pick
+    between the two licences. This is the check that surfaces it instead
+    of leaving it to be discovered the next time someone runs sync.py by
+    hand and reads its "no-tier" report.
+    """
+    if pyproject_text is None:
+        return []  # check_pyproject_tooling already reports the missing file
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return []  # check_pyproject_tooling already reports the parse failure
+    if "em-release" not in data.get("tool", {}):
+        return []  # not onboarded at all; every other check already covers that
+    tier_value = _declared_tier(pyproject_text)
+    if tier_value is None:
+        return [
+            Finding(
+                "tier",
+                "warn",
+                "no [tool.em-release] tier declared -- LICENSE/NOTICE are not kept in "
+                "sync until one is added ('open' or 'closed')",
+            )
+        ]
+    if tier_value not in _VALID_TIERS:
+        return [
+            Finding(
+                "tier",
+                "broken",
+                f"[tool.em-release] tier is {tier_value!r}, not 'open' or 'closed'",
+            )
+        ]
+    return []
+
+
 def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
     """Check that pyproject.toml has [tool.mypy] and [tool.pytest.ini_options].
 
@@ -612,6 +688,7 @@ def evaluate(
     manifest = manifest or []
     dest_texts = dest_texts or {}
     tags = tags or []
+    tier = _declared_tier(pyproject_text)
     return [
         *check_stub(stub_text),
         *check_workflow_call(ci_text),
@@ -620,10 +697,11 @@ def evaluate(
         *check_typecheck_gate(ci_text, contexts),
         *check_contexts(contexts),
         *check_verify_wheel(ci_text),
-        *check_templates(manifest, dest_texts, _stamp_status(stamp, tags)),
+        *check_templates(manifest, dest_texts, _stamp_status(stamp, tags), tier=tier),
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
         *check_pyproject_tooling(pyproject_text),
+        *check_tier(pyproject_text),
         *check_ruff_config_adoption(
             dest_texts.get(RUFF_BASE_FILE) is not None, ruff_toml_present, pyproject_text
         ),

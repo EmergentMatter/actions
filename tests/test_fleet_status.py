@@ -237,6 +237,41 @@ def test_unparseable_pyproject_is_flagged_not_crashed_on():
     assert severities(findings, "tooling") == ["warn"]
 
 
+# --------------------------------------------------------------- licence tier
+
+
+def test_onboarded_repo_with_no_tier_is_flagged():
+    text = '[tool.em-release]\ntemplates_version = "v1.0.0"\nversion_files = []\n'
+    findings = fleet_status.check_tier(text)
+    assert severities(findings, "tier") == ["warn"]
+    assert "tier" in messages(findings, "tier")
+
+
+def test_repo_with_a_valid_tier_is_clean():
+    for tier in ("open", "closed"):
+        text = f'[tool.em-release]\ntier = "{tier}"\n'
+        assert fleet_status.check_tier(text) == []
+
+
+def test_repo_with_an_invalid_tier_is_broken():
+    text = '[tool.em-release]\ntier = "premium"\n'
+    findings = fleet_status.check_tier(text)
+    assert severities(findings, "tier") == ["broken"]
+    assert "premium" in messages(findings, "tier")
+
+
+def test_never_onboarded_repo_has_no_tier_finding():
+    """No [tool.em-release] block at all means this check has nothing to
+    say -- every other check (workflow_call, stub, ...) already covers
+    "not onboarded"; this one isn't the place to repeat it."""
+    assert fleet_status.check_tier("[project]\nname = 'x'\n") == []
+
+
+def test_tier_check_does_not_crash_on_missing_or_unparseable_pyproject():
+    assert fleet_status.check_tier(None) == []
+    assert fleet_status.check_tier("this is not [ valid toml") == []
+
+
 # ------------------------------------------------------------- ruff config
 
 
@@ -512,6 +547,72 @@ def test_diff_with_stale_stamp_stays_a_warning():
         [MANAGED_ENTRY], {"scripts/changeset.py": "# old copy\n"}, stamp_status="stale"
     )
     assert severities(findings, "templates") == ["warn"]
+
+
+# ------------------------------------------------------- templates: tiered entries
+
+LICENSE_OPEN_ENTRY = fleet_status.TemplateEntry(
+    source="LICENSE-open", dest="LICENSE", policy="managed", tier="open"
+)
+LICENSE_CLOSED_ENTRY = fleet_status.TemplateEntry(
+    source="LICENSE-closed", dest="LICENSE", policy="managed", tier="closed"
+)
+NOTICE_OPEN_ENTRY = fleet_status.TemplateEntry(
+    source="NOTICE-open", dest="NOTICE", policy="managed", tier="open"
+)
+NOTICE_CLOSED_ENTRY = fleet_status.TemplateEntry(
+    source="NOTICE-closed", dest="NOTICE", policy="managed", tier="closed"
+)
+TIERED_ENTRIES = [LICENSE_OPEN_ENTRY, LICENSE_CLOSED_ENTRY, NOTICE_OPEN_ENTRY, NOTICE_CLOSED_ENTRY]
+LICENSE_OPEN_TEMPLATE = (REPO_ROOT / "templates" / "LICENSE-open").read_text()
+NOTICE_OPEN_TEMPLATE = (REPO_ROOT / "templates" / "NOTICE-open").read_text()
+
+
+def test_no_tier_repo_with_an_installed_license_gets_no_template_findings():
+    """A repo with no declared tier and an Apache LICENSE already
+    installed must not be compared against LICENSE-closed (or any tiered
+    entry) at all -- there is no tier to resolve against, so none of the
+    tiered entries apply here. The separate `tier` finding is the one
+    place that reports the missing declaration."""
+    findings = fleet_status.check_templates(
+        TIERED_ENTRIES, {"LICENSE": LICENSE_OPEN_TEMPLATE}, stamp_status=None, tier=None
+    )
+    assert findings == []
+
+
+def test_no_tier_repo_with_nothing_installed_gets_no_template_findings():
+    """A repo with no declared tier and neither LICENSE nor NOTICE
+    installed must not be reported once per tier ("not installed" x2 for
+    the same dest) -- it must not be reported by this check at all."""
+    findings = fleet_status.check_templates(TIERED_ENTRIES, {}, stamp_status=None, tier=None)
+    assert findings == []
+
+
+def test_open_tier_repo_with_matching_files_is_clean():
+    findings = fleet_status.check_templates(
+        TIERED_ENTRIES,
+        {"LICENSE": LICENSE_OPEN_TEMPLATE, "NOTICE": NOTICE_OPEN_TEMPLATE},
+        stamp_status=None,
+        tier="open",
+    )
+    assert findings == []
+
+
+def test_closed_tier_repo_compares_only_against_the_closed_entries():
+    """A closed-tier repo's drift is reported against LICENSE-closed /
+    NOTICE-closed only -- never LICENSE-open / NOTICE-open, which don't
+    apply to this repo at all."""
+    findings = fleet_status.check_templates(
+        TIERED_ENTRIES,
+        {"LICENSE": "not the real closed licence text\n"},
+        stamp_status=None,
+        tier="closed",
+    )
+    messages_ = messages(findings, "templates")
+    assert severities(findings, "templates") == ["warn", "warn"]
+    assert "LICENSE differs from templates/LICENSE-closed" in messages_
+    assert "no NOTICE; not installed" in messages_
+    assert "open" not in messages_
 
 
 # ------------------------------------------------------------------ stamp

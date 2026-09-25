@@ -23,7 +23,9 @@ name: Version
 # build-release.yml as a nested reusable workflow at the actions-ref input
 # below. The steps are inlined instead. build-release.yml still exists,
 # retargeted at `workflow_dispatch` and human-pushed tags (which DO
-# trigger workflows), for manually rebuilding/republishing a past release.
+# trigger workflows), for manually rebuilding a past release's GitHub
+# Release/wheel -- not for re-publishing one; see CONTRACT.md,
+# "Re-publishing a release".
 #
 # Detecting "HEAD is the release commit": rather than parsing the merge
 # commit message (which differs by merge strategy: merge commit, squash,
@@ -106,9 +108,75 @@ on:
           own comment, below, is the account of why an empty name here
           breaks every run of every consuming repo. A repo enabling
           `publish: true` must create a GitHub Environment with this name
-          and attach its PyPI trusted publisher to it.
+          and attach its trusted publisher (PyPI) or trust policy (AWS) to
+          it.
         type: string
         default: release
+
+      # ── Publish target ──────────────────────────────────────────────────
+      #
+      # Consulted only when publish is true. `pypi` is the default and
+      # preserves exactly what publish: true did before this input existed
+      # -- an existing consumer with no publish-target set is unaffected.
+      # The AWS-backed targets need aws-role-arn (below) and this repo's
+      # [tool.em-release] tier to be declared; check_publish_tier.py
+      # enforces both, and a closed-tier repo besides, before any upload.
+      # See CONTRACT.md's "Publishing to more than one index" for the full
+      # account.
+      publish-target:
+        description: >-
+          Where `publish: true` sends this release: "pypi" (OIDC trusted
+          publishing, the pre-existing default), "static-index" (this org's
+          own PEP 503 index over S3 + CloudFront), "codeartifact" (AWS
+          CodeArtifact, sign-in required to read), or "both" (static-index
+          AND codeartifact -- never combined with pypi). A "closed"-tier
+          repo (see [tool.em-release] tier) is refused for every target
+          except "codeartifact".
+        type: string
+        default: pypi
+      aws-role-arn:
+        description: >-
+          IAM role this repo assumes (via OIDC, aws-actions/configure-aws-credentials)
+          for "static-index" / "codeartifact" / "both". One role covers both
+          S3 and CodeArtifact for a given repo. Required for those targets;
+          validated below rather than defaulted, since an empty role ARN
+          isn't a usable fallback for either.
+        type: string
+        default: ""
+      aws-region:
+        type: string
+        default: us-east-2
+      static-index-bucket:
+        description: >-
+          S3 bucket backing the static index, for "static-index" / "both".
+          Required for those targets. The role in aws-role-arn must have
+          upload access scoped to this repo's own downloads/<package>/*
+          prefix, and read (ListBucket) on that prefix AND its own
+          simple/<package>/* prefix -- not the bucket root, and not any
+          other package's prefixes. See publish_static_index.py's module
+          docstring for why the root simple/index.html is never written
+          here.
+        type: string
+        default: ""
+      static-index-distribution-id:
+        description: >-
+          CloudFront distribution fronting the static index, for
+          "static-index" / "both". If empty, the page still uploads but
+          nothing is invalidated -- fine for a first publish of a package
+          that has never been fetched before, wrong for a re-publish of an
+          index CloudFront has already cached.
+        type: string
+        default: ""
+      codeartifact-domain:
+        type: string
+        default: em
+      codeartifact-domain-owner:
+        description: AWS account ID that owns the CodeArtifact domain.
+        type: string
+        default: "967228661072"
+      codeartifact-repository:
+        type: string
+        default: em-platform
 
       # ── Private sibling checkout ──────────────────────────────────────
       #
@@ -264,7 +332,8 @@ on:
           public sibling3 falls back to `github.token`.
         required: false
 
-permissions: {}
+# NO top-level `permissions:` key here, ever, empty or not -- see the
+# `publish:` job's own comment below and ADR 0003 for why.
 
 concurrency:
   group: version-${{ github.repository }}
@@ -279,6 +348,10 @@ jobs:
       pull-requests: write
     outputs:
       is-release-commit: ${{ steps.detect.outputs.is-release-commit }}
+      # Both consumed only by the publish job below, which runs on a
+      # separate runner and so can't see this job's own steps.outputs.
+      tag: ${{ steps.tag.outputs.tag }}
+      actions-ref: ${{ steps.shared.outputs.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -903,49 +976,170 @@ jobs:
     if: needs.version.outputs.is-release-commit == 'true' && inputs.publish
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    # ── The parse-time ceiling on a called workflow ────────────────────
+    # ── This job's permissions: the canonical explanation (see ADR 0003) ──
     #
-    # NO `permissions:` block here, and that absence is load-bearing. This
-    # comment is the canonical account of the failure it avoids; nothing
-    # else restates it.
+    # NO `permissions:` block on this job, and no top-level `permissions:`
+    # anywhere in this file. Both are required together; either one alone
+    # breaks a publish-enabled consumer, in two different ways:
     #
-    # A caller's `permissions:` on a `workflow_call` is a CEILING for every
-    # job in the called workflow, not a per-job grant. GitHub checks a
-    # called job's declared permissions against that ceiling when it PARSES
-    # the workflow, before any `if:` is evaluated. So a job asking for more
-    # than the caller granted does not degrade and does not merely fail
-    # when it runs: the whole workflow fails to load with
-    # `startup_failure`, no job runs at all, and the API returns no message
-    # saying why.
+    # 1. A job-level `permissions:` block here is checked at PARSE time
+    #    against the caller's grant, before any `if:` runs. A request for
+    #    more than the caller granted does not degrade or fail only this
+    #    job: the whole workflow fails to load (`startup_failure`) for
+    #    every onboarded repo, on every push to `main`, whether or not it
+    #    publishes -- `publish: false` skips this job via `if:`, but the
+    #    parse happens first.
+    # 2. A top-level `permissions:` key in this file -- `{}` included --
+    #    becomes the ACTUAL grant for any job here with no block of its
+    #    own, in place of the caller's grant, not merely a floor a job can
+    #    still widen past. This job relies on having no block so it falls
+    #    through to the caller's grant; a top-level key defeats that
+    #    silently, at run time, for this job specifically.
     #
-    # The blast radius is every onboarded repo, on every push to `main`,
-    # whether or not it publishes anything. A repo with `publish: false`
-    # has this job skipped by the `if:` above, but the parse happens first,
-    # so it breaks too. Observed live in the rehearsal: every run of every
-    # consumer failed until the `permissions:` block came out of this job.
+    # `environment:` on the line above is validated at the same parse step
+    # as (1): its input default must stay non-empty, or every run of every
+    # consumer dies at `startup_failure` regardless of the publish gate.
+    # That is why `environment:` is set unconditionally rather than gated
+    # on `inputs.publish`.
     #
-    # `environment:` on the line above is validated at that same parse
-    # step, and broke the same way for the same reason: its input default
-    # was once the empty string, which is not a valid environment name, so
-    # every run of every consumer died at startup_failure regardless of the
-    # publish gate. That is why `environment:` is set unconditionally here
-    # rather than gated on `inputs.publish`, and why its input ships a
-    # non-empty default.
-    #
-    # The permission therefore has to come from the consumer's own stub. A
-    # repo enabling `publish: true` adds `id-token: write` to the
-    # `permissions:` block on its version.yml stub and creates a GitHub
-    # Environment named by the `environment` input with a PyPI trusted
-    # publisher attached; this job inherits both. A repo that does not
-    # publish grants nothing extra and this job never runs.
+    # The permission comes from the consumer's own stub: `publish: true`
+    # also adds `id-token: write` to the stub's `permissions:` block
+    # (alongside the `contents: write` / `pull-requests: write` it already
+    # grants the `version:` job, which is what lets this job's own
+    # checkout steps below succeed), and creates a GitHub Environment
+    # matching `environment:` with a PyPI trusted publisher
+    # (publish-target: pypi) or an AWS OIDC trust policy
+    # (publish-target: static-index / codeartifact / both) attached. The
+    # SAME `id-token: write` grant covers either kind of OIDC token, so
+    # switching `publish-target` never requires touching the stub. A repo
+    # that does not publish grants nothing extra and this job never runs.
     steps:
+      # Needed for pyproject.toml (the tier check below) -- this job runs
+      # on its own runner and can't see the `version` job's checkout.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          # One-shot clone -- no reason to leave the token in its git config.
+          persist-credentials: false
+
+      - name: Checkout EmergentMatter/actions scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: EmergentMatter/actions
+          ref: ${{ needs.version.outputs.actions-ref }}
+          path: .em-actions
+
+      - name: Refuse a publish target this repo's licence tier does not allow
+        # Runs BEFORE any AWS credentials are assumed or anything uploads.
+        # See scripts/check_publish_tier.py's module docstring for the
+        # full open/closed/no-tier decision table.
+        run: |
+          python3 ".em-actions/scripts/check_publish_tier.py" \
+            --target "${{ inputs.publish-target }}"
+
+      - name: Read the package name
+        # Needed by publish_static_index.py (below) for its S3 prefix and
+        # index page title. Read here rather than threaded through the
+        # `version` job's outputs, since it's a plain fact about the
+        # checkout this job already has, not something that job computed.
+        id: package
+        run: |
+          name=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate inputs for this publish target
+        env:
+          TARGET: ${{ inputs.publish-target }}
+          ROLE_ARN: ${{ inputs.aws-role-arn }}
+          BUCKET: ${{ inputs.static-index-bucket }}
+        run: |
+          set -euo pipefail
+          case "${TARGET}" in
+            static-index|codeartifact|both)
+              if [ -z "${ROLE_ARN}" ]; then
+                echo "::error::aws-role-arn is required for publish-target '${TARGET}'."
+                exit 1
+              fi
+              ;;
+          esac
+          case "${TARGET}" in
+            static-index|both)
+              if [ -z "${BUCKET}" ]; then
+                echo "::error::static-index-bucket is required for publish-target '${TARGET}'."
+                exit 1
+              fi
+              ;;
+          esac
+
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist
 
-      - name: Publish
+      - name: Publish to PyPI
+        if: inputs.publish-target == 'pypi'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
+
+      - name: Configure AWS credentials
+        # Shared by both AWS-backed targets below: one per-repo role covers
+        # S3 (static-index) and CodeArtifact alike.
+        if: >-
+          inputs.publish-target == 'static-index' ||
+          inputs.publish-target == 'codeartifact' ||
+          inputs.publish-target == 'both'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Publish to the static index
+        if: inputs.publish-target == 'static-index' || inputs.publish-target == 'both'
+        id: static-index
+        run: |
+          set -euo pipefail
+          python3 ".em-actions/scripts/publish_static_index.py" \
+            --bucket "${{ inputs.static-index-bucket }}" \
+            --package-name "${{ steps.package.outputs.name }}" \
+            --dist-dir dist >> "$GITHUB_OUTPUT"
+
+      - name: Invalidate the static index's CloudFront cache
+        if: >-
+          (inputs.publish-target == 'static-index' || inputs.publish-target == 'both') &&
+          inputs.static-index-distribution-id != ''
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ inputs.static-index-distribution-id }}" \
+            --paths "${{ steps.static-index.outputs.invalidation-path }}"
+
+      - name: Set up uv
+        if: inputs.publish-target == 'codeartifact' || inputs.publish-target == 'both'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ inputs.uv-version }}
+
+      - name: Publish to CodeArtifact
+        if: inputs.publish-target == 'codeartifact' || inputs.publish-target == 'both'
+        env:
+          DOMAIN: ${{ inputs.codeartifact-domain }}
+          DOMAIN_OWNER: ${{ inputs.codeartifact-domain-owner }}
+          REPOSITORY: ${{ inputs.codeartifact-repository }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          set -euo pipefail
+          endpoint=$(aws codeartifact get-repository-endpoint \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --repository "${REPOSITORY}" --format pypi --region "${REGION}" \
+            --query repositoryEndpoint --output text)
+          token=$(aws codeartifact get-authorization-token \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --region "${REGION}" --query authorizationToken --output text)
+          # Masked before it ever appears in a log line, including a
+          # failed command's own echoed argv.
+          echo "::add-mask::${token}"
+          UV_PUBLISH_USERNAME=aws UV_PUBLISH_PASSWORD="${token}" \
+            uv publish --publish-url "${endpoint}" dist/*

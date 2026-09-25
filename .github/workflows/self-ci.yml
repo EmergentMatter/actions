@@ -140,8 +140,12 @@ jobs:
               "SECURITY.md": "templates/SECURITY.md",
               "SUPPORT.md": "templates/SUPPORT.md",
               "CODE_OF_CONDUCT.md": "templates/CODE_OF_CONDUCT.md",
-              "LICENSE": "templates/LICENSE",
-              "NOTICE": "templates/NOTICE",
+              # This repo itself ships under Apache-2.0 -- the open tier -- so
+              # it tracks the open-tier templates, not the closed-tier ones.
+              # See templates/manifest.toml's `tier` column and CONTRACT.md's
+              # "Licence tier" section for what the two variants are.
+              "LICENSE": "templates/LICENSE-open",
+              "NOTICE": "templates/NOTICE-open",
               ".github/PULL_REQUEST_TEMPLATE.md": "templates/PULL_REQUEST_TEMPLATE.md",
           }
 

@@ -130,15 +130,63 @@ The policies mean opposite things:
   `fleet_status.py`'s drift check treats a difference there as a finding. `manifest.toml` is where
   each entry's policy is declared, and the only place that says which are which.
 
+An entry may also carry `tier = "open"` or `tier = "closed"`, optional and with no default: absent
+(the common case) means the entry applies to every repo regardless of licence tier; present scopes
+it to repos declaring that same tier. `LICENSE` and `NOTICE` are the only destinations that
+currently use it, two entries apiece sharing one `dest`, one per tier
+(`LICENSE-open`/`LICENSE-closed`, `NOTICE-open`/`NOTICE-closed`). `onboard.entries_for_tier()` is
+the one place that resolves a manifest against a repo's declared tier, shared by `onboard.py` and
+`sync.py` so the two can never disagree about which entry a given tier resolves to.
+
+## Licence tier
+
+`[tool.em-release] tier` in a consuming repo's own `pyproject.toml` is `"open"` (Apache-2.0) or
+`"closed"` (a proprietary notice). It has no default: `onboard.py --tier` is required, with no
+fallback value, because which licence a repo ships under is a decision only a human makes.
+
+- **`onboard.py`** requires `--tier`, writes it into `[tool.em-release]` alongside
+  `templates_version`, and resolves the manifest against it before copying anything -- so a fresh
+  onboarding installs exactly one of `LICENSE-open`/`LICENSE-closed` (and the matching `NOTICE-*`),
+  never both, never neither.
+- **`sync.py`** resolves the SAME manifest against the target repo's own declared tier (read fresh
+  from that repo's `pyproject.toml`, not passed in). A repo with **no** declared tier gets neither
+  the `LICENSE` nor the `NOTICE` entry synced at all -- reported as `no-tier`, not silently skipped
+  and not silently defaulted to either licence -- while every other managed entry in the same run
+  syncs normally. There is no correct default between the two licences to guess on a repo's behalf.
+- **Switching a repo's tier** (open to closed, or back) is not special-cased anywhere. The next
+  `sync.py` run simply resolves a DIFFERENT source for the same `dest`, and the existing three-way
+  compare handles the rest on its own: the file currently on disk was installed under the OLD tier,
+  so it was never synced from the NEW tier's template, and the comparison surfaces as an ordinary
+  difference (with no trustworthy base, or as a reported local edit) rather than an automatic swap.
+  See `onboard.entries_for_tier()`'s docstring for the full reasoning -- this is a deliberate
+  choice, not an unhandled case.
+- **`fleet_status.py`**'s `tier` check reports a repo that has been onboarded (has an
+  `[tool.em-release]` block at all) but never declared a tier, and separately flags a tier value
+  that is neither `"open"` nor `"closed"` as broken.
+- **The publish job** refuses a `publish-target` the tier disallows, before any credentials are
+  assumed or anything uploads -- see "Publishing to more than one index" above.
+
 ## Workflow `workflow_call` inputs (.github/workflows/)
 
 | Workflow | Inputs (all optional unless noted, with defaults) |
 |---|---|
-| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name |
-| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name |
+| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name, plus the publish-target inputs below |
+| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name, `actions-ref`=`v1`, plus the publish-target inputs below |
 
-`build-release.yml` takes **no `actions-ref`**, because it never checks out this repo's
-`scripts/`. The changelog check is not in this table: it is a composite action, not a
+Both workflows take the SAME publish-target inputs, kept in step for the same reason their
+build/release steps are (ADR 0002): `publish-target`=`pypi`, `aws-role-arn`=`""`,
+`aws-region`=`us-east-2`, `static-index-bucket`=`""`, `static-index-distribution-id`=`""`,
+`codeartifact-domain`=`em`, `codeartifact-domain-owner`=`967228661072`,
+`codeartifact-repository`=`em-platform`. See "Publishing to more than one index" below for what
+each does and the licence-tier guard that gates them.
+
+**`build-release.yml` now takes `actions-ref` too**, as of the publish-target inputs above. It
+previously took none, because it never checked out this repo's `scripts/` (CONTRACT.md used to say
+so, and the reasoning -- that a reusable `workflow_call` workflow cannot discover its own ref -- is
+unchanged; see "version.yml behaviour" below). Its publish job now needs
+`check_publish_tier.py` and `publish_static_index.py` for every `publish-target`, PyPI included (a
+closed-tier repo must be refused there too), so it resolves and checks itself out exactly the way
+`version.yml` does. The changelog check is not in this table: it is a composite action, not a
 `workflow_call` workflow. See "Composite action inputs" below.
 
 `version.yml`'s `environment` must be **non-empty**, whether or not that repo publishes. The
@@ -228,9 +276,107 @@ per-job grant. So a repo setting `publish: true` must **also** add `id-token: wr
 stub's `permissions:` block, or OIDC yields an empty token and publishing fails. It is not granted
 by default, because publishing is opt-in (S3) and an unused elevated permission is worth avoiding.
 
-Why the shared workflow's publish job declares no `permissions:` of its own, and why getting this
-wrong takes down every run in a repo rather than only its publish step, is a comment on that job
-in `.github/workflows/version.yml`.
+Why the shared workflow's publish job declares no `permissions:` of its own, and why `version.yml`
+itself declares no top-level `permissions:` key either, is a comment on that job in
+`.github/workflows/version.yml` and
+[ADR 0003](docs/adr/0003-the-publish-job-declares-no-permissions.md).
+
+The same `id-token: write` grant covers both kinds of OIDC token the publish job can mint: PyPI's
+trusted-publishing token and AWS's `AssumeRoleWithWebIdentity` token (see the next section). They
+are unrelated trust relationships, but the GitHub Actions permission that lets a job request
+either is the one permission, so switching `publish-target` never requires touching a stub's
+`permissions:` block.
+
+### Publishing to more than one index
+
+`publish-target` picks where `publish: true` sends a release, and defaults to `pypi` -- exactly
+what `publish: true` did before this input existed, so an existing consumer with no
+`publish-target` set is unaffected:
+
+| `publish-target` | Where it goes |
+|---|---|
+| `pypi` (default) | PyPI, over OIDC trusted publishing, unchanged from before this input existed |
+| `static-index` | This org's own PEP 503 index, an S3 bucket behind CloudFront |
+| `codeartifact` | AWS CodeArtifact -- reachable only with AWS credentials |
+| `both` | `static-index` AND `codeartifact` in the same run. Never combined with `pypi` |
+
+`static-index` and `codeartifact` (and so `both`) need `aws-role-arn`: the per-repo IAM role the
+publish job assumes over OIDC via `aws-actions/configure-aws-credentials`, using the SAME
+`id-token: write` grant `pypi` needs. One role covers both S3 and CodeArtifact for a given repo,
+because both live behind the one publish job. `static-index` (and `both`) additionally need
+`static-index-bucket`; both are validated before anything uploads, and an empty one is refused
+rather than silently skipped.
+
+**The licence-tier guard runs first, before AWS credentials are ever assumed and before PyPI is
+ever reached.** `scripts/check_publish_tier.py` reads `[tool.em-release] tier` from the consumer's
+own `pyproject.toml` (see "Licence tier" below) and refuses:
+
+- Every `publish-target` reaching a PUBLIC index (`pypi`, `static-index`, `both`) for a `closed`-tier
+  repo. Only `codeartifact` (sign-in required to even read it) is allowed.
+- Every AWS-backed `publish-target` (`static-index`, `codeartifact`, `both`) for a repo with NO
+  declared tier at all, because those need a role scoped to a specific tier and there is no correct
+  default to assume. A repo with no tier keeps `pypi`, unaffected -- the one publish path that
+  existed before licence tiers did.
+
+**Static index.** `scripts/publish_static_index.py` uploads the release's wheel/sdist to
+`downloads/<normalized-package-name>/` in `static-index-bucket`, refusing (never silently
+overwriting, and never trusting an unverified match) a filename already there with different
+content, or with no recorded sha256 metadata at all -- a published wheel/sdist is immutable, and
+an object this script never uploaded is not a safe retry just because a key with that name exists.
+It then regenerates `simple/<package>/index.html` from that prefix's own listing merged with this
+release's new files, using `scripts/generate_index_page.py` for the actual PEP 503 page (one
+`<a href>` per file, each a RELATIVE path back to `../../downloads/<package>/<filename>` -- a bare
+filename resolves against the page's own directory, `simple/<package>/`, and 404s -- normalized per
+PEP 503, a `#sha256=` fragment on every link, and `data-requires-python` when a wheel declares one). If `static-index-distribution-id` is set, the
+publish job invalidates `/simple/<package>/*` on CloudFront afterward; if it's empty, the page
+still uploads and nothing is invalidated. **The root `simple/index.html` is never written by this
+job**, by design: a per-repo role's `ListBucket` grant is scoped to its own
+`downloads/<package>/*` AND `simple/<package>/*` prefixes, never the bucket root or any other
+package's prefixes, and the root index aggregates across every package's prefix, which no single
+per-repo role can list. See "Rebuilding the root index" below for how that page is maintained
+instead.
+
+**CodeArtifact.** The publish job calls `aws codeartifact get-repository-endpoint` (`--format
+pypi`) and `aws codeartifact get-authorization-token` for `codeartifact-domain` /
+`codeartifact-domain-owner` / `codeartifact-repository`, masks the token with `::add-mask::` before
+it can appear in any log line, and runs `uv publish --publish-url <endpoint>` with the token in
+`UV_PUBLISH_PASSWORD`. No long-lived token, no secret: the authorization token is minted fresh,
+per run, from the OIDC-assumed role.
+
+### Rebuilding the root index
+
+`simple/index.html` (the index of indexes PEP 503 expects at the root) is never written by the
+publish job: it aggregates across every package's prefix, and every per-repo role's `ListBucket`
+grant is scoped to its own package's prefixes, never the bucket root or another package's. The
+downloads infrastructure (em-platform-infra) rebuilds this page automatically whenever a package's
+`simple/<package>/index.html` is written, so no repo or workflow here needs to do it.
+
+`publish_static_index.py --root` is the manual fallback, for an empty bucket or after a failed
+automatic rebuild:
+
+```bash
+publish_static_index.py --root --bucket <the downloads bucket name> \
+  --distribution-id <the CloudFront distribution id>
+```
+
+`--root` lists every `simple/<package>/` prefix in the bucket (`list_package_prefixes()`), rebuilds
+`simple/index.html` from that listing (`generate_index_page.py`'s `render_root_index()`, a plain
+list of package links with no hashes -- those live one level down, on each package's own page), and
+invalidates `/simple/*` on the given distribution. `--distribution-id` is optional: omit it to
+write the page without invalidating anything. Never invoked from a publish job; this is an
+operator-run command, the same category as `onboard.py`/`sync.py`/`fleet_status.py`.
+
+### Re-publishing a release means re-running the failed publish job, not `workflow_dispatch`
+
+A publish-enabled consumer's `environment` (`production` by convention) has a deployment branch
+policy restricting it to `main`. `build-release.yml`'s `workflow_dispatch` trigger and its
+human-pushed-tag trigger both run against a tag, not `main`, so a dispatched or tag-triggered run
+cannot pass that environment's branch policy when `publish: true` -- the job never starts, gated by
+the environment itself, regardless of anything this repo's workflows do. Re-publishing a release
+whose publish job failed means re-running that same, original `version.yml` run's failed job (from
+the Actions UI or `gh run rerun --failed`), which keeps the run's original `main` ref and so still
+satisfies the branch policy. `build-release.yml`'s non-automatic triggers remain useful for a
+tag-only rebuild with `publish: false`, which never touches the environment gate.
 
 ## Why the release is not tag-triggered
 

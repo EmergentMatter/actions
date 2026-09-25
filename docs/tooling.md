@@ -20,6 +20,11 @@ on macOS is older than that, so use `uv run python`).
 | [`fleet_status.py`](#fleet_statuspy) | routinely, to catch drift |
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly; the `verify-wheel` action calls it |
+| [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | manual fallback, for an empty bucket or after a failed automatic rebuild -- the downloads infrastructure rebuilds the root index automatically otherwise |
+
+`publish_static_index.py` is otherwise workflow-called (the publish job runs it per package, not a
+maintainer), so it isn't documented here beyond its `--root` mode -- see CONTRACT.md's and
+docs/onboarding.md's "Rebuilding the root index" for the full command.
 
 ---
 
@@ -31,10 +36,15 @@ Does the mechanical half of [onboarding](onboarding.md): every file
 `skip-changelog` label. Idempotent: run it twice and the second run
 reports what is already correct.
 
+`--tier open` or `--tier closed` is required, with no default -- see
+docs/onboarding.md, "Licence tier". It picks which of `templates/manifest.toml`'s
+tiered LICENSE/NOTICE entries this repo receives, and gets stamped into
+`[tool.em-release]` alongside `templates_version`.
+
 Start by asking what it would do:
 
 ```bash
-uv run python scripts/onboard.py --repo-path ../some-repo --dry-run
+uv run python scripts/onboard.py --repo-path ../some-repo --tier open --dry-run
 ```
 
 It stops and prints candidates rather than declaring `version_files`:
@@ -57,7 +67,7 @@ exactly this mistake.
 Then run it for real:
 
 ```bash
-uv run python scripts/onboard.py --repo-path ../some-repo \
+uv run python scripts/onboard.py --repo-path ../some-repo --tier open \
   --version-file src/pkg/__init__.py:__version__
 ```
 
@@ -128,6 +138,13 @@ sync.py --repo-path ../repo [--dry-run] [--ours|--theirs] [--only DEST] [--json]
 A `seed-once` entry is never touched: not updated, not reported as drift.
 The repo owns it from the moment `onboard.py` seeds it.
 
+A tiered entry (LICENSE and NOTICE today -- see `templates/manifest.toml`'s
+`tier` column) is resolved against the target repo's own `[tool.em-release]
+tier` first. A repo with no declared tier gets a `no-tier` result for that
+dest instead of a diff: `sync.py` never guesses which licence to install,
+the same "never silently pick a side" rule the three-way compare itself
+follows. Every other managed entry still syncs normally in the same run.
+
 Exit code follows the same convention as `lint_gate.py status`: 0 means done
 (nothing pending), 1 an error, 2 that at least one entry is still pending:
 a `--dry-run` or a skipped prompt both count, even if other entries in the
@@ -168,6 +185,7 @@ to see info findings without deciding they're worth a nonzero exit.
 | `stamp` | info / warn | the `templates_version` provenance stamp against this repo's newest release tag: `info` if there's no stamp at all (onboarded before it existed), `warn` if it names an unrecognised tag or is behind |
 | `security` | warn | `SECURITY.md` documents private vulnerability reporting but the repo has it turned off. Not applicable to private repos, which can't have the feature at all |
 | `tooling` | warn | `pyproject.toml` is missing `[tool.mypy]` or `[tool.pytest.ini_options]`; existence only, not exact content (see `templates/pyproject-snippet.toml`) |
+| `tier` | warn (broken if invalid) | `[tool.em-release]` has no `tier`, so `sync.py` leaves LICENSE/NOTICE untouched on this repo; `broken` if `tier` is set to something other than `open`/`closed` |
 | `pins` | warn | an action pinned to a version targeting Node 20 |
 | `ruff_config` | warn | `ruff-base.toml` is installed but inert: no `ruff.toml` extends it, or `pyproject.toml` still carries an inline `[tool.ruff]` section |
 | `ts_job` | info | a Bun package is present but `ci.yml` has no `ts:` job |

@@ -710,3 +710,149 @@ def test_read_template_at_returns_none_for_a_path_that_never_existed(actions_rep
 def test_read_template_at_reads_a_historical_tag(actions_repo):
     assert sync.read_template_at(actions_repo, "v1.0.0", "ROW2.md") == b"a\nb\nc\n"
     assert sync.read_template_at(actions_repo, "HEAD", "ROW2.md") == b"a\nb\nc\nd\n"
+
+
+# ------------------------------------------------------------------ licence tier
+
+
+def _make_tiered_actions_repo(tmp_path: Path) -> Path:
+    """A minimal actions repo whose manifest has one untiered entry
+    (PLAIN.md) and one dest (LICENSE) with two tiered entries -- the real
+    manifest's own shape for LICENSE/NOTICE, isolated from the larger
+    four-row fixture above so these tests aren't tangled up with it."""
+    repo = tmp_path / "tiered_actions"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+
+    templates = repo / "templates"
+    templates.mkdir()
+    (templates / "manifest.toml").write_text(
+        '[[template]]\nsource = "PLAIN.md"\ndest = "PLAIN.md"\npolicy = "managed"\n\n'
+        '[[template]]\nsource = "LICENSE-open"\ndest = "LICENSE"\npolicy = "managed"\n'
+        'tier = "open"\n\n'
+        '[[template]]\nsource = "LICENSE-closed"\ndest = "LICENSE"\npolicy = "managed"\n'
+        'tier = "closed"\n'
+    )
+    (templates / "PLAIN.md").write_text("plain\n")
+    (templates / "LICENSE-open").write_text("Apache-2.0 text\n")
+    (templates / "LICENSE-closed").write_text("Proprietary text\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "v1.0.0")
+    _git(repo, "tag", "v1.0.0")
+    _git(repo, "tag", "v1")
+    return repo
+
+
+@pytest.fixture
+def tiered_actions_repo(tmp_path, monkeypatch):
+    repo = _make_tiered_actions_repo(tmp_path)
+    monkeypatch.setattr(sync, "ACTIONS_REPO", repo)
+    monkeypatch.setattr(sync.onboard, "TEMPLATES", repo / "templates")
+    return repo
+
+
+def test_read_tier_returns_none_when_undeclared(tmp_path):
+    repo = _make_target_repo(tmp_path)
+    assert sync.read_tier(repo) is None
+
+
+def test_read_tier_returns_the_declared_value(tmp_path):
+    repo = _make_target_repo(tmp_path)
+    text = (
+        (repo / "pyproject.toml")
+        .read_text()
+        .replace("[tool.em-release]\n", '[tool.em-release]\ntier = "closed"\n')
+    )
+    (repo / "pyproject.toml").write_text(text)
+    assert sync.read_tier(repo) == "closed"
+
+
+def test_no_tier_repo_leaves_license_untouched_but_syncs_everything_else(
+    tiered_actions_repo, tmp_path
+):
+    """The one behaviour the Done-when checklist names explicitly: a repo
+    with no declared tier gets neither LICENSE variant, reported with a
+    reason, while its other managed entries sync normally in the same
+    run."""
+    repo = _make_target_repo(tmp_path)  # no tier declared
+    _seed(repo, "PLAIN.md", "plain\n")
+    results = sync.sync_repo(repo, tiered_actions_repo, dry_run=False, side=None, only=None)
+    by = by_dest(results)
+
+    assert by["LICENSE"].action == "no-tier"
+    assert "tier" in by["LICENSE"].detail
+    assert not (repo / "LICENSE").exists()
+
+    assert by["PLAIN.md"].action == "up-to-date"
+
+
+def test_open_tier_repo_resolves_the_open_license(tiered_actions_repo, tmp_path):
+    repo = _make_target_repo(tmp_path)
+    pyproject_text = (
+        (repo / "pyproject.toml")
+        .read_text()
+        .replace("[tool.em-release]\n", '[tool.em-release]\ntier = "open"\n')
+    )
+    (repo / "pyproject.toml").write_text(pyproject_text)
+    _seed(repo, "PLAIN.md", "plain\n")
+
+    results = sync.sync_repo(repo, tiered_actions_repo, dry_run=False, side="theirs", only=None)
+    by = by_dest(results)
+    assert by["LICENSE"].action == "updated"
+    assert (repo / "LICENSE").read_text() == "Apache-2.0 text\n"
+
+
+def test_closed_tier_repo_resolves_the_closed_license(tiered_actions_repo, tmp_path):
+    repo = _make_target_repo(tmp_path)
+    pyproject_text = (
+        (repo / "pyproject.toml")
+        .read_text()
+        .replace("[tool.em-release]\n", '[tool.em-release]\ntier = "closed"\n')
+    )
+    (repo / "pyproject.toml").write_text(pyproject_text)
+    _seed(repo, "PLAIN.md", "plain\n")
+
+    results = sync.sync_repo(repo, tiered_actions_repo, dry_run=False, side="theirs", only=None)
+    by = by_dest(results)
+    assert by["LICENSE"].action == "updated"
+    assert (repo / "LICENSE").read_text() == "Proprietary text\n"
+
+
+def test_no_tier_repo_only_license_reports_no_tier_without_raising(tiered_actions_repo, tmp_path):
+    """--only LICENSE on a no-tier repo must be a clean, explained skip,
+    not a "target not found" error -- LICENSE is a real, known dest, just
+    one this repo hasn't earned yet."""
+    repo = _make_target_repo(tmp_path)
+    results = sync.sync_repo(repo, tiered_actions_repo, dry_run=False, side=None, only=["LICENSE"])
+    assert len(results) == 1
+    assert results[0].action == "no-tier"
+
+
+def test_switching_tier_surfaces_as_an_undecided_difference_not_a_silent_swap(
+    tiered_actions_repo, tmp_path
+):
+    """A repo that already has the OPEN licence installed and then declares
+    tier = "closed" must not have its LICENSE silently overwritten: the
+    stamped base was recorded against the open source, so the closed
+    template reads as a difference with no trustworthy base -- exactly the
+    two-way "cannot tell stale from edited" path, never an automatic
+    swap. See onboard.entries_for_tier's docstring for why this is judged
+    a safe outcome rather than a gap."""
+    repo = _make_target_repo(tmp_path, stamp="v1.0.0")
+    (repo / "LICENSE").write_text("Apache-2.0 text\n")  # installed under the old, open tier
+    text = (
+        (repo / "pyproject.toml")
+        .read_text()
+        .replace("[tool.em-release]\n", '[tool.em-release]\ntier = "closed"\n')
+    )
+    (repo / "pyproject.toml").write_text(text)
+
+    result = sync.sync_repo(repo, tiered_actions_repo, dry_run=True, side=None, only=["LICENSE"])[0]
+    # The stamped base (LICENSE-closed at v1.0.0) is identical to HEAD's
+    # copy in this fixture, so this lands as "ours changed, theirs
+    # didn't" -- a local edit, reported and left alone. Either way the
+    # licence text already on disk must never be silently replaced.
+    assert result.action == "local-edit"
+    assert (repo / "LICENSE").read_text() == "Apache-2.0 text\n"

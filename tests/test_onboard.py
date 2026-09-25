@@ -280,7 +280,7 @@ def test_full_apply_never_produces_a_toml_file_with_a_duplicate_table(tmp_path):
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "p"\nversion = "1.0.0"\n\n[tool.mypy]\ndisallow_untyped_defs = true\n'
     )
-    plan = onboard.build_plan(repo, ["x:y"])
+    plan = onboard.build_plan(repo, ["x:y"], "open")
     onboard.apply_plan(plan, ["x:y"], "v1")
     data = tomllib.loads((repo / "pyproject.toml").read_text())
     assert data["tool"]["mypy"] == {"disallow_untyped_defs": True}
@@ -292,7 +292,7 @@ def test_plan_note_names_both_the_skipped_and_appended_sections(tmp_path):
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "p"\nversion = "1.0.0"\n\n[tool.mypy]\ndisallow_untyped_defs = true\n'
     )
-    plan = onboard.build_plan(repo, ["x:y"])
+    plan = onboard.build_plan(repo, ["x:y"], "open")
     note = next(a.note for a in plan.actions if a.target == "pyproject.toml")
     assert "mypy" in note and "already present" in note
     assert "towncrier" in note
@@ -340,8 +340,6 @@ def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files
         "SECURITY.md",
         "SUPPORT.md",
         "CODE_OF_CONDUCT.md",
-        "NOTICE",
-        "LICENSE",
         "CODEOWNERS",
         "dependabot.yml",
         "PULL_REQUEST_TEMPLATE.md",
@@ -353,6 +351,81 @@ def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files
         if (onboard.TEMPLATES / entry.source).is_file():
             continue
         assert entry.source in known_pending, f"unexpected missing template: {entry.source}"
+
+
+# ------------------------------------------------------------- licence tier
+
+
+def test_load_manifest_rejects_an_unknown_tier(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        '[[template]]\nsource = "a.md"\ndest = "A.md"\npolicy = "managed"\ntier = "premium"\n'
+    )
+    with pytest.raises(onboard.OnboardError, match="premium"):
+        onboard.load_manifest(manifest)
+
+
+def test_load_manifest_accepts_no_tier_and_both_valid_tiers(tmp_path):
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        '[[template]]\nsource = "a.md"\ndest = "A.md"\npolicy = "managed"\n\n'
+        '[[template]]\nsource = "b.md"\ndest = "B.md"\npolicy = "managed"\ntier = "open"\n\n'
+        '[[template]]\nsource = "c.md"\ndest = "C.md"\npolicy = "managed"\ntier = "closed"\n'
+    )
+    entries = onboard.load_manifest(manifest)
+    assert [e.tier for e in entries] == [None, "open", "closed"]
+
+
+def test_entries_for_tier_always_includes_untiered_entries():
+    untiered = onboard.TemplateEntry("a.md", "A.md", "managed")
+    tiered = onboard.TemplateEntry("b-open.md", "B.md", "managed", tier="open")
+    manifest = [untiered, tiered]
+    assert onboard.entries_for_tier(manifest, "open") == [untiered, tiered]
+    assert onboard.entries_for_tier(manifest, "closed") == [untiered]
+    assert onboard.entries_for_tier(manifest, None) == [untiered]
+
+
+def test_entries_for_tier_resolves_the_real_license_and_notice_entries():
+    """The real manifest, not a fixture: exactly one LICENSE and one NOTICE
+    entry survive for each declared tier, and NEITHER survives for a repo
+    with no declared tier -- there is no correct default between the two
+    licences to fall back to."""
+    manifest = onboard.load_manifest()
+
+    for tier in ("open", "closed"):
+        resolved = onboard.entries_for_tier(manifest, tier)
+        by_dest = {}
+        for e in resolved:
+            if e.dest in ("LICENSE", "NOTICE"):
+                assert e.dest not in by_dest, f"two entries resolved for {e.dest} under {tier!r}"
+                by_dest[e.dest] = e
+        assert by_dest["LICENSE"].source == f"LICENSE-{tier}"
+        assert by_dest["NOTICE"].source == f"NOTICE-{tier}"
+
+    resolved_no_tier = onboard.entries_for_tier(manifest, None)
+    assert {e.dest for e in resolved_no_tier} & {"LICENSE", "NOTICE"} == set()
+
+
+def test_build_plan_rejects_an_invalid_tier(tmp_path):
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
+    with pytest.raises(onboard.OnboardError, match="tier"):
+        onboard.build_plan(repo, ["x:y"], "premium")
+
+
+def test_render_config_block_stamps_the_declared_tier():
+    block = onboard.render_config_block(["x:y"], "v1.5.0", tier="closed")
+    assert 'tier = "closed"' in block
+
+
+def test_render_config_block_with_no_tier_omits_the_tier_line():
+    """A caller previewing the block before a tier is chosen (tier=None,
+    the default) gets no tier line at all, rather than a fabricated one --
+    onboard.py's own CLI never calls this without a tier in practice,
+    since --tier has no default."""
+    block = onboard.render_config_block(["x:y"], "v1.5.0")
+    assert "tier =" not in block
 
 
 # ----------------------------------------------------- current_templates_version
@@ -476,7 +549,7 @@ def test_build_and_apply_plan_uses_the_manifest_for_both_policies(tmp_path, monk
     (repo / ".git").mkdir()
     (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
 
-    plan = onboard.build_plan(repo, ["src/p/__init__.py:__version__"])
+    plan = onboard.build_plan(repo, ["src/p/__init__.py:__version__"], "open")
     targets = {a.target for a in plan.actions if a.kind == "create"}
     assert "MANAGED.md" in targets
     assert ".github/workflows/ci.yml" in targets
@@ -500,10 +573,10 @@ def test_second_onboard_run_is_idempotent(tmp_path, monkeypatch):
     (repo / ".git").mkdir()
     (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
 
-    plan = onboard.build_plan(repo, ["x:y"])
+    plan = onboard.build_plan(repo, ["x:y"], "open")
     onboard.apply_plan(plan, ["x:y"], "v1")
 
-    plan2 = onboard.build_plan(repo, ["x:y"])
+    plan2 = onboard.build_plan(repo, ["x:y"], "open")
     kinds = {a.target: a.kind for a in plan2.actions}
     assert kinds["MANAGED.md"] == "skip"
     assert kinds["pyproject.toml"] == "skip"
@@ -609,8 +682,30 @@ def test_repo_visibility_returns_none_when_gh_fails(monkeypatch):
     assert onboard.repo_visibility("o/r") is None
 
 
+# --------------------------------------------------------------- CLI: --tier
+
+
+def test_main_requires_tier(tmp_path, capsys):
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
+    with pytest.raises(SystemExit) as exc_info:
+        onboard.main(["--repo-path", str(repo), "--dry-run"])
+    assert exc_info.value.code == 2
+    assert "--tier" in capsys.readouterr().err
+
+
+def test_main_rejects_an_unrecognized_tier(tmp_path, capsys):
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
+    with pytest.raises(SystemExit) as exc_info:
+        onboard.main(["--repo-path", str(repo), "--tier", "premium", "--dry-run"])
+    assert exc_info.value.code == 2
+
+
 def _blank_plan() -> onboard.Plan:
-    return onboard.Plan(repo_path=Path(), package_name="p", version="1.0.0")
+    return onboard.Plan(repo_path=Path(), package_name="p", version="1.0.0", tier="open")
 
 
 def test_print_next_steps_reminds_about_pvr_for_a_private_repo(capsys):

@@ -10,6 +10,16 @@
 #                            resolves or reports accordingly.
 #           "seed-once"  -- written once, at onboarding, if absent. Never
 #                            touched again, by onboard.py or sync.py.
+#   tier    optional. Absent (the common case) means the entry applies to
+#           every repo regardless of licence tier. "open" or "closed" scopes
+#           the entry to repos declaring that `[tool.em-release] tier` in
+#           their own pyproject.toml (see docs/onboarding.md, "Licence
+#           tier"). LICENSE and NOTICE are the only entries that currently
+#           use it: two entries per dest, one per tier, so the SAME dest can
+#           resolve to different source content depending on the target
+#           repo. A repo with no declared tier gets NEITHER entry for that
+#           dest -- see onboard.py's entries_for_tier() and sync.py's
+#           handling of a missing tier.
 
 [[template]]
 source = "scripts/em-dev.py"
@@ -67,14 +77,28 @@ dest   = "CODE_OF_CONDUCT.md"
 policy = "managed"
 
 [[template]]
-source = "NOTICE"
+source = "NOTICE-open"
 dest   = "NOTICE"
 policy = "managed"
+tier   = "open"
 
 [[template]]
-source = "LICENSE"
+source = "NOTICE-closed"
+dest   = "NOTICE"
+policy = "managed"
+tier   = "closed"
+
+[[template]]
+source = "LICENSE-open"
 dest   = "LICENSE"
 policy = "managed"
+tier   = "open"
+
+[[template]]
+source = "LICENSE-closed"
+dest   = "LICENSE"
+policy = "managed"
+tier   = "closed"
 
 [[template]]
 source = "CODEOWNERS"
