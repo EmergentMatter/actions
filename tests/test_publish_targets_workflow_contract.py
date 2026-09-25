@@ -123,6 +123,47 @@ def test_both_workflows_publish_jobs_declare_no_wider_permission_than_needed():
     assert "id-token: write" in perms_block
 
 
+def test_version_workflow_has_no_top_level_permissions_key():
+    """A top-level `permissions:` key in version.yml -- even `{}` -- becomes
+    the ACTUAL grant for any job in the file with no permissions: block of
+    its own, in place of the caller's ceiling, not merely a floor a job
+    can still widen past. The publish job relies on that fall-through (see
+    the previous test: it declares no permissions: block at all), so a
+    top-level key here silently strips it back to nothing regardless of
+    what a publish-enabled consumer's stub grants.
+
+    Confirmed live in the beta rehearsal: with `permissions: {}` at the
+    top of this file, the publish job's first checkout step failed with
+    "Repository not found" on a private consumer, even though its stub
+    granted contents: write. Removing the top-level key was the fix,
+    not adding permissions to the job. See ADR 0003."""
+    text = _text(VERSION_WORKFLOW)
+    assert not re.search(r"^permissions:", text, re.MULTILINE), (
+        "version.yml must declare NO top-level permissions: key -- it would become the "
+        "publish job's actual grant instead of the caller's ceiling (ADR 0003)"
+    )
+
+
+def test_build_release_jobs_each_declare_their_own_permissions():
+    """build-release.yml keeps a top-level permissions: {} (unlike
+    version.yml), and that's only safe because BOTH of its jobs declare
+    their own explicit permissions: block, so neither ever falls through
+    to the top-level default. If a future job here omitted one, that `{}`
+    would silently become its grant instead of the caller's ceiling --
+    exactly the version.yml regression ADR 0003 documents."""
+    text = _text(BUILD_RELEASE_WORKFLOW)
+    release_job = text[text.index("\n  release:") : text.index("\n  publish:")]
+    publish_job = text[text.index("\n  publish:") :]
+    assert re.search(r"^    permissions:", release_job, re.MULTILINE), (
+        "release job has no job-level permissions: block -- it would silently fall "
+        "through to the top-level permissions: {}"
+    )
+    assert re.search(r"^    permissions:", publish_job, re.MULTILINE), (
+        "publish job has no job-level permissions: block -- it would silently fall "
+        "through to the top-level permissions: {}"
+    )
+
+
 # --------------------------------------------------------------------- version.yml
 
 

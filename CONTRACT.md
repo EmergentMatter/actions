@@ -276,9 +276,17 @@ per-job grant. So a repo setting `publish: true` must **also** add `id-token: wr
 stub's `permissions:` block, or OIDC yields an empty token and publishing fails. It is not granted
 by default, because publishing is opt-in (S3) and an unused elevated permission is worth avoiding.
 
-Why the shared workflow's publish job declares no `permissions:` of its own, and why getting this
-wrong takes down every run in a repo rather than only its publish step, is a comment on that job
-in `.github/workflows/version.yml`.
+That inheritance only works because `version.yml` itself declares no top-level `permissions:` key
+at all, not even `{}`. A workflow-level `permissions:` block, present at all, becomes the ACTUAL
+grant for any job in the file that declares no `permissions:` of its own -- in place of the
+caller's ceiling, not merely a floor the job can still widen past. This was the beta rehearsal's
+finding: a top-level `permissions: {}` left the publish job with no permissions whatsoever,
+regardless of the consumer stub's grant, and its first checkout step failed on a private repo.
+
+Why the shared workflow's publish job declares no `permissions:` of its own, why the file declares
+no top-level `permissions:` either, and why getting either wrong breaks a repo (one at parse time,
+the other silently at run time), is a comment on that job in `.github/workflows/version.yml` and
+[ADR 0003](docs/adr/0003-the-publish-job-declares-no-permissions.md).
 
 The same `id-token: write` grant covers both kinds of OIDC token the publish job can mint: PyPI's
 trusted-publishing token and AWS's `AssumeRoleWithWebIdentity` token (see the next section). They
