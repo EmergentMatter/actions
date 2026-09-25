@@ -330,18 +330,8 @@ on:
           public sibling3 falls back to `github.token`.
         required: false
 
-# NO top-level `permissions:` key here, and that absence is load-bearing --
-# see the long comment on the `publish:` job below and ADR 0003 for why. A
-# workflow-level `permissions:` block, even `{}`, becomes the ACTUAL grant
-# for any job in this file that declares no `permissions:` of its own; it
-# does not merely set a floor that a job can still widen by falling
-# through to the caller's ceiling. `publish:` relies on falling through to
-# the caller's ceiling (so it can mint an OIDC token without this file
-# ever asking for `id-token: write` itself), so this file must never
-# declare a top-level `permissions:` key, empty or not. Confirmed live: a
-# beta rehearsal with this key present (even `{}`) left the publish job
-# with NO permissions at all -- not the caller's grant -- and its first
-# checkout step failed with "Repository not found" on a private consumer.
+# NO top-level `permissions:` key here, ever, empty or not -- see the
+# `publish:` job's own comment below and ADR 0003 for why.
 
 concurrency:
   group: version-${{ github.repository }}
@@ -984,74 +974,43 @@ jobs:
     if: needs.version.outputs.is-release-commit == 'true' && inputs.publish
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    # ── Two DIFFERENT ways to break this job's permissions, both confirmed live ──
+    # ── This job's permissions: the canonical explanation (see ADR 0003) ──
     #
-    # NO `permissions:` block on this JOB, and no top-level `permissions:`
-    # anywhere in this FILE. Both absences are load-bearing, for two
-    # separate reasons, and this comment is the canonical account of the
-    # failure each one avoids; nothing else restates either.
+    # NO `permissions:` block on this job, and no top-level `permissions:`
+    # anywhere in this file. Both are required together; either one alone
+    # breaks a publish-enabled consumer, in two different ways:
     #
-    # (1) A JOB-LEVEL `permissions:` block here is a parse-time ceiling
-    # violation waiting to happen. A caller's `permissions:` on a
-    # `workflow_call` step is a CEILING for every job in the called
-    # workflow, not a per-job grant, and GitHub checks a called job's
-    # declared permissions against that ceiling when it PARSES the
-    # workflow, before any `if:` is evaluated. So a job asking for more
-    # than the caller granted does not degrade and does not merely fail
-    # when it runs: the whole workflow fails to load with
-    # `startup_failure`, no job runs at all, and the API returns no message
-    # saying why. The blast radius is every onboarded repo, on every push
-    # to `main`, whether or not it publishes anything -- a repo with
-    # `publish: false` has this job skipped by the `if:` above, but the
-    # parse happens first, so it breaks too. Confirmed live in an early
-    # rehearsal: every run of every consumer failed until a `permissions:
-    # { id-token: write }` block came OUT of this job.
+    # 1. A job-level `permissions:` block here is checked at PARSE time
+    #    against the caller's grant, before any `if:` runs. A request for
+    #    more than the caller granted does not degrade or fail only this
+    #    job: the whole workflow fails to load (`startup_failure`) for
+    #    every onboarded repo, on every push to `main`, whether or not it
+    #    publishes -- `publish: false` skips this job via `if:`, but the
+    #    parse happens first.
+    # 2. A top-level `permissions:` key in this file -- `{}` included --
+    #    becomes the ACTUAL grant for any job here with no block of its
+    #    own, in place of the caller's grant, not merely a floor a job can
+    #    still widen past. This job relies on having no block so it falls
+    #    through to the caller's grant; a top-level key defeats that
+    #    silently, at run time, for this job specifically.
     #
-    # `environment:` on the line above is validated at that same parse
-    # step, and broke the same way for the same reason: its input default
-    # was once the empty string, which is not a valid environment name, so
-    # every run of every consumer died at startup_failure regardless of the
-    # publish gate. That is why `environment:` is set unconditionally here
-    # rather than gated on `inputs.publish`, and why its input ships a
-    # non-empty default.
+    # `environment:` on the line above is validated at the same parse step
+    # as (1): its input default must stay non-empty, or every run of every
+    # consumer dies at `startup_failure` regardless of the publish gate.
+    # That is why `environment:` is set unconditionally rather than gated
+    # on `inputs.publish`.
     #
-    # (2) A TOP-LEVEL `permissions:` key anywhere in this file -- even
-    # `permissions: {}` -- is a DIFFERENT, later failure with the opposite
-    # shape: not a parse-time break, a silent one at run time. This job has
-    # no `permissions:` of its own on purpose, so it can inherit the
-    # consumer's stub grant without this file ever asking for
-    # `id-token: write` itself (see below for why that grant has to come
-    # from the stub, not from here). But a job with no `permissions:` block
-    # inherits the CALLER's ceiling only when this FILE also declares no
-    # top-level `permissions:`. The moment this file sets one -- `{}`
-    # included -- that becomes the ACTUAL grant for every job here that
-    # doesn't override it, in place of the caller's ceiling, not merely a
-    # floor the job can still widen by falling through. Confirmed live in
-    # the beta rehearsal: with a top-level `permissions: {}` present, this
-    # job's checkout of the consumer at the release tag failed with
-    # "Repository not found" on a private repo, because the token it
-    # actually received had `contents: none` -- not the `contents: write`
-    # the consumer's stub had granted the whole `version:` call. Removing
-    # the top-level key (not adding permissions to this job) was the fix.
-    # If you ever need a workflow-level default in this file for some
-    # OTHER reason, you cannot have one and keep this job's OIDC
-    # inheritance working -- there is no third option that gets both.
-    #
-    # The permission therefore has to come from the consumer's own stub. A
-    # repo enabling `publish: true` adds `id-token: write` to the
-    # `permissions:` block on its version.yml stub and creates a GitHub
-    # Environment named by the `environment` input with a PyPI trusted
-    # publisher (publish-target: pypi) or an AWS OIDC trust policy
-    # (publish-target: static-index / codeartifact / both) attached to it;
-    # this job inherits both, AND the `contents: write` /
-    # `pull-requests: write` the same stub grants the `version:` job, which
-    # is what lets this job's own checkout steps below succeed. The SAME
-    # `id-token: write` grant covers either kind of OIDC token -- PyPI's
-    # and AWS's trust relationships are unrelated, but the GitHub Actions
-    # permission that lets this job mint EITHER is the one permission, so a
-    # repo switching publish-target doesn't need to touch its stub's
-    # permissions block. A repo that does not publish grants nothing extra
-    # and this job never runs.
+    # The permission comes from the consumer's own stub: `publish: true`
+    # also adds `id-token: write` to the stub's `permissions:` block
+    # (alongside the `contents: write` / `pull-requests: write` it already
+    # grants the `version:` job, which is what lets this job's own
+    # checkout steps below succeed), and creates a GitHub Environment
+    # matching `environment:` with a PyPI trusted publisher
+    # (publish-target: pypi) or an AWS OIDC trust policy
+    # (publish-target: static-index / codeartifact / both) attached. The
+    # SAME `id-token: write` grant covers either kind of OIDC token, so
+    # switching `publish-target` never requires touching the stub. A repo
+    # that does not publish grants nothing extra and this job never runs.
     steps:
       # Needed for pyproject.toml (the tier check below) -- this job runs
       # on its own runner and can't see the `version` job's checkout.
@@ -1059,6 +1018,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.version.outputs.tag }}
+          # One-shot clone -- no reason to leave the token in its git config.
+          persist-credentials: false
 
       - name: Checkout EmergentMatter/actions scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

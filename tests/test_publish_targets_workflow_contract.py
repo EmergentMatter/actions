@@ -104,18 +104,11 @@ def test_both_workflows_mask_the_codeartifact_token():
         assert "::add-mask::" in following
 
 
-def test_both_workflows_publish_jobs_declare_no_wider_permission_than_needed():
-    """version.yml's publish job keeps declaring NO permissions: block at
-    all (ADR 0003); build-release.yml's keeps declaring exactly
-    id-token: write plus the new contents: read for its two new checkout
-    steps -- neither gets WIDER than what a publish-enabled consumer's
-    stub already grants."""
-    version_text = _text(VERSION_WORKFLOW)
-    publish_job = version_text[version_text.index("\n  publish:") :]
-    # A real job-level `permissions:` key, not the word inside a comment
-    # line explaining why it's absent.
-    assert not re.search(r"^ {4}permissions:", publish_job, re.MULTILINE)
-
+def test_build_release_publish_job_declares_exactly_what_it_needs():
+    """build-release.yml's publish job declares its own permissions: block
+    (unlike version.yml's, see the tests below) -- exactly id-token: write
+    plus contents: read for its two checkouts, no wider than what its
+    stub's unconditional grant covers."""
     build_release_text = _text(BUILD_RELEASE_WORKFLOW)
     publish_job = build_release_text[build_release_text.index("\n  publish:") :]
     perms_block = publish_job[publish_job.index("permissions:") : publish_job.index("steps:")]
@@ -123,45 +116,59 @@ def test_both_workflows_publish_jobs_declare_no_wider_permission_than_needed():
     assert "id-token: write" in perms_block
 
 
-def test_version_workflow_has_no_top_level_permissions_key():
-    """A top-level `permissions:` key in version.yml -- even `{}` -- becomes
-    the ACTUAL grant for any job in the file with no permissions: block of
-    its own, in place of the caller's ceiling, not merely a floor a job
-    can still widen past. The publish job relies on that fall-through (see
-    the previous test: it declares no permissions: block at all), so a
-    top-level key here silently strips it back to nothing regardless of
-    what a publish-enabled consumer's stub grants.
+def _job_names(workflow_text: str) -> list[str]:
+    jobs_section = workflow_text[workflow_text.index("\njobs:\n") :]
+    return re.findall(r"^  ([a-zA-Z0-9_-]+):\s*$", jobs_section, re.MULTILINE)
 
-    Confirmed live in the beta rehearsal: with `permissions: {}` at the
-    top of this file, the publish job's first checkout step failed with
-    "Repository not found" on a private consumer, even though its stub
-    granted contents: write. Removing the top-level key was the fix,
-    not adding permissions to the job. See ADR 0003."""
+
+def _job_block(workflow_text: str, job: str, all_jobs: list[str]) -> str:
+    start = workflow_text.index(f"\n  {job}:\n")
+    idx = all_jobs.index(job)
+    end = (
+        workflow_text.index(f"\n  {all_jobs[idx + 1]}:\n", start + 1)
+        if idx + 1 < len(all_jobs)
+        else len(workflow_text)
+    )
+    return workflow_text[start:end]
+
+
+def test_only_the_publish_job_lacks_its_own_permissions_block():
+    """publish is the one job meant to fall through to the caller's grant
+    (ADR 0003); every other job must declare its own block, so a newly
+    added job can't silently inherit the caller's full grant -- including
+    contents: write / pull-requests: write -- unnoticed."""
     text = _text(VERSION_WORKFLOW)
-    assert not re.search(r"^permissions:", text, re.MULTILINE), (
-        "version.yml must declare NO top-level permissions: key -- it would become the "
-        "publish job's actual grant instead of the caller's ceiling (ADR 0003)"
-    )
+    jobs = _job_names(text)
+    assert jobs, "could not find any jobs: in version.yml"
+    without_permissions = [
+        job
+        for job in jobs
+        if not re.search(r"^    permissions:", _job_block(text, job, jobs), re.MULTILINE)
+    ]
+    assert without_permissions == ["publish"]
 
 
-def test_build_release_jobs_each_declare_their_own_permissions():
-    """build-release.yml keeps a top-level permissions: {} (unlike
-    version.yml), and that's only safe because BOTH of its jobs declare
-    their own explicit permissions: block, so neither ever falls through
-    to the top-level default. If a future job here omitted one, that `{}`
-    would silently become its grant instead of the caller's ceiling --
-    exactly the version.yml regression ADR 0003 documents."""
+def test_no_build_release_job_lacks_its_own_permissions_block():
+    """build-release.yml keeps a top-level permissions: {}, which is only
+    safe as long as every job here declares its own block and none falls
+    through to it."""
     text = _text(BUILD_RELEASE_WORKFLOW)
-    release_job = text[text.index("\n  release:") : text.index("\n  publish:")]
-    publish_job = text[text.index("\n  publish:") :]
-    assert re.search(r"^    permissions:", release_job, re.MULTILINE), (
-        "release job has no job-level permissions: block -- it would silently fall "
-        "through to the top-level permissions: {}"
-    )
-    assert re.search(r"^    permissions:", publish_job, re.MULTILINE), (
-        "publish job has no job-level permissions: block -- it would silently fall "
-        "through to the top-level permissions: {}"
-    )
+    jobs = _job_names(text)
+    assert jobs, "could not find any jobs: in build-release.yml"
+    without_permissions = [
+        job
+        for job in jobs
+        if not re.search(r"^    permissions:", _job_block(text, job, jobs), re.MULTILINE)
+    ]
+    assert without_permissions == []
+
+
+def test_version_workflow_has_no_top_level_permissions_key():
+    """A top-level permissions: key -- even {} -- becomes the grant for any
+    job in the file with no block of its own, in place of the caller's
+    grant. See ADR 0003."""
+    text = _text(VERSION_WORKFLOW)
+    assert not re.search(r"^permissions:", text, re.MULTILINE)
 
 
 # --------------------------------------------------------------------- version.yml

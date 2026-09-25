@@ -234,6 +234,13 @@ jobs:
       # publish-enabled consumer's stub already grants (contents: write),
       # so this is a narrower request, not a wider one; see ADR 0003 for
       # why that direction matters and the other direction doesn't.
+      #
+      # Deliberately narrower than version.yml's publish job, which
+      # declares no permissions: block at all and instead inherits
+      # whatever the caller granted (see that job's own comment): this
+      # stub's `release:` step grants id-token: write unconditionally, not
+      # gated on publish: true, so this job can safely ask for exactly
+      # what it needs instead of relying on inheritance.
       contents: read
       id-token: write
     steps:
@@ -241,6 +248,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release.outputs.tag }}
+          # One-shot clone -- no reason to leave the token in its git config.
+          persist-credentials: false
 
       - name: Checkout EmergentMatter/actions scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

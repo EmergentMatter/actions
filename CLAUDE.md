@@ -130,21 +130,11 @@ form. See
   [ADR 0006](docs/adr/0006-no-stub-grants-secrets-to-a-shared-workflow.md)
   for the residual blast radius this does and does not close, and
   `docs/onboarding.md` for the explanation aimed at onboarders.
-- **Never add a `permissions:` or `environment:` value to the publish job in
-  `version.yml`, and never add a top-level `permissions:` key anywhere in
-  that file, without reading
+- **Never add a `permissions:` value to the publish job in `version.yml`,
+  and never add a top-level `permissions:` key anywhere in that file.**
+  See that job's own comment in `.github/workflows/version.yml` and
   [ADR 0003](docs/adr/0003-the-publish-job-declares-no-permissions.md)
-  first.** These are two DIFFERENT failure modes: a job-level value is
-  validated at parse time, before any `if:` runs, so getting it wrong
-  breaks every run for every onboarded repo with `startup_failure` and no
-  message via the API; a top-level `permissions:` key -- even `{}` --
-  fails silently at RUN time instead, by becoming the publish job's actual
-  grant in place of the caller's ceiling (confirmed live in the beta
-  rehearsal: it left the job with no permissions at all, and its checkout
-  of a private consumer failed with "Repository not found"). The comment
-  on that job in `.github/workflows/version.yml` carries both mechanisms
-  inline, and `docs/onboarding.md`'s "Publishing to a package index"
-  section gives it the prominence it earned.
+  for why.
 - **Every stub with an `actions-ref` input must set it to match the
   `@ref` it's pinned to** (`version.yml`'s stub, and, as of the
   publish-target inputs, `build-release.yml`'s too -- its publish job now
