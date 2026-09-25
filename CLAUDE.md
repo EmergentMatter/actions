@@ -140,13 +140,14 @@ form. See
   mechanism inline, and `docs/onboarding.md`'s "Publishing to a package
   index" section gives it the prominence it earned.
 - **Every stub with an `actions-ref` input must set it to match the
-  `@ref` it's pinned to** (`version.yml` and `changelog-check.yml`'s
-  stubs; `build-release.yml`'s doesn't take this input, since it never
-  checks out this repo's `scripts/`). There is no context field that
-  lets a reusable workflow discover its own ref: `github.workflow_ref`
-  resolves to the *caller's* ref and `github.job_workflow_sha` does not
-  exist, both confirmed live. An unresolvable ref is refused rather than
-  silently falling back to this repo's default branch.
+  `@ref` it's pinned to** (`version.yml`'s stub, and, as of the
+  publish-target inputs, `build-release.yml`'s too -- its publish job now
+  needs `check_publish_tier.py` / `publish_static_index.py` from this
+  repo). There is no context field that lets a reusable workflow discover
+  its own ref: `github.workflow_ref` resolves to the *caller's* ref and
+  `github.job_workflow_sha` does not exist, both confirmed live. An
+  unresolvable ref is refused rather than silently falling back to this
+  repo's default branch.
 - **A shared composite action for the build/release steps was tried and
   withdrawn, but not because it was proven broken.** The build/release
   steps are duplicated between `version.yml` and `build-release.yml` on

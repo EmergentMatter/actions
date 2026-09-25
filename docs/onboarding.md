@@ -32,6 +32,7 @@ it covers, not front-to-back.
 - [A third, doubly nested sibling](#a-third-doubly-nested-sibling)
 - [Publishing to a package index (optional)](#publishing-to-a-package-index-optional)
 - [The config block](#the-config-block)
+- [Licence tier](#licence-tier)
 - [Worked example: emergent-matter-sdm-materials](#worked-example-emergent-matter-sdm-materials)
 - [The label](#the-label)
 - [`changelog.d/`: nothing but notes and `.gitkeep`](#changelogd-nothing-but-notes-and-gitkeep)
@@ -46,14 +47,15 @@ it covers, not front-to-back.
 
 ## Quick path
 
-1. From a clone of this repo, dry-run `onboard.py` against yours:
+1. From a clone of this repo, dry-run `onboard.py` against yours (`--tier`
+   is required -- see [Licence tier](#licence-tier) below):
 
    ```bash
-   uv run python scripts/onboard.py --repo-path ../your-repo --dry-run
+   uv run python scripts/onboard.py --repo-path ../your-repo --tier open --dry-run
    ```
 
 2. It prints what it would do, then stops and asks you to decide one
-   thing: which version strings must move on every release. Re-run with
+   more thing: which version strings must move on every release. Re-run with
    `--version-file PATH:SYMBOL` for each one, this time for real with no
    `--dry-run`, and it writes everything, including the files below,
    the config block, and the `skip-changelog` label.
@@ -614,6 +616,47 @@ It's off by default on purpose: an unused elevated permission
 repo owner makes explicitly, not something that starts happening the
 first time a release PR merges.
 
+### Publishing somewhere other than PyPI
+
+`publish-target` picks the destination, and defaults to `pypi` -- exactly
+the behavior above, unchanged. The other values reuse the SAME
+`id-token: write` grant (PyPI's and AWS's OIDC trust relationships are
+unrelated, but the one GitHub Actions permission covers requesting either
+kind of token), so switching `publish-target` never means touching your
+stub's `permissions:` block again once it's there.
+
+| `publish-target` | Needs, beyond `id-token: write` |
+|---|---|
+| `pypi` (default) | A PyPI trusted publisher, as above |
+| `static-index` | `aws-role-arn`, `static-index-bucket`; `static-index-distribution-id` if you want CloudFront invalidated |
+| `codeartifact` | `aws-role-arn` only (the domain/owner/repository inputs default to the org's shared CodeArtifact instance) |
+| `both` | Everything `static-index` and `codeartifact` each need |
+
+```yaml
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      actions-ref: v1
+      publish: true
+      publish-target: static-index
+      aws-role-arn: arn:aws:iam::<account>:role/<per-repo publish role>
+      static-index-bucket: <the downloads bucket name>
+      static-index-distribution-id: <the CloudFront distribution id>
+    permissions: { contents: write, pull-requests: write, id-token: write }
+```
+
+**Your repo's [`tier`](#licence-tier) gates this before anything uploads.**
+A `closed`-tier repo is refused for every `publish-target` except
+`codeartifact` -- `pypi`, `static-index`, and `both` all reach a public
+index, and a closed-tier repo's whole point is that it doesn't. A repo
+with no declared `tier` at all keeps `pypi` (so a repo that predates
+licence tiers isn't broken by their arrival) but is refused every
+AWS-backed target, because those need a role scoped to a specific tier and
+there's no correct default to assume. The refusal happens before any AWS
+credentials are assumed or anything uploads, with a clear error naming
+which rule it hit.
+
 ## The config block
 
 One block, added to your existing `pyproject.toml`, copied from
@@ -629,6 +672,32 @@ came from. It's how `scripts/sync.py` later tells a stale copy of a template
 apart from one you've deliberately edited, so it can pull in later template
 changes without clobbering your edits. See [tooling.md](tooling.md) for how
 to run it.
+
+### Licence tier
+
+`onboard.py --tier open` or `--tier closed` is required, with no default:
+which licence a repo ships under is a decision only a human makes, and
+`onboard.py` writes it straight into `[tool.em-release] tier`. It decides
+which of `templates/manifest.toml`'s two `LICENSE`/`NOTICE` variants your
+repo receives (Apache-2.0 for `open`, a proprietary notice for `closed`),
+and it's the same field the publish job checks before letting a release
+reach a public index -- see "Publishing somewhere other than PyPI" above.
+
+A repo onboarded before licence tiers existed has no `tier` at all.
+`fleet_status.py` reports that (its `tier` check), and `sync.py` leaves
+your `LICENSE`/`NOTICE` untouched -- reported, not silently skipped --
+until you add one. Add it by hand, next to `templates_version`:
+
+```toml
+[tool.em-release]
+tier = "open"   # or "closed"
+templates_version = "v1.2.3"
+version_files = [
+  ...
+]
+```
+
+Then run `sync.py` once to pick up the matching `LICENSE`/`NOTICE`.
 
 That second section, `version_files`, is the part every repo gets
 slightly wrong the first time. See the worked example right below.

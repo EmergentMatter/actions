@@ -67,6 +67,23 @@ jobs:
       # See docs/onboarding.md, "A third, doubly nested sibling", for the
       # same chain written out in full (not commented-out) with its own
       # secrets: block.
+
+      # ── Publishing: DELETE this whole block unless this repo publishes
+      # releases to a package index. `publish: true` also needs
+      # `id-token: write` added to the permissions block below, and a
+      # GitHub Environment matching `environment:` (default `release`)
+      # with a trusted publisher (PyPI) or OIDC trust policy (AWS)
+      # attached -- see docs/onboarding.md, "Publishing to a package
+      # index", before flipping this on.
+      # publish: true
+      # publish-target: static-index   # | codeartifact | both | pypi (the default)
+      # aws-role-arn: arn:aws:iam::<account>:role/<per-repo publish role>
+      # static-index-bucket: <the downloads bucket name>
+      # static-index-distribution-id: <the CloudFront distribution id>
+      # A "closed"-tier repo (see [tool.em-release] tier in pyproject.toml)
+      # is refused for every target except `codeartifact` -- the publish
+      # job checks this before anything uploads, so there is nothing more
+      # to configure here for that case.
     permissions: { contents: write, pull-requests: write }
 
     # ── DELETE alongside the sibling-* inputs above if you aren't using them.

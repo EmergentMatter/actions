@@ -108,6 +108,19 @@ def read_stamp(repo: Path) -> str | None:
     return data.get("tool", {}).get("em-release", {}).get("templates_version")
 
 
+def read_tier(repo: Path) -> str | None:
+    """This repo's declared `[tool.em-release] tier`, or None if it has
+    never declared one -- either onboarded before licence tiers existed, or
+    onboarded with a version of onboard.py older than --tier. See
+    onboard.entries_for_tier() for what None means for LICENSE/NOTICE."""
+    p = repo / "pyproject.toml"
+    if not p.is_file():
+        raise SyncError(f"No pyproject.toml in {repo}.")
+    with p.open("rb") as f:
+        data = tomllib.load(f)
+    return data.get("tool", {}).get("em-release", {}).get("tier")
+
+
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -360,12 +373,41 @@ def sync_repo(
     repo: Path, actions_repo: Path, *, dry_run: bool, side: str | None, only: list[str] | None
 ) -> list[EntryResult]:
     """Run decide_and_apply() over every managed manifest entry (or just
-    `only`, if given), against the repo's recorded templates_version stamp."""
+    `only`, if given), against the repo's recorded templates_version stamp.
+
+    A tiered entry (see templates/manifest.toml's `tier` column -- today
+    that's LICENSE and NOTICE) is resolved through onboard.entries_for_tier()
+    against this repo's OWN declared tier first, exactly as onboard.py does
+    at onboarding time. A repo with no declared tier gets no entry for that
+    dest at all -- there is no correct default between the two licences to
+    silently pick -- and that omission is reported explicitly below (as
+    "no-tier"), not left as a silent no-op the way a genuinely irrelevant
+    dest would be.
+    """
     manifest = onboard.load_manifest()
-    entries = [e for e in manifest if e.policy == "managed"]
+    tier = read_tier(repo)
+    entries = [e for e in onboard.entries_for_tier(manifest, tier) if e.policy == "managed"]
+
+    results: list[EntryResult] = []
+    no_tier_dests: set[str] = set()
+    if tier is None:
+        # Every managed dest that HAS a tiered entry in the full manifest,
+        # but got filtered out above because this repo hasn't declared one.
+        no_tier_dests = {e.dest for e in manifest if e.policy == "managed" and e.tier is not None}
+        for dest in sorted(no_tier_dests):
+            if only is None or dest in only:
+                results.append(
+                    EntryResult(
+                        dest,
+                        "no-tier",
+                        "no [tool.em-release] tier declared -- left untouched; "
+                        'add tier = "open" or "closed" to sync it',
+                    )
+                )
+
     if only:
         wanted = set(only)
-        known = {e.dest for e in entries}
+        known = {e.dest for e in entries} | no_tier_dests
         missing = wanted - known
         if missing:
             raise SyncError(
@@ -375,10 +417,11 @@ def sync_repo(
         entries = [e for e in entries if e.dest in wanted]
 
     stamp = usable_stamp(read_stamp(repo))
-    return [
+    results += [
         decide_and_apply(repo, actions_repo, e, stamp=stamp, dry_run=dry_run, side=side)
         for e in entries
     ]
+    return results
 
 
 # --------------------------------------------------------------------- output
@@ -400,6 +443,7 @@ def print_results(repo: Path, results: list[EntryResult]) -> None:
             "diff-pending": " TODO",
             "conflict-pending": " TODO",
             "absent-pending": " MISS",
+            "no-tier": " skip",
             "error": "ERROR",
         }.get(r.action, r.action)
         print(f"  {mark}  {r.dest:<48} {r.action:<17} {r.detail}")

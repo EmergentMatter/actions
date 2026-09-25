@@ -34,6 +34,9 @@ Checks, per repo:
               promising a route it doesn't have. (Private repos: N/A.)
   tooling     pyproject.toml declares [tool.mypy] and
               [tool.pytest.ini_options] (existence only)
+  tier        pyproject.toml declares [tool.em-release] tier as "open" or
+              "closed". Missing on an onboarded repo means LICENSE/NOTICE
+              are not kept in sync by sync.py -- see templates/manifest.toml
   ruff_config ruff-base.toml present with no ruff.toml to `extend` it, or
               pyproject.toml still has an inline [tool.ruff] section
   ts_job      a `ui/bun.lock` exists but the `ts` job in ci.yml is still
@@ -495,6 +498,50 @@ def check_typecheck_gate(ci_text: str | None, contexts: list[str] | None) -> lis
     return _check_staged_job_gate("typecheck", "typecheck_gate", ci_text, contexts)
 
 
+_VALID_TIERS = {"open", "closed"}
+
+
+def check_tier(pyproject_text: str | None) -> list[Finding]:
+    """`[tool.em-release] tier` is declared and one of "open" / "closed".
+
+    Introduced alongside LICENSE/NOTICE's tiered manifest entries (see
+    templates/manifest.toml and onboard.entries_for_tier()): a repo with no
+    declared tier gets neither file kept in sync by sync.py, silently, from
+    that repo's point of view -- there is no correct default to pick
+    between the two licences. This is the check that surfaces it instead
+    of leaving it to be discovered the next time someone runs sync.py by
+    hand and reads its "no-tier" report.
+    """
+    if pyproject_text is None:
+        return []  # check_pyproject_tooling already reports the missing file
+    try:
+        data = tomllib.loads(pyproject_text)
+    except tomllib.TOMLDecodeError:
+        return []  # check_pyproject_tooling already reports the parse failure
+    tier = data.get("tool", {}).get("em-release", {})
+    if "em-release" not in data.get("tool", {}):
+        return []  # not onboarded at all; every other check already covers that
+    tier_value = tier.get("tier")
+    if tier_value is None:
+        return [
+            Finding(
+                "tier",
+                "warn",
+                "no [tool.em-release] tier declared -- LICENSE/NOTICE are not kept in "
+                "sync until one is added ('open' or 'closed')",
+            )
+        ]
+    if tier_value not in _VALID_TIERS:
+        return [
+            Finding(
+                "tier",
+                "broken",
+                f"[tool.em-release] tier is {tier_value!r}, not 'open' or 'closed'",
+            )
+        ]
+    return []
+
+
 def check_pyproject_tooling(pyproject_text: str | None) -> list[Finding]:
     """Check that pyproject.toml has [tool.mypy] and [tool.pytest.ini_options].
 
@@ -624,6 +671,7 @@ def evaluate(
         *check_templates_version(stamp, tags),
         *check_security_reporting(security_text, pvr_status),
         *check_pyproject_tooling(pyproject_text),
+        *check_tier(pyproject_text),
         *check_ruff_config_adoption(
             dest_texts.get(RUFF_BASE_FILE) is not None, ruff_toml_present, pyproject_text
         ),

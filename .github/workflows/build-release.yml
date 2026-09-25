@@ -35,10 +35,28 @@ name: Build & Release
 # wheel/sdist glob. version.yml's own inline build/release steps had the
 # identical gap and got the identical fix in the same change -- "keep the
 # two copies in step when either changes" (above) applies to this one too.
+#
+# actions-ref (below) is new as of the publish-target inputs: this workflow
+# previously never checked out its own scripts/ (see the KNOWN GAP comment
+# above -- true for the sibling-checkout machinery, still true for that).
+# Its publish job now needs check_publish_tier.py and
+# publish_static_index.py from THIS repo for every publish-target, PyPI
+# included (a closed-tier repo must be refused there too), so it resolves
+# and checks itself out exactly the way version.yml does. See that
+# workflow's "Validate the shared-workflow ref" step for the mechanism and
+# why an unresolvable ref is refused rather than silently defaulting.
 
 on:
   workflow_call:
     inputs:
+      actions-ref:
+        description: >-
+          Ref of EmergentMatter/actions to load scripts/ from, for the
+          publish job's tier check and static-index publish. MUST match the
+          @ref this workflow is pinned to in your stub, same rule as
+          version.yml's own actions-ref input.
+        type: string
+        default: v1
       python-version:
         description: Python version used to build the package.
         type: string
@@ -73,6 +91,34 @@ on:
         type: string
         default: release
 
+      # ── Publish target -- same shape as version.yml's own inputs; see
+      # that workflow for the full description of each. Kept in step
+      # deliberately (CONTRACT.md, "Publishing to more than one index").
+      publish-target:
+        type: string
+        default: pypi
+      aws-role-arn:
+        type: string
+        default: ""
+      aws-region:
+        type: string
+        default: us-east-2
+      static-index-bucket:
+        type: string
+        default: ""
+      static-index-distribution-id:
+        type: string
+        default: ""
+      codeartifact-domain:
+        type: string
+        default: em
+      codeartifact-domain-owner:
+        type: string
+        default: "967228661072"
+      codeartifact-repository:
+        type: string
+        default: em-platform
+
 permissions: {}
 
 jobs:
@@ -83,9 +129,35 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      actions-ref: ${{ steps.shared.outputs.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate the shared-workflow ref
+        # Same mechanism as version.yml's identical step -- see there for
+        # why job.workflow_sha is preferred and why an unresolvable ref is
+        # refused outright rather than silently defaulting to this repo's
+        # default branch. Needed here now only for the publish job's tier
+        # check and static-index publish (see the file header comment).
+        id: shared
+        env:
+          SHA: ${{ job.workflow_sha }}
+          REF: ${{ inputs.actions-ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved from job.workflow_sha: ${SHA}"
+            echo "ref=${SHA}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${REF:-}" ]]; then
+            echo "::notice::job.workflow_sha unavailable ('${SHA:-<empty>}'); falling back to actions-ref='${REF}'."
+            echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Cannot resolve the EmergentMatter/actions commit: job.workflow_sha"
+            echo "is empty and actions-ref is unset. Refusing to continue, because an empty"
+            echo "checkout ref silently means the default branch and would ignore your pin."
+            exit 1
+          fi
 
       - name: Resolve the tag being released
         # For a human tag push this is the triggering ref. For
@@ -156,16 +228,126 @@ jobs:
       # OIDC trusted publishing: no token, no long-lived secret. (S4)
       # A separate job purely so id-token: write (and any environment
       # required-reviewer gate) stays scoped to publishing, not the
-      # build/release steps above.
+      # build/release steps above. contents: read is new, for the two
+      # checkouts below (the consumer's own pyproject.toml, for the tier
+      # check, and this repo's scripts/) -- within the ceiling every
+      # publish-enabled consumer's stub already grants (contents: write),
+      # so this is a narrower request, not a wider one; see ADR 0003 for
+      # why that direction matters and the other direction doesn't.
+      contents: read
       id-token: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Checkout EmergentMatter/actions scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: EmergentMatter/actions
+          ref: ${{ needs.release.outputs.actions-ref }}
+          path: .em-actions
+
+      - name: Refuse a publish target this repo's licence tier does not allow
+        run: |
+          python3 ".em-actions/scripts/check_publish_tier.py" \
+            --target "${{ inputs.publish-target }}"
+
+      - name: Read the package name
+        id: package
+        run: |
+          name=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate inputs for this publish target
+        env:
+          TARGET: ${{ inputs.publish-target }}
+          ROLE_ARN: ${{ inputs.aws-role-arn }}
+          BUCKET: ${{ inputs.static-index-bucket }}
+        run: |
+          set -euo pipefail
+          case "${TARGET}" in
+            static-index|codeartifact|both)
+              if [ -z "${ROLE_ARN}" ]; then
+                echo "::error::aws-role-arn is required for publish-target '${TARGET}'."
+                exit 1
+              fi
+              ;;
+          esac
+          case "${TARGET}" in
+            static-index|both)
+              if [ -z "${BUCKET}" ]; then
+                echo "::error::static-index-bucket is required for publish-target '${TARGET}'."
+                exit 1
+              fi
+              ;;
+          esac
+
       - name: Download build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist
 
-      - name: Publish
+      - name: Publish to PyPI
+        if: inputs.publish-target == 'pypi'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist
+
+      - name: Configure AWS credentials
+        if: >-
+          inputs.publish-target == 'static-index' ||
+          inputs.publish-target == 'codeartifact' ||
+          inputs.publish-target == 'both'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Publish to the static index
+        if: inputs.publish-target == 'static-index' || inputs.publish-target == 'both'
+        id: static-index
+        run: |
+          set -euo pipefail
+          python3 ".em-actions/scripts/publish_static_index.py" \
+            --bucket "${{ inputs.static-index-bucket }}" \
+            --package-name "${{ steps.package.outputs.name }}" \
+            --dist-dir dist >> "$GITHUB_OUTPUT"
+
+      - name: Invalidate the static index's CloudFront cache
+        if: >-
+          (inputs.publish-target == 'static-index' || inputs.publish-target == 'both') &&
+          inputs.static-index-distribution-id != ''
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ inputs.static-index-distribution-id }}" \
+            --paths "${{ steps.static-index.outputs.invalidation-path }}"
+
+      - name: Set up uv
+        if: inputs.publish-target == 'codeartifact' || inputs.publish-target == 'both'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ inputs.uv-version }}
+
+      - name: Publish to CodeArtifact
+        if: inputs.publish-target == 'codeartifact' || inputs.publish-target == 'both'
+        env:
+          DOMAIN: ${{ inputs.codeartifact-domain }}
+          DOMAIN_OWNER: ${{ inputs.codeartifact-domain-owner }}
+          REPOSITORY: ${{ inputs.codeartifact-repository }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          set -euo pipefail
+          endpoint=$(aws codeartifact get-repository-endpoint \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --repository "${REPOSITORY}" --format pypi --region "${REGION}" \
+            --query repositoryEndpoint --output text)
+          token=$(aws codeartifact get-authorization-token \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --region "${REGION}" --query authorizationToken --output text)
+          echo "::add-mask::${token}"
+          UV_PUBLISH_USERNAME=aws UV_PUBLISH_PASSWORD="${token}" \
+            uv publish --publish-url "${endpoint}" dist/*

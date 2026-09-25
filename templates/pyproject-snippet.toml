@@ -48,7 +48,16 @@ showcontent = true
 # that *is* listed, because it is meant to track the package version in
 # lockstep, is in
 # https://github.com/EmergentMatter/actions/blob/main/docs/onboarding.md
+#
+# `tier` is this repo's licence tier ("open" or "closed"), required by
+# onboard.py's --tier flag and written here automatically. It picks which
+# LICENSE/NOTICE templates/manifest.toml resolves for this repo, and the
+# publish job in version.yml refuses a publish target the tier disallows
+# (see docs/onboarding.md, "Licence tier"). A repo with no tier at all gets
+# neither LICENSE nor NOTICE kept in sync -- declare one before removing
+# this line.
 [tool.em-release]
+tier = "open"  # or "closed" -- see above
 version_files = [
   "src/<package_name>/__init__.py:__version__",
 ]

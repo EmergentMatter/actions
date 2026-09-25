@@ -57,9 +57,12 @@ __all__ = [
     "OnboardError",
     "TemplateEntry",
     "load_manifest",
+    "entries_for_tier",
     "parse_point_release",
     "current_templates_version",
 ]
+
+_VALID_TIERS = {"open", "closed"}
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 CI_DEST = ".github/workflows/ci.yml"
@@ -89,6 +92,7 @@ class TemplateEntry:
     source: str  # relative to templates/
     dest: str  # relative to the target repo root
     policy: str  # "managed" | "seed-once"
+    tier: str | None = None  # None (every repo) | "open" | "closed"
 
 
 def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
@@ -100,14 +104,47 @@ def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
     with manifest_path.open("rb") as f:
         data = tomllib.load(f)
     entries = [
-        TemplateEntry(source=raw["source"], dest=raw["dest"], policy=raw["policy"])
+        TemplateEntry(
+            source=raw["source"], dest=raw["dest"], policy=raw["policy"], tier=raw.get("tier")
+        )
         for raw in data.get("template", [])
     ]
     bad = {e.policy for e in entries} - _VALID_POLICIES
     if bad:
         word = "policy" if len(bad) == 1 else "policies"
         raise OnboardError(f"manifest.toml: unknown {word} {sorted(bad)!r}")
+    bad_tiers = {e.tier for e in entries if e.tier is not None} - _VALID_TIERS
+    if bad_tiers:
+        word = "tier" if len(bad_tiers) == 1 else "tiers"
+        raise OnboardError(f"manifest.toml: unknown {word} {sorted(bad_tiers)!r}")
     return entries
+
+
+def entries_for_tier(manifest: list[TemplateEntry], tier: str | None) -> list[TemplateEntry]:
+    """The manifest entries that apply to a repo declaring `tier` (or no
+    tier at all).
+
+    An entry with no `tier` (the common case) applies to every repo. An
+    entry WITH a `tier` applies only when the target repo declares that
+    same tier -- so a repo with `tier=None` (never declared one, or hasn't
+    been onboarded with --tier yet) gets NONE of the tiered entries. That
+    is deliberate, not a gap: LICENSE and NOTICE currently have two tiered
+    entries apiece sharing one `dest`, one per tier, and there is no
+    correct default to fall back to between "grant the Apache licence" and
+    "grant the proprietary one" for a repo that hasn't told us which it is.
+    Silently picking one would ship a licence file nobody decided on.
+
+    Switching a repo's declared tier later (open -> closed or back) is not
+    special-cased here or in sync.py. The next sync simply resolves a
+    DIFFERENT source for the same dest, so the existing three-way compare
+    (see sync.py's module docstring) already produces a safe outcome on its
+    own: the repo's currently-installed file, written under the OLD tier,
+    is compared against a template it was never synced from, so it reads
+    as a genuine difference and surfaces for `--theirs` or a human to
+    decide -- never a silent swap of licence text a repo may be relying on
+    for compliance.
+    """
+    return [e for e in manifest if e.tier is None or e.tier == tier]
 
 
 POINT_RELEASE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
@@ -177,6 +214,7 @@ class Plan:
     repo_path: Path
     package_name: str
     version: str
+    tier: str
     actions: list[Action] = field(default_factory=list)
     candidates: list[tuple[str, str]] = field(default_factory=list)
     manifest: list[TemplateEntry] = field(default_factory=list)
@@ -306,10 +344,15 @@ def insert_marker(text: str) -> str | None:
     return "\n".join(lines[:anchor] + block + lines[anchor:])
 
 
-def build_plan(repo: Path, declared: list[str]) -> Plan:
+def build_plan(repo: Path, declared: list[str], tier: str) -> Plan:
     """Work out everything onboarding a repo would do, without writing
     anything. `declared` is the `--version-file` values already on the
-    command line; an empty list means propose candidates instead."""
+    command line; an empty list means propose candidates instead. `tier`
+    is this repo's licence tier ("open" | "closed"), required -- see
+    entries_for_tier()."""
+    if tier not in _VALID_TIERS:
+        raise OnboardError(f"tier must be one of {sorted(_VALID_TIERS)!r}, got {tier!r}")
+
     data = read_pyproject(repo)
     project = data.get("project", {})
     name = project.get("name")
@@ -322,8 +365,8 @@ def build_plan(repo: Path, declared: list[str]) -> Plan:
             "so it must exist (set it to your current version)."
         )
 
-    plan = Plan(repo, name, version)
-    manifest = load_manifest()
+    plan = Plan(repo, name, version, tier)
+    manifest = entries_for_tier(load_manifest(), tier)
     plan.manifest = manifest
     try:
         ci_entry = next(e for e in manifest if e.dest == CI_DEST)
@@ -462,25 +505,37 @@ def missing_config_sections(pyproject_data: dict) -> set[str]:
 
 
 def render_config_block(
-    version_files: list[str], templates_version: str, missing: set[str] | None = None
+    version_files: list[str],
+    templates_version: str,
+    missing: set[str] | None = None,
+    tier: str | None = None,
 ) -> str:
     """Render only the sections absent from the target repo (see
     missing_config_sections). `missing=None` renders every section, for
-    callers that just want the full block (e.g. a standalone preview)."""
+    callers that just want the full block (e.g. a standalone preview).
+
+    `tier` ("open" | "closed") is stamped into `[tool.em-release]` right
+    alongside `templates_version`. It is required in practice -- main()
+    never calls this without one, since --tier has no default -- but stays
+    optional here so a caller previewing the block before a tier is chosen
+    still gets something renderable."""
     if missing is None:
         missing = set(SNIPPET_SECTIONS)
     sections = _split_snippet_sections((TEMPLATES / "pyproject-snippet.toml").read_text())
 
+    tier_line = f'tier = "{tier}"\n' if tier is not None else ""
     entries = "\n".join(f'  "{v}",' for v in version_files)
     em_release = re.sub(
         r"(?ms)^\[tool\.em-release\].*?^version_files\s*=\s*\[.*?^\]",
-        f'[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+        f"[tool.em-release]\n{tier_line}"
+        f'templates_version = "{templates_version}"\n'
         "version_files = [\n" + entries + "\n]",
         sections["em-release"],
     )
     if "[tool.em-release]" not in em_release:
         em_release += (
-            f'\n[tool.em-release]\ntemplates_version = "{templates_version}"\n'
+            f"\n[tool.em-release]\n{tier_line}"
+            f'templates_version = "{templates_version}"\n'
             "version_files = [\n" + entries + "\n]\n"
         )
     sections["em-release"] = em_release
@@ -513,7 +568,7 @@ def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> 
             existing = dest.read_text()
             sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
             block = render_config_block(
-                version_files, templates_version, plan.missing_config_sections
+                version_files, templates_version, plan.missing_config_sections, plan.tier
             )
             dest.write_text(existing + sep + block)
         elif action.target == CI_DEST:
@@ -619,6 +674,7 @@ def detect_slug(repo: Path) -> str | None:
 def print_plan(plan: Plan) -> None:
     print(f"repo:     {plan.repo_path}")
     print(f"package:  {plan.package_name} {plan.version}")
+    print(f"tier:     {plan.tier}")
     print()
     for a in plan.actions:
         mark = {"create": "create", "skip": "  ok ", "manual": " TODO"}[a.kind]
@@ -666,6 +722,17 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repo-path", required=True)
     ap.add_argument(
+        "--tier",
+        required=True,
+        choices=sorted(_VALID_TIERS),
+        help=(
+            "This repo's licence tier. No default -- a human decision, not a guess. "
+            "'closed' is for a repo distributed under a proprietary notice rather than "
+            "Apache-2.0. Written into [tool.em-release] and used to pick LICENSE/NOTICE "
+            "(templates/manifest.toml's tiered entries)."
+        ),
+    )
+    ap.add_argument(
         "--version-file",
         action="append",
         default=[],
@@ -686,7 +753,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     try:
-        plan = build_plan(repo, args.version_file)
+        plan = build_plan(repo, args.version_file, args.tier)
     except OnboardError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

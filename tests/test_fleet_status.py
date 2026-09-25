@@ -237,6 +237,41 @@ def test_unparseable_pyproject_is_flagged_not_crashed_on():
     assert severities(findings, "tooling") == ["warn"]
 
 
+# --------------------------------------------------------------- licence tier
+
+
+def test_onboarded_repo_with_no_tier_is_flagged():
+    text = '[tool.em-release]\ntemplates_version = "v1.0.0"\nversion_files = []\n'
+    findings = fleet_status.check_tier(text)
+    assert severities(findings, "tier") == ["warn"]
+    assert "tier" in messages(findings, "tier")
+
+
+def test_repo_with_a_valid_tier_is_clean():
+    for tier in ("open", "closed"):
+        text = f'[tool.em-release]\ntier = "{tier}"\n'
+        assert fleet_status.check_tier(text) == []
+
+
+def test_repo_with_an_invalid_tier_is_broken():
+    text = '[tool.em-release]\ntier = "premium"\n'
+    findings = fleet_status.check_tier(text)
+    assert severities(findings, "tier") == ["broken"]
+    assert "premium" in messages(findings, "tier")
+
+
+def test_never_onboarded_repo_has_no_tier_finding():
+    """No [tool.em-release] block at all means this check has nothing to
+    say -- every other check (workflow_call, stub, ...) already covers
+    "not onboarded"; this one isn't the place to repeat it."""
+    assert fleet_status.check_tier("[project]\nname = 'x'\n") == []
+
+
+def test_tier_check_does_not_crash_on_missing_or_unparseable_pyproject():
+    assert fleet_status.check_tier(None) == []
+    assert fleet_status.check_tier("this is not [ valid toml") == []
+
+
 # ------------------------------------------------------------- ruff config
 
 
