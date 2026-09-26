@@ -26,6 +26,12 @@ Two things this enforces that a plain `aws s3 cp` loop would not:
    new files with whatever generate_index_page.py's sha256 metadata says
    is already there -- never from a record of past runs, which nothing
    here keeps.
+3. **A `downloads/<package>/<version>/metadata.json` per release,
+   written from the wheel's own METADATA** (see write_metadata_file() and
+   CONTRACT.md's "metadata.json" section) -- always before the
+   `simple/<package>/index.html` write, because that write is what
+   triggers the downstream root-index Lambda, and the metadata has to
+   already exist by then.
 
 The root `simple/index.html` (the index of indexes) is deliberately never
 touched by this publish flow: that page aggregates across every package's
@@ -44,16 +50,23 @@ publish job. See regenerate_root_index_page() and docs/onboarding.md.
     # bucket or a failed automatic rebuild (see CONTRACT.md):
     publish_static_index.py --root --bucket downloads-em-prod-us-east-2 \\
         --distribution-id <distribution-id>
+
+    # The admin-run, one-off metadata.json backfill for versions published
+    # before that file existed (see CONTRACT.md and backfill_metadata()):
+    publish_static_index.py --backfill-metadata --dry-run \\
+        --bucket downloads-em-prod-us-east-2
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,10 +89,13 @@ __all__ = [
     "ExistingObject",
     "Runner",
     "sync_dist_files",
+    "write_metadata_file",
     "regenerate_index_page",
     "list_package_prefixes",
     "regenerate_root_index_page",
     "invalidate_cloudfront",
+    "download_file",
+    "backfill_metadata",
 ]
 
 # One HTTP-ish call to the `aws` CLI. Tests inject a fake in place of
@@ -244,6 +260,71 @@ def sync_dist_files(
     return uploaded
 
 
+def write_metadata_file(
+    run: Runner, bucket: str, package_name: str, wheel_path: Path, *, dry_run: bool = False
+) -> str:
+    """Upload `downloads/<package>/<version>/metadata.json` for one
+    release, from `wheel_path`'s own METADATA -- see
+    `gip.wheel_metadata_json()` for the fields, and CONTRACT.md's
+    "metadata.json" section for the contract this fulfils. `version`
+    comes from the METADATA itself, never a filename parse.
+
+    Same immutability rule as `sync_dist_files()`: a key already there
+    with different content is refused, never silently overwritten;
+    identical content (a retried run, or a version this backfill already
+    covered) uploads nothing again and is reported as such.
+
+    Callers in the ordinary publish flow (`main()` below) must run this
+    BEFORE `regenerate_index_page()`: that call's
+    `simple/<package>/index.html` write is what triggers the root-index
+    Lambda downstream, and this file has to already exist by the time
+    that fires.
+
+    Returns "uploaded", "skipped-identical", or ("would-upload" only with
+    `dry_run=True`, used by `backfill_metadata()` below) -- never prints
+    or invalidates CloudFront itself, the same division of concerns as
+    `upload_file()`.
+    """
+    normalized = gip.normalize_name(package_name)
+    try:
+        metadata = gip.wheel_metadata_json(wheel_path)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise PublishStaticIndexError(f"{wheel_path}: can't read METADATA: {exc}") from exc
+    version = metadata["version"]
+    content = json.dumps(metadata, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    sha256 = hashlib.sha256(content).hexdigest()
+    key = f"downloads/{normalized}/{version}/metadata.json"
+
+    existing = head_object(run, bucket, key)
+    if existing is not None:
+        if existing.sha256 is None or existing.sha256 != sha256:
+            raise PublishStaticIndexError(
+                f"s3://{bucket}/{key} already exists but its content does not match "
+                f"{wheel_path.name}'s metadata. A published version's metadata is immutable "
+                "-- refusing to overwrite it."
+            )
+        return "skipped-identical"
+
+    if dry_run:
+        return "would-upload"
+
+    with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as f:
+        f.write(content)
+        tmp_path = Path(f.name)
+    try:
+        upload_file(
+            run,
+            bucket,
+            key,
+            tmp_path,
+            content_type="application/json",
+            metadata=_metadata_dict(sha256, None),
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return "uploaded"
+
+
 def regenerate_index_page(
     run: Runner, bucket: str, package_name: str, new_files: list[gip.DistFile]
 ) -> str:
@@ -320,6 +401,51 @@ def list_package_prefixes(run: Runner, bucket: str) -> list[str]:
     return sorted(names)
 
 
+def download_file(run: Runner, bucket: str, key: str, dest: Path) -> None:
+    """Download `s3://{bucket}/{key}` to a local path -- the mirror of
+    `upload_file()`, used only by `backfill_metadata()` below. The
+    ordinary publish flow never reads a dist file back."""
+    p = run(["s3", "cp", f"s3://{bucket}/{key}", str(dest)])
+    if p.returncode != 0:
+        raise PublishStaticIndexError(f"download of s3://{bucket}/{key} failed: {p.stderr.strip()}")
+
+
+def backfill_metadata(run: Runner, bucket: str, *, dry_run: bool) -> list[tuple[str, str]]:
+    """For every package this bucket's static index currently serves,
+    download each wheel under `downloads/<package>/` and write its
+    `metadata.json` if it's missing -- a one-off catch-up for every
+    version published before that file existed (CONTRACT.md's "metadata.json
+    backfill"). Admin-run, the same category as `--root`: it needs to list
+    every package's `downloads/` prefix, which no per-repo publish role can
+    do (see `list_package_prefixes()`).
+
+    Reuses `write_metadata_file()`'s own immutability rule for every
+    wheel it finds: a version whose `metadata.json` is already there with
+    identical content is reported "skipped-identical", not re-uploaded;
+    one that's there with DIFFERENT content still raises -- that's a real
+    anomaly a backfill must surface, not paper over.
+
+    Returns `(key, status)` for every wheel considered, `status` one of
+    "uploaded", "skipped-identical", or ("would-upload" only with
+    `dry_run=True`). Nothing here talks to a terminal directly, so `main()`
+    below is what prints this.
+    """
+    results: list[tuple[str, str]] = []
+    for package_name in list_package_prefixes(run, bucket):
+        prefix = f"downloads/{package_name}/"
+        wheel_keys = [k for k in list_existing_keys(run, bucket, prefix) if k.endswith(".whl")]
+        for key in wheel_keys:
+            with tempfile.NamedTemporaryFile(suffix=".whl", delete=False) as f:
+                tmp_path = Path(f.name)
+            try:
+                download_file(run, bucket, key, tmp_path)
+                status = write_metadata_file(run, bucket, package_name, tmp_path, dry_run=dry_run)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            results.append((key, status))
+    return results
+
+
 def regenerate_root_index_page(run: Runner, bucket: str) -> str:
     """Rebuild and upload the root `simple/index.html` -- the PEP 503
     index-of-indexes, one link per package this bucket currently serves.
@@ -380,6 +506,22 @@ def main(argv: list[str]) -> int:
             "done by the calling workflow step, not this script."
         ),
     )
+    ap.add_argument(
+        "--backfill-metadata",
+        action="store_true",
+        help=(
+            "One-off: for every package already on this bucket's static index, download "
+            "each existing wheel and write downloads/<package>/<version>/metadata.json for "
+            "any version published before that file existed. Admin-run by hand, like --root "
+            "-- needs to list every package's downloads/ prefix, which no per-repo publish "
+            "role can do. --package-name and --dist-dir are ignored with this flag."
+        ),
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --backfill-metadata: report what would be written, upload nothing.",
+    )
     args = ap.parse_args(argv)
 
     if args.root:
@@ -396,8 +538,25 @@ def main(argv: list[str]) -> int:
             print("wrote simple/index.html (no --distribution-id given, nothing invalidated)")
         return 0
 
+    if args.backfill_metadata:
+        try:
+            results = backfill_metadata(run_aws, args.bucket, dry_run=args.dry_run)
+        except PublishStaticIndexError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        for key, status in results:
+            print(f"{status}: {key}")
+        uploaded = sum(1 for _, status in results if status in ("uploaded", "would-upload"))
+        skipped = sum(1 for _, status in results if status == "skipped-identical")
+        verb = "would write" if args.dry_run else "wrote"
+        print(f"{verb} {uploaded} metadata.json ({skipped} already present, {len(results)} total)")
+        return 0
+
     if not args.package_name:
-        print("error: --package-name is required unless --root is given", file=sys.stderr)
+        print(
+            "error: --package-name is required unless --root or --backfill-metadata is given",
+            file=sys.stderr,
+        )
         return 1
     if not args.dist_dir.is_dir():
         print(f"::error::no such directory: {args.dist_dir}", file=sys.stderr)
@@ -408,6 +567,16 @@ def main(argv: list[str]) -> int:
         if not new_files:
             print(f"::error::no wheel/sdist in {args.dist_dir}/", file=sys.stderr)
             return 1
+        wheel_file = next((f for f in new_files if f.filename.endswith(".whl")), None)
+        if wheel_file is None:
+            raise PublishStaticIndexError(
+                f"no wheel in {args.dist_dir}/ -- can't write metadata.json without one"
+            )
+        # Must run before regenerate_index_page(): its simple/<package>/index.html write
+        # triggers the root-index Lambda, and the metadata has to already exist by then.
+        write_metadata_file(
+            run_aws, args.bucket, args.package_name, args.dist_dir / wheel_file.filename
+        )
         invalidation_path = regenerate_index_page(
             run_aws, args.bucket, args.package_name, new_files
         )

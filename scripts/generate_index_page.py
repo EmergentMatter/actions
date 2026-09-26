@@ -32,6 +32,7 @@ hash correct" is a call to render_index() and sha256_of(), nothing more.
 from __future__ import annotations
 
 import argparse
+import email.message
 import email.parser
 import hashlib
 import html
@@ -40,6 +41,7 @@ import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "DistFile",
@@ -48,6 +50,8 @@ __all__ = [
     "render_root_index",
     "sha256_of",
     "requires_python_of",
+    "wheel_metadata",
+    "wheel_metadata_json",
 ]
 
 _DIST_SUFFIXES = (".whl", ".tar.gz")
@@ -81,28 +85,76 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+def wheel_metadata(wheel_path: Path) -> email.message.Message:
+    """Parse a wheel's `*.dist-info/METADATA` as an RFC 822-ish document --
+    the same shape `importlib.metadata` parses, hence reusing
+    `email.parser` rather than a bespoke line-scanner.
+
+    Raises `ValueError` if `wheel_path` has no such member (not a real
+    wheel), and lets a genuine zip/IO error propagate. Unlike
+    `requires_python_of()` below -- which tolerates exactly that, because
+    it may be handed an sdist -- every caller of this function has a real
+    wheel in hand, so a missing or corrupt METADATA is a real problem
+    worth stopping over, not a quiet fallback.
+    """
+    with zipfile.ZipFile(wheel_path) as zf:
+        metadata_name = next((n for n in zf.namelist() if n.endswith(".dist-info/METADATA")), None)
+        if metadata_name is None:
+            raise ValueError(f"{wheel_path}: no *.dist-info/METADATA member")
+        raw = zf.read(metadata_name).decode("utf-8", errors="replace")
+    return email.parser.Parser().parsestr(raw, headersonly=True)
+
+
 def requires_python_of(wheel_path: Path) -> str | None:
     """The wheel's `Requires-Python` metadata value, or None if it has
-    none (an sdist, or a wheel that never declared one).
-
-    A wheel is a zip whose `*.dist-info/METADATA` member is an RFC 822-ish
-    document -- the same shape `importlib.metadata` parses, hence reusing
-    `email.parser` rather than a bespoke line-scanner.
-    """
+    none (an sdist, or a wheel that never declared one)."""
     if wheel_path.suffix != ".whl":
         return None
     try:
-        with zipfile.ZipFile(wheel_path) as zf:
-            metadata_name = next(
-                (n for n in zf.namelist() if n.endswith(".dist-info/METADATA")), None
-            )
-            if metadata_name is None:
-                return None
-            raw = zf.read(metadata_name).decode("utf-8", errors="replace")
-    except (OSError, zipfile.BadZipFile):
+        message = wheel_metadata(wheel_path)
+    except (OSError, zipfile.BadZipFile, ValueError):
         return None
-    message = email.parser.Parser().parsestr(raw, headersonly=True)
     return message.get("Requires-Python")
+
+
+def wheel_metadata_json(wheel_path: Path) -> dict[str, Any]:
+    """The `metadata.json` contract's fields (downloads-page-plan.md's
+    "Contracts" section), read straight from `wheel_path`'s own METADATA:
+    `name`, `version`, `summary`, `license`, `requires_python`,
+    `project_urls`.
+
+    `license` prefers `License-Expression` (PEP 639; every package in
+    this org's fleet emits `Metadata-Version: 2.4`+ and this field, never
+    the classic `License`, once a `[project] license = "<SPDX expr>"`
+    string is used) over the classic `License` field, which only an older
+    wheel would carry -- never both in the same document.
+
+    `project_urls` collects every repeated `Project-URL` header (each one
+    "Label, URL" on the wire) into a `{label: url}` dict, `{}` when there
+    are none -- never omitted, matching the contract's JSON shape.
+
+    Raises `ValueError` if the METADATA has no `Name` or no `Version`:
+    both are required fields in every wheel this org has ever built, so
+    either missing means something is badly wrong with the build, not a
+    legitimately absent optional field the way `summary`/`license` can be.
+    """
+    message = wheel_metadata(wheel_path)
+    name = message.get("Name")
+    version = message.get("Version")
+    if not name or not version:
+        raise ValueError(f"{wheel_path}: METADATA has no Name and/or Version")
+    project_urls: dict[str, str] = {}
+    for entry in message.get_all("Project-URL") or []:
+        label, _, url = entry.partition(",")
+        project_urls[label.strip()] = url.strip()
+    return {
+        "name": name,
+        "version": version,
+        "summary": message.get("Summary"),
+        "license": message.get("License-Expression") or message.get("License"),
+        "requires_python": message.get("Requires-Python"),
+        "project_urls": project_urls,
+    }
 
 
 def render_index(package_name: str, files: list[DistFile]) -> str:

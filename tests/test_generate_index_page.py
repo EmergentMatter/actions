@@ -101,6 +101,98 @@ def test_requires_python_of_is_none_for_a_corrupt_wheel(tmp_path):
     assert gip.requires_python_of(wheel) is None
 
 
+# --------------------------------------------------------------- wheel_metadata
+
+
+def _write_wheel_metadata(path: Path, metadata: str) -> None:
+    """A minimal wheel carrying exactly the given METADATA text, for
+    tests that need control over fields _make_wheel() doesn't set."""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("pkg/__init__.py", "")
+        zf.writestr("pkg-1.0.0.dist-info/METADATA", metadata)
+
+
+def test_wheel_metadata_raises_when_theres_no_metadata_member(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as zf:
+        zf.writestr("pkg/__init__.py", "")
+    with pytest.raises(ValueError, match="no .*METADATA member"):
+        gip.wheel_metadata(wheel)
+
+
+# ---------------------------------------------------------- wheel_metadata_json
+
+
+def test_wheel_metadata_json_reads_every_contract_field(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(
+        wheel,
+        "Metadata-Version: 2.4\n"
+        "Name: pkg\n"
+        "Version: 1.0.0\n"
+        "Summary: A test package.\n"
+        "License-Expression: Apache-2.0\n"
+        "Requires-Python: >=3.13\n"
+        "Project-URL: Homepage, https://example.com\n"
+        "Project-URL: Issues, https://example.com/issues\n",
+    )
+    metadata = gip.wheel_metadata_json(wheel)
+    assert metadata == {
+        "name": "pkg",
+        "version": "1.0.0",
+        "summary": "A test package.",
+        "license": "Apache-2.0",
+        "requires_python": ">=3.13",
+        "project_urls": {
+            "Homepage": "https://example.com",
+            "Issues": "https://example.com/issues",
+        },
+    }
+
+
+def test_wheel_metadata_json_prefers_license_expression_over_classic_license(tmp_path):
+    """PEP 639: a wheel could in principle carry both during a transition;
+    License-Expression is the one every package in this org's fleet
+    actually emits, so it wins."""
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(
+        wheel,
+        "Metadata-Version: 2.4\nName: pkg\nVersion: 1.0.0\n"
+        "License: Apache Software License\nLicense-Expression: Apache-2.0\n",
+    )
+    assert gip.wheel_metadata_json(wheel)["license"] == "Apache-2.0"
+
+
+def test_wheel_metadata_json_falls_back_to_classic_license(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(wheel, "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0.0\nLicense: MIT\n")
+    assert gip.wheel_metadata_json(wheel)["license"] == "MIT"
+
+
+def test_wheel_metadata_json_nulls_every_absent_optional_field(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(wheel, "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0.0\n")
+    metadata = gip.wheel_metadata_json(wheel)
+    assert metadata["summary"] is None
+    assert metadata["license"] is None
+    assert metadata["requires_python"] is None
+    assert metadata["project_urls"] == {}
+
+
+def test_wheel_metadata_json_raises_without_a_name(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(wheel, "Metadata-Version: 2.1\nVersion: 1.0.0\n")
+    with pytest.raises(ValueError, match="Name and/or Version"):
+        gip.wheel_metadata_json(wheel)
+
+
+def test_wheel_metadata_json_raises_without_a_version(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(wheel, "Metadata-Version: 2.1\nName: pkg\n")
+    with pytest.raises(ValueError, match="Name and/or Version"):
+        gip.wheel_metadata_json(wheel)
+
+
 # ------------------------------------------------------------------ render_index
 
 
