@@ -363,12 +363,55 @@ package's prefixes, and the root index aggregates across every package's prefix,
 per-repo role can list. See "Rebuilding the root index" below for how that page is maintained
 instead.
 
+**Before that index-page write**, the same job writes
+`downloads/<package>/<version>/metadata.json` -- see "metadata.json" below.
+
 **CodeArtifact.** The publish job calls `aws codeartifact get-repository-endpoint` (`--format
 pypi`) and `aws codeartifact get-authorization-token` for `codeartifact-domain` /
 `codeartifact-domain-owner` / `codeartifact-repository`, masks the token with `::add-mask::` before
 it can appear in any log line, and runs `uv publish --publish-url <endpoint>` with the token in
 `UV_PUBLISH_PASSWORD`. No long-lived token, no secret: the authorization token is minted fresh,
 per run, from the OIDC-assumed role.
+
+### metadata.json
+
+Every static-index publish writes `downloads/<package>/<version>/metadata.json`, read straight
+from the release's own wheel (`scripts/generate_index_page.py`'s `wheel_metadata_json()`), never
+from a filename parse:
+
+```json
+{ "name": "emergent-matter-sdm-core", "version": "2.0.0", "summary": "...", "license": "Apache-2.0",
+  "requires_python": ">=3.13", "project_urls": {} }
+```
+
+`summary`, `license` and `requires_python` are `null` when the wheel's METADATA has no such field;
+`project_urls` is `{}` when it declares none -- never omitted, so a reader can rely on every key
+being present. `license` prefers the PEP 639 `License-Expression` field (`Metadata-Version: 2.4`+,
+what every package in this org's fleet emits) over the classic `License` field, which only an older
+wheel would carry.
+
+This upload happens BEFORE `simple/<package>/index.html` is written, in the same job, because that
+write is what triggers the downstream root-index Lambda (em-platform-infra) that reads this file --
+the metadata has to already exist by the time that fires.
+
+Same immutability rule as the wheel/sdist themselves: a key already there with different content is
+refused, never silently overwritten; identical content (a retried run) uploads nothing again.
+
+**Versions published before this file existed** get theirs from a one-off backfill, admin-run like
+`--root`:
+
+```bash
+publish_static_index.py --backfill-metadata [--dry-run] --bucket <the downloads bucket name>
+```
+
+For every package the bucket's static index already serves, this downloads each existing wheel
+under `downloads/<package>/` and writes its `metadata.json` if it's missing, reusing the exact same
+immutability rule -- a version whose file is already there with matching content is reported
+`skipped-identical`, not re-uploaded; one with DIFFERENT content still raises, since that is a real
+anomaly a backfill must surface, not paper over. `--dry-run` downloads and parses every wheel (a
+read, so this is safe) but writes nothing, reporting `would-upload` in place of `uploaded`. Like
+`--root`, this needs to list every package's `downloads/` prefix, which no per-repo publish role
+can do -- never invoked from a publish job.
 
 ### Rebuilding the root index
 

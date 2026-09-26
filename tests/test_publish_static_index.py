@@ -92,6 +92,14 @@ class FakeBucket:
             else:
                 response = {"Contents": [{"Key": k} for k in matching]}
             return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(response), stderr="")
+        if argv[:2] == ["s3", "cp"] and str(argv[2]).startswith("s3://"):
+            # download direction: s3 cp s3://bucket/<key> <local>
+            key = argv[2].split("/", 3)[-1]
+            obj = self.objects.get(key)
+            if obj is None or "content" not in obj:
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="Not Found")
+            Path(argv[3]).write_bytes(obj["content"])
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         if argv[:2] == ["s3", "cp"]:
             # argv: s3 cp <local> s3://bucket/<key> --content-type T [--metadata M]
             local_path = Path(argv[2])
@@ -124,21 +132,36 @@ class FakeBucket:
 def dist_dir(tmp_path):
     d = tmp_path / "dist"
     d.mkdir()
-    (d / "pkg-1.0.0-py3-none-any.whl").write_bytes(b"wheel bytes")
+    # A real wheel (valid METADATA), not just bytes with the right suffix:
+    # write_metadata_file() reads this one for real, the same way the
+    # actual publish job's dist/ always holds a real `uv build` wheel.
+    _make_wheel(d / "pkg-1.0.0-py3-none-any.whl", requires_python=">=3.13")
     (d / "pkg-1.0.0.tar.gz").write_bytes(b"sdist bytes")
     return d
 
 
-def _make_wheel(path: Path, *, requires_python: str) -> None:
+def _make_wheel(
+    path: Path,
+    *,
+    requires_python: str,
+    name: str = "pkg",
+    version: str = "1.0.0",
+    summary: str | None = None,
+    license_expression: str | None = None,
+) -> None:
     """A minimal, real wheel (a zip with a dist-info/METADATA member), the
-    same shape gip.requires_python_of() reads."""
+    same shape gip.requires_python_of() and gip.wheel_metadata_json() read."""
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("pkg/__init__.py", "__version__ = '1.0.0'\n")
+        zf.writestr(f"{name}/__init__.py", f"__version__ = {version!r}\n")
         metadata = (
-            "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0.0\n"
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
             f"Requires-Python: {requires_python}\n"
         )
-        zf.writestr("pkg-1.0.0.dist-info/METADATA", metadata)
+        if summary is not None:
+            metadata += f"Summary: {summary}\n"
+        if license_expression is not None:
+            metadata += f"License-Expression: {license_expression}\n"
+        zf.writestr(f"{name}-{version}.dist-info/METADATA", metadata)
 
 
 # ------------------------------------------------------------- sync_dist_files
@@ -217,6 +240,124 @@ def test_sync_dist_files_uploads_a_requires_python_containing_a_comma(tmp_path):
 
     stored = bucket.objects["downloads/pkg/pkg-1.0.0-py3-none-any.whl"]
     assert stored["metadata"]["requires-python"] == ">=3.10,<4"
+
+
+# ----------------------------------------------------------- write_metadata_file
+
+
+def test_write_metadata_file_uploads_from_the_wheels_own_metadata(tmp_path):
+    wheel = tmp_path / "pkg-2.0.0-py3-none-any.whl"
+    _make_wheel(
+        wheel,
+        requires_python=">=3.13",
+        version="2.0.0",
+        summary="A test package.",
+        license_expression="Apache-2.0",
+    )
+    bucket = FakeBucket()
+
+    status = psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+    assert status == "uploaded"
+    key = "downloads/pkg/2.0.0/metadata.json"
+    assert key in bucket.objects
+    content = json.loads(bucket.objects[key]["content"].decode())
+    assert content == {
+        "name": "pkg",
+        "version": "2.0.0",
+        "summary": "A test package.",
+        "license": "Apache-2.0",
+        "requires_python": ">=3.13",
+        "project_urls": {},
+    }
+    # Immutable like a wheel/sdist upload: sha256 recorded the same way.
+    assert "sha256" in bucket.objects[key]["metadata"]
+
+
+def test_write_metadata_file_normalizes_the_package_name_in_the_key(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    bucket = FakeBucket()
+    psi.write_metadata_file(bucket.run, "my-bucket", "Emergent_Matter.SDM-Core", wheel)
+    assert any(k.startswith("downloads/emergent-matter-sdm-core/") for k in bucket.objects)
+
+
+def test_write_metadata_file_keys_by_the_metadata_version_not_the_filename(tmp_path):
+    """The filename is untrusted for this purpose -- version comes only
+    from the wheel's own METADATA, the same way sha256 always does."""
+    wheel = tmp_path / "some-other-name.whl"
+    _make_wheel(wheel, requires_python=">=3.13", version="9.9.9")
+    bucket = FakeBucket()
+    psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+    assert "downloads/pkg/9.9.9/metadata.json" in bucket.objects
+
+
+def test_write_metadata_file_skips_identical_content_on_a_retried_run(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    bucket = FakeBucket()
+
+    first = psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+    calls_after_first = len(bucket.calls)
+    second = psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+    assert first == "uploaded"
+    assert second == "skipped-identical"
+    # Only a head-object check the second time -- no re-upload.
+    assert all(c[:2] == ["s3api", "head-object"] for c in bucket.calls[calls_after_first:])
+
+
+def test_write_metadata_file_refuses_mismatched_existing_content(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13", summary="Changed since the first publish.")
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/1.0.0/metadata.json", sha256="f" * 64)
+
+    with pytest.raises(psi.PublishStaticIndexError, match="immutable"):
+        psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+
+def test_write_metadata_file_refuses_an_existing_key_with_no_recorded_hash(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    bucket = FakeBucket()
+    bucket.objects["downloads/pkg/1.0.0/metadata.json"] = {"metadata": {}}
+
+    with pytest.raises(psi.PublishStaticIndexError, match="immutable"):
+        psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+
+def test_write_metadata_file_dry_run_reports_without_uploading(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    bucket = FakeBucket()
+
+    status = psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel, dry_run=True)
+
+    assert status == "would-upload"
+    assert "downloads/pkg/1.0.0/metadata.json" not in bucket.objects
+
+
+def test_write_metadata_file_dry_run_still_reports_identical_content_as_skipped(tmp_path):
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    bucket = FakeBucket()
+    psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+    status = psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel, dry_run=True)
+    assert status == "skipped-identical"
+
+
+def test_write_metadata_file_raises_a_clean_error_for_a_corrupt_wheel(tmp_path):
+    """A bad/unreadable wheel must fail loudly through
+    PublishStaticIndexError -- the one exception type main() catches and
+    reports with `::error::` -- not leak a raw zipfile/ValueError
+    traceback out of the publish job."""
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"not a zip file at all")
+    bucket = FakeBucket()
+    with pytest.raises(psi.PublishStaticIndexError, match="can't read METADATA"):
+        psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
 
 
 # --------------------------------------------------------- regenerate_index_page
@@ -312,6 +453,108 @@ def test_invalidate_cloudfront_raises_on_failure():
         psi.invalidate_cloudfront(failing_run, "EEXAMPLE1234567", "/simple/*")
 
 
+# --------------------------------------------------------------------- download_file
+
+
+def test_download_file_writes_the_objects_content(tmp_path):
+    bucket = FakeBucket()
+    bucket.objects["downloads/pkg/pkg-1.0.0-py3-none-any.whl"] = {
+        "metadata": {},
+        "content": b"wheel bytes",
+    }
+    dest = tmp_path / "downloaded.whl"
+
+    psi.download_file(bucket.run, "my-bucket", "downloads/pkg/pkg-1.0.0-py3-none-any.whl", dest)
+
+    assert dest.read_bytes() == b"wheel bytes"
+
+
+def test_download_file_raises_when_the_key_is_missing():
+    bucket = FakeBucket()
+    with pytest.raises(psi.PublishStaticIndexError, match="Not Found"):
+        psi.download_file(bucket.run, "my-bucket", "downloads/pkg/missing.whl", Path("/dev/null"))
+
+
+# ----------------------------------------------------------------- backfill_metadata
+
+
+def _upload_wheel(bucket: FakeBucket, package: str, wheel_path: Path) -> None:
+    """Puts a real wheel's bytes into the fake bucket at the same key
+    sync_dist_files() would have uploaded it to, without going through
+    the immutable-upload machinery -- backfill_metadata() only ever
+    reads downloads/, it never writes a dist file."""
+    key = f"downloads/{package}/{wheel_path.name}"
+    bucket.objects[key] = {"metadata": {"sha256": "x" * 64}, "content": wheel_path.read_bytes()}
+    # A package must also have a simple/<name>/ prefix for
+    # list_package_prefixes() to find it -- exactly how a real bucket
+    # never has one without the other, since a publish job writes both.
+    bucket.objects.setdefault(f"simple/{package}/index.html", {"metadata": {}, "content": b""})
+
+
+def test_backfill_metadata_writes_missing_metadata_for_every_wheel(tmp_path):
+    bucket = FakeBucket()
+    wheel_a = tmp_path / "pkg-a-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel_a, requires_python=">=3.13", name="pkg-a", version="1.0.0")
+    _upload_wheel(bucket, "pkg-a", wheel_a)
+    wheel_b = tmp_path / "pkg-b-2.0.0-py3-none-any.whl"
+    _make_wheel(wheel_b, requires_python=">=3.13", name="pkg-b", version="2.0.0")
+    _upload_wheel(bucket, "pkg-b", wheel_b)
+
+    results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
+
+    assert set(results) == {
+        ("downloads/pkg-a/pkg-a-1.0.0-py3-none-any.whl", "uploaded"),
+        ("downloads/pkg-b/pkg-b-2.0.0-py3-none-any.whl", "uploaded"),
+    }
+    assert "downloads/pkg-a/1.0.0/metadata.json" in bucket.objects
+    assert "downloads/pkg-b/2.0.0/metadata.json" in bucket.objects
+
+
+def test_backfill_metadata_skips_a_version_already_covered(tmp_path):
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13", version="1.0.0")
+    _upload_wheel(bucket, "pkg", wheel)
+    # Already backfilled (or published normally) for this version.
+    psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+    results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
+
+    assert results == [("downloads/pkg/pkg-1.0.0-py3-none-any.whl", "skipped-identical")]
+
+
+def test_backfill_metadata_dry_run_reports_without_uploading(tmp_path):
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    _upload_wheel(bucket, "pkg", wheel)
+
+    results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=True)
+
+    assert results == [("downloads/pkg/pkg-1.0.0-py3-none-any.whl", "would-upload")]
+    assert "downloads/pkg/1.0.0/metadata.json" not in bucket.objects
+
+
+def test_backfill_metadata_ignores_non_wheel_files(tmp_path):
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    _upload_wheel(bucket, "pkg", wheel)
+    bucket.objects["downloads/pkg/pkg-1.0.0.tar.gz"] = {
+        "metadata": {"sha256": "y" * 64},
+        "content": b"sdist bytes",
+    }
+
+    results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
+
+    assert len(results) == 1
+    assert results[0][0] == "downloads/pkg/pkg-1.0.0-py3-none-any.whl"
+
+
+def test_backfill_metadata_is_empty_for_a_bucket_with_no_packages():
+    assert psi.backfill_metadata(FakeBucket().run, "my-bucket", dry_run=False) == []
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -393,7 +636,22 @@ def test_main_end_to_end_against_the_fake_bucket(dist_dir, monkeypatch):
     rc = psi.main(["--bucket", "my-bucket", "--package-name", "pkg", "--dist-dir", str(dist_dir)])
     assert rc == 0
     assert "downloads/pkg/pkg-1.0.0-py3-none-any.whl" in bucket.objects
+    assert "downloads/pkg/1.0.0/metadata.json" in bucket.objects
     assert "simple/pkg/index.html" in bucket.objects
+
+
+def test_main_writes_metadata_json_before_the_index_page(dist_dir, monkeypatch):
+    """The plan's own ordering requirement: simple/<package>/index.html
+    triggers the root-index Lambda downstream, so metadata.json must
+    already be in the bucket by the time that write happens."""
+    bucket = FakeBucket()
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+    psi.main(["--bucket", "my-bucket", "--package-name", "pkg", "--dist-dir", str(dist_dir)])
+
+    upload_keys = [c[3].split("/", 3)[-1] for c in bucket.calls if c[:2] == ["s3", "cp"]]
+    assert upload_keys.index("downloads/pkg/1.0.0/metadata.json") < upload_keys.index(
+        "simple/pkg/index.html"
+    )
 
 
 def test_main_fails_loudly_on_an_empty_dist_dir(tmp_path, monkeypatch, capsys):
@@ -403,3 +661,50 @@ def test_main_fails_loudly_on_an_empty_dist_dir(tmp_path, monkeypatch, capsys):
     rc = psi.main(["--bucket", "my-bucket", "--package-name", "pkg", "--dist-dir", str(empty)])
     assert rc == 1
     assert "no wheel/sdist" in capsys.readouterr().err
+
+
+def test_main_fails_loudly_when_theres_no_wheel_to_read_metadata_from(
+    tmp_path, monkeypatch, capsys
+):
+    """An sdist-only dist/ (never a real path -- has-wheel:false + publish
+    refuses this earlier, in version.yml -- but this script shouldn't
+    silently skip metadata.json if it somehow gets here)."""
+    sdist_only = tmp_path / "dist"
+    sdist_only.mkdir()
+    (sdist_only / "pkg-1.0.0.tar.gz").write_bytes(b"sdist bytes")
+    monkeypatch.setattr(psi, "run_aws", FakeBucket().run)
+
+    rc = psi.main(["--bucket", "my-bucket", "--package-name", "pkg", "--dist-dir", str(sdist_only)])
+
+    assert rc == 1
+    assert "no wheel in" in capsys.readouterr().err
+
+
+def test_main_backfill_metadata_reports_and_writes(tmp_path, monkeypatch, capsys):
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    _upload_wheel(bucket, "pkg", wheel)
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    rc = psi.main(["--bucket", "my-bucket", "--backfill-metadata"])
+
+    assert rc == 0
+    assert "downloads/pkg/1.0.0/metadata.json" in bucket.objects
+    out = capsys.readouterr().out
+    assert "uploaded: downloads/pkg/pkg-1.0.0-py3-none-any.whl" in out
+    assert "wrote 1 metadata.json" in out
+
+
+def test_main_backfill_metadata_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13")
+    _upload_wheel(bucket, "pkg", wheel)
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    rc = psi.main(["--bucket", "my-bucket", "--backfill-metadata", "--dry-run"])
+
+    assert rc == 0
+    assert "downloads/pkg/1.0.0/metadata.json" not in bucket.objects
+    assert "would write 1 metadata.json" in capsys.readouterr().out
