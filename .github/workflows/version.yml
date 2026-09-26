@@ -177,6 +177,27 @@ on:
       codeartifact-repository:
         type: string
         default: em-platform
+      codeartifact-read-role-arn:
+        description: >-
+          Role to assume, over OIDC, for read-only access to CodeArtifact
+          before the version job relocks `uv.lock`. Needed only when a
+          consumer's `[tool.uv.sources]`/`[tool.uv.index]` point at a
+          CodeArtifact-hosted index for a package that isn't on the public
+          index; the relock step otherwise gets a 401 from that index.
+          Empty (the default) skips the sign-in step entirely, so this is
+          off by default for every existing consumer. The caller's job must
+          grant `id-token: write` for the assume-role call to succeed.
+        type: string
+        default: ""
+      codeartifact-read-index-name:
+        description: >-
+          The `name` of the `[[tool.uv.index]]` entry (in the consumer's
+          own `pyproject.toml`) that resolves to `codeartifact-repository`.
+          Used only to build the `UV_INDEX_<NAME>_USERNAME`/`_PASSWORD`
+          env var pair uv reads for that index; has no effect unless
+          `codeartifact-read-role-arn` is set.
+        type: string
+        default: em-codeartifact
 
       # ── Private sibling checkout ──────────────────────────────────────
       #
@@ -342,10 +363,16 @@ concurrency:
 jobs:
   version:
     name: Compute release / tag
+    # No permissions: block, on purpose: this job also has an opt-in
+    # CodeArtifact read sign-in (codeartifact-read-role-arn) that needs
+    # `id-token: write`, and a job-level permissions block here would be
+    # checked as a ceiling at parse time against whatever the calling job
+    # granted -- declaring one that includes id-token: write would break
+    # every consumer who doesn't grant it, whether or not they ever set
+    # that input. Falling through to the caller's own grant is what makes
+    # the new input additive. Same reasoning as the publish job's below;
+    # see ADR 0003.
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     outputs:
       is-release-commit: ${{ steps.detect.outputs.is-release-commit }}
       # Both consumed only by the publish job below, which runs on a
@@ -677,6 +704,39 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: ${{ inputs.uv-version }}
+
+      # ---------------------------------------------------------------
+      # Optional CodeArtifact read sign-in: off unless a consumer sets
+      # codeartifact-read-role-arn. Needed only when uv has to relock
+      # (below, `uv version --bump` / `uv lock`) against a package that
+      # is resolved from a CodeArtifact-hosted index rather than the
+      # public one. The caller's job must grant `id-token: write` for
+      # the assume-role call to succeed -- this job declares no
+      # `permissions:` of its own, so that grant comes through unchanged.
+      # ---------------------------------------------------------------
+      - name: Assume the read-only CodeArtifact role
+        if: inputs.codeartifact-read-role-arn != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.codeartifact-read-role-arn }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Authenticate uv to CodeArtifact
+        if: inputs.codeartifact-read-role-arn != ''
+        env:
+          DOMAIN: ${{ inputs.codeartifact-domain }}
+          DOMAIN_OWNER: ${{ inputs.codeartifact-domain-owner }}
+          REGION: ${{ inputs.aws-region }}
+          INDEX_NAME: ${{ inputs.codeartifact-read-index-name }}
+        run: |
+          set -euo pipefail
+          token=$(aws codeartifact get-authorization-token \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --region "${REGION}" --query authorizationToken --output text)
+          echo "::add-mask::${token}"
+          env_name=$(echo "${INDEX_NAME}" | tr '[:lower:]-' '[:upper:]_')
+          echo "UV_INDEX_${env_name}_USERNAME=aws" >> "$GITHUB_ENV"
+          echo "UV_INDEX_${env_name}_PASSWORD=${token}" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------
       # S1: is HEAD the commit a merge of the release PR just produced?

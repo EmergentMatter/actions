@@ -132,11 +132,13 @@ def _job_block(workflow_text: str, job: str, all_jobs: list[str]) -> str:
     return workflow_text[start:end]
 
 
-def test_only_the_publish_job_lacks_its_own_permissions_block():
-    """publish is the one job meant to fall through to the caller's grant
-    (ADR 0003); every other job must declare its own block, so a newly
-    added job can't silently inherit the caller's full grant -- including
-    contents: write / pull-requests: write -- unnoticed."""
+def test_only_version_and_publish_jobs_lack_their_own_permissions_block():
+    """version and publish are the two jobs meant to fall through to the
+    caller's grant (ADR 0003, extended to the version job for its own
+    opt-in CodeArtifact read sign-in); any other job must declare its own
+    block, so a newly added job can't silently inherit the caller's full
+    grant -- including contents: write / pull-requests: write / id-token:
+    write -- unnoticed."""
     text = _text(VERSION_WORKFLOW)
     jobs = _job_names(text)
     assert jobs, "could not find any jobs: in version.yml"
@@ -145,7 +147,7 @@ def test_only_the_publish_job_lacks_its_own_permissions_block():
         for job in jobs
         if not re.search(r"^    permissions:", _job_block(text, job, jobs), re.MULTILINE)
     ]
-    assert without_permissions == ["publish"]
+    assert without_permissions == ["version", "publish"]
 
 
 def test_no_build_release_job_lacks_its_own_permissions_block():
