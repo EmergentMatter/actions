@@ -32,9 +32,10 @@ def _string_input_default(text: str, name: str) -> str | None:
     only and every other workflow-shape test in this suite (see
     test_onboard.py's parse_ci) works the same way. Matches
     `      <name>:` followed, within the next few lines, by
-    `        default: "..."`.
+    `        default: "..."`. Quotes are optional -- some string defaults
+    (e.g. `codeartifact-domain: em`) aren't quoted in the workflow file.
     """
-    pattern = rf'^ {{6}}{re.escape(name)}:\n(?:.*\n)*? {{8}}default: "([^"]*)"'
+    pattern = rf'^ {{6}}{re.escape(name)}:\n(?:.*\n)*? {{8}}default: "?([^"\n]*)"?'
     match = re.search(pattern, text, re.MULTILINE)
     return match.group(1) if match else None
 
@@ -274,3 +275,74 @@ def test_inline_release_steps_are_gated_oppositely_on_has_wheel():
 def test_inline_publish_without_has_wheel_is_refused():
     text = _text(VERSION_WORKFLOW)
     assert "publish is true but has-wheel is false" in text
+
+
+# ----------------------------------------------------- CodeArtifact read role
+
+
+def test_codeartifact_read_inputs_exist_with_off_by_default_values():
+    """Both new inputs must default to something that leaves an existing
+    consumer's relock step unchanged: an empty role ARN skips the sign-in
+    entirely (CONTRACT.md's off-by-default rule), and the index-name
+    default matches the "em-codeartifact" name used across the fleet's own
+    pyproject.toml files, so a consumer only has to set the role ARN."""
+    text = _text(VERSION_WORKFLOW)
+    assert _string_input_default(text, "codeartifact-read-role-arn") == ""
+    assert _string_input_default(text, "codeartifact-read-index-name") == "em-codeartifact"
+
+
+def test_codeartifact_read_steps_are_gated_on_the_role_arn():
+    text = _text(VERSION_WORKFLOW)
+    for step_name in (
+        "Assume the read-only CodeArtifact role",
+        "Authenticate uv to CodeArtifact",
+    ):
+        idx = text.index(f"- name: {step_name}")
+        following = text[idx : idx + 300]
+        assert "if: inputs.codeartifact-read-role-arn != ''" in following, (
+            f"step {step_name!r} must be gated on inputs.codeartifact-read-role-arn"
+        )
+
+
+def test_codeartifact_read_sign_in_runs_after_setup_uv_and_before_release_detection():
+    """The sign-in has to land before the relock it exists for (`uv lock`
+    inside 'Compute next version', further down) but there's nothing for
+    it to authenticate until uv is set up -- and it costs nothing to run
+    it before the release-commit detection either, so it sits in that
+    one gap."""
+    text = _text(VERSION_WORKFLOW)
+    setup_uv_idx = text.index("- name: Set up uv")
+    sign_in_idx = text.index("- name: Assume the read-only CodeArtifact role")
+    detect_idx = text.index("- name: Detect release commit")
+    assert setup_uv_idx < sign_in_idx < detect_idx
+
+
+def test_codeartifact_read_token_is_masked():
+    text = _text(VERSION_WORKFLOW)
+    idx = text.index("- name: Authenticate uv to CodeArtifact")
+    following = text[idx : idx + 900]
+    assert "::add-mask::" in following
+
+
+def test_codeartifact_read_reuses_the_existing_domain_and_region_inputs():
+    """No new domain/owner/region input: the read sign-in authenticates to
+    the same CodeArtifact domain the publish job already uses, just with a
+    different (read-only) role."""
+    text = _text(VERSION_WORKFLOW)
+    idx = text.index("- name: Authenticate uv to CodeArtifact")
+    following = text[idx : idx + 900]
+    assert "${{ inputs.codeartifact-domain }}" in following
+    assert "${{ inputs.codeartifact-domain-owner }}" in following
+    assert "${{ inputs.aws-region }}" in following
+
+
+def test_version_job_declares_no_permissions_block():
+    """The version job used to declare contents: write / pull-requests:
+    write itself; it now falls through to the caller's grant instead, the
+    same way the publish job always has, so its opt-in id-token: write
+    (for the CodeArtifact read sign-in above) doesn't need a job-level
+    block that would exceed what non-adopting callers already grant. See
+    ADR 0003."""
+    text = _text(VERSION_WORKFLOW)
+    version_job = text[text.index("\n  version:") : text.index("\n  publish:")]
+    assert not re.search(r"^    permissions:", version_job, re.MULTILINE)

@@ -170,7 +170,7 @@ fallback value, because which licence a repo ships under is a decision only a hu
 
 | Workflow | Inputs (all optional unless noted, with defaults) |
 |---|---|
-| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name, plus the publish-target inputs below |
+| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name, `codeartifact-read-role-arn`=`""`, `codeartifact-read-index-name`=`em-codeartifact`, plus the publish-target inputs below |
 | `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name, `actions-ref`=`v1`, plus the publish-target inputs below |
 
 Both workflows take the SAME publish-target inputs, kept in step for the same reason their
@@ -268,6 +268,33 @@ without this input both workflows failed on the resulting empty wheel/sdist glob
 producing a tag-only GitHub Release. `publish: true` combined with `has-wheel: false` is refused
 outright (there is nothing to publish); both workflows validate this before ever reaching `uv
 build`.
+
+### CodeArtifact read role for relocking (optional)
+
+Step 3 above (`uv version --bump <level>` refreshing `uv.lock`) fails with a 401 for any
+consumer whose `[tool.uv.sources]`/`[[tool.uv.index]]` resolve a package from a
+CodeArtifact-hosted index rather than the public one -- `uv` has no credentials for that
+index in the bare runner environment. `codeartifact-read-role-arn` (default `""`, off) names
+a role the `version` job assumes over OIDC, right after "Set up uv" and before any of the
+release-detection or bump steps, to authenticate `uv` to that index for the rest of the job.
+
+- Unset (the default): the sign-in steps no-op via their own `if:`, and behaviour is
+  unchanged for every existing consumer.
+- Set: the job assumes `codeartifact-read-role-arn`, reusing the existing
+  `codeartifact-domain` / `codeartifact-domain-owner` / `aws-region` inputs (the same
+  CodeArtifact domain the publish job already talks to, just a different, read-only role),
+  masks the resulting token, and exports it as `UV_INDEX_<NAME>_USERNAME=aws` /
+  `UV_INDEX_<NAME>_PASSWORD=<token>` -- `uv`'s own per-index credential env vars, `<NAME>`
+  being `codeartifact-read-index-name` (default `em-codeartifact`) uppercased with `-` -> `_`
+  to match the consumer's own `[[tool.uv.index]] name` for that index.
+- The caller's job must grant `id-token: write` for the assume-role call to succeed, exactly
+  as for `publish: true` below -- and for the same reason, the `version` job declares no
+  `permissions:` block of its own, so this doesn't require a wider grant than a caller who
+  never sets the input already has. See [ADR 0003](docs/adr/0003-the-publish-job-declares-no-permissions.md),
+  now extended to the `version` job.
+- No GitHub Environment is required for this sign-in, unlike publishing: the role trusts the
+  calling repository directly, the same read-only role every repository's own CI already
+  assumes to install a closed-tier package.
 
 ### `publish: true` requires the consumer to grant `id-token: write`
 
