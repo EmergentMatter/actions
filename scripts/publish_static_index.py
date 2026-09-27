@@ -609,6 +609,13 @@ def fetch_changelog_at_tag(gh_run: Runner, owner: str, repo: str, version: str) 
     return the file's raw bytes directly, instead of a JSON envelope with
     the content base64-encoded inside it.
 
+    `--method GET` is required alongside `-f`: this endpoint is a GET,
+    but `gh api` defaults to POST the moment any `-f`/`-F` field is
+    given, sending `ref` in a request body a GET ignores entirely --
+    confirmed live, where this silently 404'd every version instead of
+    finding its tag. `--method GET` is what makes `gh api` put `-f`
+    fields in the query string instead.
+
     Returns `None` if the tag or the file doesn't exist there (a 404) --
     `backfill_notes()` below reports and skips that, per CONTRACT.md's
     rule, rather than treating it as a hard failure that stops the whole
@@ -617,6 +624,8 @@ def fetch_changelog_at_tag(gh_run: Runner, owner: str, repo: str, version: str) 
     p = gh_run(
         [
             "api",
+            "--method",
+            "GET",
             "-H",
             "Accept: application/vnd.github.raw+json",
             f"repos/{owner}/{repo}/contents/CHANGELOG.md",
