@@ -193,6 +193,36 @@ def test_wheel_metadata_json_raises_without_a_version(tmp_path):
         gip.wheel_metadata_json(wheel)
 
 
+def test_wheel_metadata_json_collapses_a_folded_summary(tmp_path):
+    """A long Summary can be an RFC 822 folded header -- a continuation
+    line, which email.parser keeps verbatim (embedded newline and leading
+    whitespace intact). That raw folding must never leak into the JSON
+    contract's summary field."""
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(
+        wheel,
+        "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0.0\n"
+        "Summary: A really long summary\n that wraps across\n multiple lines\n",
+    )
+    assert (
+        gip.wheel_metadata_json(wheel)["summary"]
+        == "A really long summary that wraps across multiple lines"
+    )
+
+
+def test_wheel_metadata_json_raises_on_a_project_url_with_no_comma(tmp_path):
+    """ "Label, URL" is the only shape a Project-URL header has -- one with
+    no comma can't be split into a label and a URL at all, so it must
+    raise rather than be stored as e.g. {"https://example.com": ""}."""
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _write_wheel_metadata(
+        wheel,
+        "Metadata-Version: 2.1\nName: pkg\nVersion: 1.0.0\nProject-URL: https://example.com\n",
+    )
+    with pytest.raises(ValueError, match="malformed Project-URL"):
+        gip.wheel_metadata_json(wheel)
+
+
 # ------------------------------------------------------------------ render_index
 
 

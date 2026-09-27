@@ -261,13 +261,28 @@ def sync_dist_files(
 
 
 def write_metadata_file(
-    run: Runner, bucket: str, package_name: str, wheel_path: Path, *, dry_run: bool = False
+    run: Runner,
+    bucket: str,
+    package_name: str,
+    wheel_path: Path,
+    *,
+    source: str | None = None,
+    dry_run: bool = False,
 ) -> str:
     """Upload `downloads/<package>/<version>/metadata.json` for one
     release, from `wheel_path`'s own METADATA -- see
     `gip.wheel_metadata_json()` for the fields, and CONTRACT.md's
     "metadata.json" section for the contract this fulfils. `version`
     comes from the METADATA itself, never a filename parse.
+
+    `source` is what error messages name as the origin of this METADATA --
+    defaults to `wheel_path` itself, which is exactly right for the
+    ordinary publish flow (`main()` below), where `wheel_path` is the real
+    `dist/<wheel>` being published. `backfill_metadata()` below passes the
+    ORIGINAL `downloads/<package>/<wheel>` S3 key instead, since there
+    `wheel_path` is a throwaway local tempfile a download landed in --
+    naming that in an error would point an operator at a path that no
+    longer exists by the time they read the message.
 
     Same immutability rule as `sync_dist_files()`: a key already there
     with different content is refused, never silently overwritten;
@@ -285,11 +300,12 @@ def write_metadata_file(
     or invalidates CloudFront itself, the same division of concerns as
     `upload_file()`.
     """
+    source = source if source is not None else str(wheel_path)
     normalized = gip.normalize_name(package_name)
     try:
         metadata = gip.wheel_metadata_json(wheel_path)
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
-        raise PublishStaticIndexError(f"{wheel_path}: can't read METADATA: {exc}") from exc
+        raise PublishStaticIndexError(f"{source}: can't read METADATA: {exc}") from exc
     version = metadata["version"]
     content = json.dumps(metadata, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     sha256 = hashlib.sha256(content).hexdigest()
@@ -300,7 +316,7 @@ def write_metadata_file(
         if existing.sha256 is None or existing.sha256 != sha256:
             raise PublishStaticIndexError(
                 f"s3://{bucket}/{key} already exists but its content does not match "
-                f"{wheel_path.name}'s metadata. A published version's metadata is immutable "
+                f"{source}'s metadata. A published version's metadata is immutable "
                 "-- refusing to overwrite it."
             )
         return "skipped-identical"
@@ -439,7 +455,9 @@ def backfill_metadata(run: Runner, bucket: str, *, dry_run: bool) -> list[tuple[
                 tmp_path = Path(f.name)
             try:
                 download_file(run, bucket, key, tmp_path)
-                status = write_metadata_file(run, bucket, package_name, tmp_path, dry_run=dry_run)
+                status = write_metadata_file(
+                    run, bucket, package_name, tmp_path, source=key, dry_run=dry_run
+                )
             finally:
                 tmp_path.unlink(missing_ok=True)
             results.append((key, status))
@@ -523,6 +541,10 @@ def main(argv: list[str]) -> int:
         help="With --backfill-metadata: report what would be written, upload nothing.",
     )
     args = ap.parse_args(argv)
+
+    if args.dry_run and not args.backfill_metadata:
+        print("error: --dry-run only means something with --backfill-metadata", file=sys.stderr)
+        return 1
 
     if args.root:
         try:

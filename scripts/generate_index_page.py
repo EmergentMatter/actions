@@ -131,12 +131,16 @@ def wheel_metadata_json(wheel_path: Path) -> dict[str, Any]:
 
     `project_urls` collects every repeated `Project-URL` header (each one
     "Label, URL" on the wire) into a `{label: url}` dict, `{}` when there
-    are none -- never omitted, matching the contract's JSON shape.
+    are none -- never omitted, matching the contract's JSON shape. An
+    entry with no comma is malformed (not "some label, no URL" -- there's
+    no separator to tell a bare label from a bare URL) and raises rather
+    than being stored as a URL-less, near-meaningless entry.
 
     Raises `ValueError` if the METADATA has no `Name` or no `Version`:
     both are required fields in every wheel this org has ever built, so
     either missing means something is badly wrong with the build, not a
     legitimately absent optional field the way `summary`/`license` can be.
+    Also raises on a malformed `Project-URL` header, for the same reason.
     """
     message = wheel_metadata(wheel_path)
     name = message.get("Name")
@@ -145,12 +149,21 @@ def wheel_metadata_json(wheel_path: Path) -> dict[str, Any]:
         raise ValueError(f"{wheel_path}: METADATA has no Name and/or Version")
     project_urls: dict[str, str] = {}
     for entry in message.get_all("Project-URL") or []:
+        if "," not in entry:
+            raise ValueError(
+                f"{wheel_path}: malformed Project-URL header (expected 'Label, URL'): {entry!r}"
+            )
         label, _, url = entry.partition(",")
         project_urls[label.strip()] = url.strip()
+    # A Summary can be a folded RFC 822 header (a continuation line, kept
+    # verbatim by email.parser with its line break and leading whitespace
+    # intact) -- collapse any run of whitespace, including that embedded
+    # newline, to a single space rather than leaking raw folding into JSON.
+    summary = message.get("Summary")
     return {
         "name": name,
         "version": version,
-        "summary": message.get("Summary"),
+        "summary": " ".join(summary.split()) if summary else None,
         "license": message.get("License-Expression") or message.get("License"),
         "requires_python": message.get("Requires-Python"),
         "project_urls": project_urls,
