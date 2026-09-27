@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -317,6 +318,35 @@ def test_write_metadata_file_refuses_mismatched_existing_content(tmp_path):
         psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
 
 
+def test_write_metadata_file_mismatch_error_names_the_real_wheel_by_default(tmp_path):
+    """Default `source` is `wheel_path` itself -- right for the ordinary
+    publish flow, where that IS the real dist/ file being published."""
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13", summary="Changed since the first publish.")
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/1.0.0/metadata.json", sha256="f" * 64)
+
+    with pytest.raises(psi.PublishStaticIndexError, match=re.escape(str(wheel))):
+        psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
+
+
+def test_write_metadata_file_mismatch_error_names_the_given_source_not_a_tempfile(tmp_path):
+    """backfill_metadata() passes the original S3 key as `source`, since
+    `wheel_path` there is a throwaway download tempfile -- the error must
+    name the S3 key, not that local path."""
+    wheel = tmp_path / "some-tmp-download-name.whl"
+    _make_wheel(wheel, requires_python=">=3.13", summary="Changed since the first publish.")
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/1.0.0/metadata.json", sha256="f" * 64)
+
+    with pytest.raises(
+        psi.PublishStaticIndexError, match=re.escape("downloads/pkg/pkg-1.0.0-py3-none-any.whl")
+    ):
+        psi.write_metadata_file(
+            bucket.run, "my-bucket", "pkg", wheel, source="downloads/pkg/pkg-1.0.0-py3-none-any.whl"
+        )
+
+
 def test_write_metadata_file_refuses_an_existing_key_with_no_recorded_hash(tmp_path):
     wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
     _make_wheel(wheel, requires_python=">=3.13")
@@ -555,6 +585,23 @@ def test_backfill_metadata_is_empty_for_a_bucket_with_no_packages():
     assert psi.backfill_metadata(FakeBucket().run, "my-bucket", dry_run=False) == []
 
 
+def test_backfill_metadata_mismatch_error_names_the_s3_key_not_a_tempfile(tmp_path):
+    """End to end through backfill_metadata() itself: the wheel it reads
+    METADATA from is a local download tempfile, so the error naming it
+    must be the original downloads/ key -- a path an operator can act on
+    -- never the tempfile, which is gone by the time they read it."""
+    bucket = FakeBucket()
+    wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
+    _make_wheel(wheel, requires_python=">=3.13", summary="Changed since the first publish.")
+    _upload_wheel(bucket, "pkg", wheel)
+    bucket.put("downloads/pkg/1.0.0/metadata.json", sha256="f" * 64)
+
+    with pytest.raises(
+        psi.PublishStaticIndexError, match=re.escape("downloads/pkg/pkg-1.0.0-py3-none-any.whl")
+    ):
+        psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -585,6 +632,22 @@ def test_main_requires_package_name_unless_root(tmp_path, capsys):
     rc = psi.main(["--bucket", "my-bucket", "--dist-dir", str(tmp_path)])
     assert rc == 1
     assert "--package-name is required" in capsys.readouterr().err
+
+
+def test_main_rejects_dry_run_without_backfill_metadata(dist_dir, monkeypatch, capsys):
+    """The bug the reviewer caught: --dry-run silently ignored outside
+    --backfill-metadata would let the ordinary publish path upload for
+    real while an operator believed nothing was happening."""
+    bucket = FakeBucket()
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    rc = psi.main(
+        ["--bucket", "my-bucket", "--package-name", "pkg", "--dist-dir", str(dist_dir), "--dry-run"]
+    )
+
+    assert rc == 1
+    assert "--dry-run only means something with --backfill-metadata" in capsys.readouterr().err
+    assert bucket.objects == {}
 
 
 # -------------------------------------------------------- real aws CLI argv
