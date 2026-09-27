@@ -781,10 +781,24 @@ def test_fetch_changelog_at_tag_uses_the_raw_accept_header_and_ref():
     gh.put("EmergentMatter", "emergent-matter-sdm-core", "1.0.0", "content")
     psi.fetch_changelog_at_tag(gh.run, "EmergentMatter", "emergent-matter-sdm-core", "1.0.0")
     argv = gh.calls[0]
-    assert argv[:2] == ["api", "-H"]
-    assert argv[2] == "Accept: application/vnd.github.raw+json"
+    assert argv[0] == "api"
+    assert "Accept: application/vnd.github.raw+json" in argv
     assert "repos/EmergentMatter/emergent-matter-sdm-core/contents/CHANGELOG.md" in argv
     assert "ref=v1.0.0" in argv
+
+
+def test_fetch_changelog_at_tag_forces_a_get_so_the_ref_lands_in_the_query():
+    """The bug this guards against: `gh api` defaults to POST the moment
+    any `-f` field is given, sending `ref` in a request body a GET
+    endpoint ignores -- confirmed live, where this silently 404'd every
+    version instead of finding its tag. `--method GET` is what makes
+    `gh api` put `-f` fields in the query string instead."""
+    gh = FakeGh()
+    gh.put("EmergentMatter", "emergent-matter-sdm-core", "1.0.0", "content")
+    psi.fetch_changelog_at_tag(gh.run, "EmergentMatter", "emergent-matter-sdm-core", "1.0.0")
+    argv = gh.calls[0]
+    assert "--method" in argv
+    assert argv[argv.index("--method") + 1] == "GET"
 
 
 def test_fetch_changelog_at_tag_returns_none_on_a_404():
