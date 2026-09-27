@@ -149,6 +149,7 @@ def _make_wheel(
     version: str = "1.0.0",
     summary: str | None = None,
     license_expression: str | None = None,
+    project_urls: dict[str, str] | None = None,
 ) -> None:
     """A minimal, real wheel (a zip with a dist-info/METADATA member), the
     same shape gip.requires_python_of() and gip.wheel_metadata_json() read."""
@@ -162,6 +163,8 @@ def _make_wheel(
             metadata += f"Summary: {summary}\n"
         if license_expression is not None:
             metadata += f"License-Expression: {license_expression}\n"
+        for label, url in (project_urls or {}).items():
+            metadata += f"Project-URL: {label}, {url}\n"
         zf.writestr(f"{name}-{version}.dist-info/METADATA", metadata)
 
 
@@ -390,6 +393,109 @@ def test_write_metadata_file_raises_a_clean_error_for_a_corrupt_wheel(tmp_path):
         psi.write_metadata_file(bucket.run, "my-bucket", "pkg", wheel)
 
 
+# ----------------------------------------------------------- write_notes_file
+
+
+def test_write_notes_file_uploads_the_extracted_section():
+    bucket = FakeBucket()
+    changelog = "## 1.0.0 (2026-01-01)\n\n- did a thing\n\n## 0.9.0 (2025-12-01)\n\n- older\n"
+
+    status = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+
+    assert status == "uploaded"
+    key = "downloads/pkg/1.0.0/notes.md"
+    assert bucket.objects[key]["content"] == b"- did a thing\n"
+    assert "sha256" in bucket.objects[key]["metadata"]
+
+
+def test_write_notes_file_uses_the_markdown_content_type():
+    bucket = FakeBucket()
+    changelog = "## 1.0.0 (2026-01-01)\n\n- did a thing\n"
+
+    psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+
+    upload = next(
+        c for c in bucket.calls if c[:2] == ["s3", "cp"] and "downloads/pkg/1.0.0/notes.md" in c[3]
+    )
+    assert "--content-type" in upload
+    assert upload[upload.index("--content-type") + 1] == "text/markdown; charset=utf-8"
+
+
+def test_write_notes_file_normalizes_the_package_name_in_the_key():
+    bucket = FakeBucket()
+    changelog = "## 1.0.0 (2026-01-01)\n\n- did a thing\n"
+    psi.write_notes_file(bucket.run, "my-bucket", "Emergent_Matter.SDM-Core", "1.0.0", changelog)
+    assert any(k.startswith("downloads/emergent-matter-sdm-core/") for k in bucket.objects)
+
+
+def test_write_notes_file_no_section_writes_nothing():
+    bucket = FakeBucket()
+    changelog = "## 9.9.9 (2026-01-01)\n\n- not this version\n"
+
+    status = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+
+    assert status == "no-section"
+    assert bucket.objects == {}
+
+
+def test_write_notes_file_no_changelog_at_all_writes_nothing():
+    """`changelog_text=None` -- no CHANGELOG.md to read at all -- is
+    exactly the same outcome as a changelog with no matching section:
+    never an error."""
+    bucket = FakeBucket()
+    status = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", None)
+    assert status == "no-section"
+    assert bucket.objects == {}
+
+
+def test_write_notes_file_skips_identical_content_on_a_retried_run():
+    bucket = FakeBucket()
+    changelog = "## 1.0.0 (2026-01-01)\n\n- did a thing\n"
+
+    first = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+    calls_after_first = len(bucket.calls)
+    second = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+
+    assert first == "uploaded"
+    assert second == "skipped-identical"
+    assert all(c[:2] == ["s3api", "head-object"] for c in bucket.calls[calls_after_first:])
+
+
+def test_write_notes_file_refuses_mismatched_existing_content():
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/1.0.0/notes.md", sha256="f" * 64)
+    changelog = "## 1.0.0 (2026-01-01)\n\n- a different section now\n"
+
+    with pytest.raises(psi.PublishStaticIndexError, match="immutable"):
+        psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog)
+
+
+def test_write_notes_file_dry_run_reports_without_uploading():
+    bucket = FakeBucket()
+    changelog = "## 1.0.0 (2026-01-01)\n\n- did a thing\n"
+
+    status = psi.write_notes_file(bucket.run, "my-bucket", "pkg", "1.0.0", changelog, dry_run=True)
+
+    assert status == "would-upload"
+    assert bucket.objects == {}
+
+
+def test_write_notes_file_mismatch_error_names_the_given_source():
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/1.0.0/notes.md", sha256="f" * 64)
+    changelog = "## 1.0.0 (2026-01-01)\n\n- a different section now\n"
+
+    with pytest.raises(psi.PublishStaticIndexError, match=re.escape("EmergentMatter/pkg@v1.0.0")):
+        psi.write_notes_file(
+            bucket.run,
+            "my-bucket",
+            "pkg",
+            "1.0.0",
+            changelog,
+            source="EmergentMatter/pkg@v1.0.0",
+        )
+
+
 # --------------------------------------------------------- regenerate_index_page
 
 
@@ -532,9 +638,12 @@ def test_backfill_metadata_writes_missing_metadata_for_every_wheel(tmp_path):
 
     results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
 
+    # The DESTINATION metadata.json key, not the source wheel key -- a
+    # previous version of this function reported the wheel key, which
+    # read as "this wheel was uploaded", the wrong file entirely.
     assert set(results) == {
-        ("downloads/pkg-a/pkg-a-1.0.0-py3-none-any.whl", "uploaded"),
-        ("downloads/pkg-b/pkg-b-2.0.0-py3-none-any.whl", "uploaded"),
+        ("downloads/pkg-a/1.0.0/metadata.json", "uploaded"),
+        ("downloads/pkg-b/2.0.0/metadata.json", "uploaded"),
     }
     assert "downloads/pkg-a/1.0.0/metadata.json" in bucket.objects
     assert "downloads/pkg-b/2.0.0/metadata.json" in bucket.objects
@@ -550,7 +659,7 @@ def test_backfill_metadata_skips_a_version_already_covered(tmp_path):
 
     results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
 
-    assert results == [("downloads/pkg/pkg-1.0.0-py3-none-any.whl", "skipped-identical")]
+    assert results == [("downloads/pkg/1.0.0/metadata.json", "skipped-identical")]
 
 
 def test_backfill_metadata_dry_run_reports_without_uploading(tmp_path):
@@ -561,7 +670,7 @@ def test_backfill_metadata_dry_run_reports_without_uploading(tmp_path):
 
     results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=True)
 
-    assert results == [("downloads/pkg/pkg-1.0.0-py3-none-any.whl", "would-upload")]
+    assert results == [("downloads/pkg/1.0.0/metadata.json", "would-upload")]
     assert "downloads/pkg/1.0.0/metadata.json" not in bucket.objects
 
 
@@ -578,7 +687,7 @@ def test_backfill_metadata_ignores_non_wheel_files(tmp_path):
     results = psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
 
     assert len(results) == 1
-    assert results[0][0] == "downloads/pkg/pkg-1.0.0-py3-none-any.whl"
+    assert results[0][0] == "downloads/pkg/1.0.0/metadata.json"
 
 
 def test_backfill_metadata_is_empty_for_a_bucket_with_no_packages():
@@ -600,6 +709,213 @@ def test_backfill_metadata_mismatch_error_names_the_s3_key_not_a_tempfile(tmp_pa
         psi.PublishStaticIndexError, match=re.escape("downloads/pkg/pkg-1.0.0-py3-none-any.whl")
     ):
         psi.backfill_metadata(bucket.run, "my-bucket", dry_run=False)
+
+
+# ----------------------------------------------------------------- parse_github_repo
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/EmergentMatter/emergent-matter-sdm-core",
+        "https://github.com/EmergentMatter/emergent-matter-sdm-core/",
+        "https://github.com/EmergentMatter/emergent-matter-sdm-core.git",
+        "  https://github.com/EmergentMatter/emergent-matter-sdm-core  ",
+    ],
+)
+def test_parse_github_repo_reads_owner_and_repo(url):
+    assert psi.parse_github_repo(url) == ("EmergentMatter", "emergent-matter-sdm-core")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://gitlab.com/EmergentMatter/emergent-matter-sdm-core",
+        "not a url at all",
+        "https://github.com/EmergentMatter",
+        "",
+    ],
+)
+def test_parse_github_repo_returns_none_for_anything_else(url):
+    assert psi.parse_github_repo(url) is None
+
+
+# ------------------------------------------------------------- fetch_changelog_at_tag
+
+
+class FakeGh:
+    """A tiny in-memory stand-in for the subset of `gh api` this script
+    calls, driven the same way FakeBucket drives `aws`: one argv per
+    call, keyed by (owner, repo, ref) -> CHANGELOG.md content, or absent
+    for a 404 (no such tag, or no CHANGELOG.md there)."""
+
+    def __init__(self):
+        self.changelogs: dict[tuple[str, str, str], str] = {}
+        self.calls: list[list[str]] = []
+
+    def put(self, owner: str, repo: str, version: str, content: str) -> None:
+        self.changelogs[(owner, repo, f"v{version}")] = content
+
+    def run(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        self.calls.append(argv)
+        path = next(a for a in argv if a.startswith("repos/"))
+        _, owner, repo, _contents, _changelog = path.split("/")
+        ref = argv[argv.index("-f") + 1].removeprefix("ref=")
+        content = self.changelogs.get((owner, repo, ref))
+        if content is None:
+            return subprocess.CompletedProcess(
+                argv, 1, stdout="", stderr="gh: Not Found (HTTP 404)"
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout=content, stderr="")
+
+
+def test_fetch_changelog_at_tag_returns_the_content():
+    gh = FakeGh()
+    gh.put("EmergentMatter", "emergent-matter-sdm-core", "1.0.0", "## 1.0.0\n\n- x\n")
+    text = psi.fetch_changelog_at_tag(gh.run, "EmergentMatter", "emergent-matter-sdm-core", "1.0.0")
+    assert text == "## 1.0.0\n\n- x\n"
+
+
+def test_fetch_changelog_at_tag_uses_the_raw_accept_header_and_ref():
+    gh = FakeGh()
+    gh.put("EmergentMatter", "emergent-matter-sdm-core", "1.0.0", "content")
+    psi.fetch_changelog_at_tag(gh.run, "EmergentMatter", "emergent-matter-sdm-core", "1.0.0")
+    argv = gh.calls[0]
+    assert argv[:2] == ["api", "-H"]
+    assert argv[2] == "Accept: application/vnd.github.raw+json"
+    assert "repos/EmergentMatter/emergent-matter-sdm-core/contents/CHANGELOG.md" in argv
+    assert "ref=v1.0.0" in argv
+
+
+def test_fetch_changelog_at_tag_returns_none_on_a_404():
+    gh = FakeGh()
+    text = psi.fetch_changelog_at_tag(gh.run, "EmergentMatter", "missing-repo", "1.0.0")
+    assert text is None
+
+
+def test_fetch_changelog_at_tag_raises_on_any_other_failure():
+    def failing_gh(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="authentication required")
+
+    with pytest.raises(psi.PublishStaticIndexError, match="authentication required"):
+        psi.fetch_changelog_at_tag(
+            failing_gh, "EmergentMatter", "emergent-matter-sdm-core", "1.0.0"
+        )
+
+
+# ----------------------------------------------------------------- backfill_notes
+
+
+def _publish_metadata_for(
+    bucket: FakeBucket, tmp_path: Path, package: str, version: str, repository: str | None
+) -> None:
+    """Puts a real metadata.json into the fake bucket the way
+    write_metadata_file() would, for a wheel with the given
+    project_urls.Repository (or none at all)."""
+    wheel = tmp_path / f"{package}-{version}-py3-none-any.whl"
+    project_urls = {"Repository": repository} if repository else None
+    _make_wheel(
+        wheel, requires_python=">=3.13", name=package, version=version, project_urls=project_urls
+    )
+    psi.write_metadata_file(bucket.run, "my-bucket", package, wheel)
+    # A package must also have a simple/<name>/ prefix for
+    # list_package_prefixes() (what backfill_notes() enumerates by) to
+    # find it -- exactly how a real bucket never has one without the
+    # other, since a publish job writes both.
+    bucket.objects.setdefault(f"simple/{package}/index.html", {"metadata": {}, "content": b""})
+
+
+def test_backfill_notes_writes_missing_notes_for_every_version(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh = FakeGh()
+    gh.put("EmergentMatter", "pkg", "1.0.0", "## 1.0.0 (2026-01-01)\n\n- did a thing\n")
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert results == [("downloads/pkg/1.0.0/notes.md", "uploaded")]
+    assert bucket.objects["downloads/pkg/1.0.0/notes.md"]["content"] == b"- did a thing\n"
+
+
+def test_backfill_notes_dry_run_writes_nothing(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh = FakeGh()
+    gh.put("EmergentMatter", "pkg", "1.0.0", "## 1.0.0 (2026-01-01)\n\n- did a thing\n")
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=True)
+
+    assert results == [("downloads/pkg/1.0.0/notes.md", "would-upload")]
+    assert "downloads/pkg/1.0.0/notes.md" not in bucket.objects
+
+
+def test_backfill_notes_skips_a_version_with_no_repository_url(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", None)
+    gh = FakeGh()
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert results == [
+        ("downloads/pkg/1.0.0/notes.md", "skipped: no Repository project URL in metadata.json")
+    ]
+    assert gh.calls == []
+
+
+def test_backfill_notes_skips_a_version_with_an_unrecognized_repository_url(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://gitlab.com/EmergentMatter/pkg")
+    gh = FakeGh()
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert len(results) == 1
+    assert results[0][0] == "downloads/pkg/1.0.0/notes.md"
+    assert "unrecognized Repository URL" in results[0][1]
+
+
+def test_backfill_notes_skips_a_missing_tag_or_changelog(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh = FakeGh()  # no changelog registered for this repo/tag at all
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert len(results) == 1
+    assert results[0][0] == "downloads/pkg/1.0.0/notes.md"
+    assert "no CHANGELOG.md at tag v1.0.0" in results[0][1]
+
+
+def test_backfill_notes_no_matching_section_reports_no_section(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh = FakeGh()
+    gh.put("EmergentMatter", "pkg", "1.0.0", "## 9.9.9 (2026-01-01)\n\n- not this version\n")
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert results == [("downloads/pkg/1.0.0/notes.md", "no-section")]
+
+
+def test_backfill_notes_one_bad_version_does_not_block_another(tmp_path):
+    bucket = FakeBucket()
+    _publish_metadata_for(bucket, tmp_path, "pkg-a", "1.0.0", None)  # no Repository -- skipped
+    _publish_metadata_for(
+        bucket, tmp_path, "pkg-b", "2.0.0", "https://github.com/EmergentMatter/pkg-b"
+    )
+    gh = FakeGh()
+    gh.put("EmergentMatter", "pkg-b", "2.0.0", "## 2.0.0 (2026-01-01)\n\n- fine\n")
+
+    results = psi.backfill_notes(bucket.run, gh.run, "my-bucket", dry_run=False)
+
+    assert ("downloads/pkg-b/2.0.0/notes.md", "uploaded") in results
+    assert any(
+        key == "downloads/pkg-a/1.0.0/notes.md" and "skipped" in status for key, status in results
+    )
+
+
+def test_backfill_notes_is_empty_for_a_bucket_with_no_metadata():
+    assert psi.backfill_notes(FakeBucket().run, FakeGh().run, "my-bucket", dry_run=False) == []
 
 
 # --------------------------------------------------------------------------- CLI
@@ -648,6 +964,119 @@ def test_main_rejects_dry_run_without_backfill_metadata(dist_dir, monkeypatch, c
     assert rc == 1
     assert "--dry-run only means something with --backfill-metadata" in capsys.readouterr().err
     assert bucket.objects == {}
+
+
+def test_main_writes_notes_md_from_the_changelog_file(dist_dir, tmp_path, monkeypatch):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text(
+        "## 1.0.0 (2026-01-01)\n\n- did a thing\n\n## 0.9.0 (2025-12-01)\n\n- old\n"
+    )
+    bucket = FakeBucket()
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    rc = psi.main(
+        [
+            "--bucket",
+            "my-bucket",
+            "--package-name",
+            "pkg",
+            "--dist-dir",
+            str(dist_dir),
+            "--changelog",
+            str(changelog),
+        ]
+    )
+
+    assert rc == 0
+    assert bucket.objects["downloads/pkg/1.0.0/notes.md"]["content"] == b"- did a thing\n"
+
+
+def test_main_missing_changelog_file_publishes_no_notes_md(dist_dir, tmp_path, monkeypatch):
+    """A missing CHANGELOG.md (an optional file) is not an error -- the
+    ordinary publish must still succeed, exactly the same outcome as a
+    changelog with no matching section."""
+    bucket = FakeBucket()
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    rc = psi.main(
+        [
+            "--bucket",
+            "my-bucket",
+            "--package-name",
+            "pkg",
+            "--dist-dir",
+            str(dist_dir),
+            "--changelog",
+            str(tmp_path / "does-not-exist.md"),
+        ]
+    )
+
+    assert rc == 0
+    assert not any(k.endswith("/notes.md") for k in bucket.objects)
+
+
+def test_main_writes_notes_md_before_the_index_page(dist_dir, tmp_path, monkeypatch):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## 1.0.0 (2026-01-01)\n\n- did a thing\n")
+    bucket = FakeBucket()
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+
+    psi.main(
+        [
+            "--bucket",
+            "my-bucket",
+            "--package-name",
+            "pkg",
+            "--dist-dir",
+            str(dist_dir),
+            "--changelog",
+            str(changelog),
+        ]
+    )
+
+    upload_keys = [c[3].split("/", 3)[-1] for c in bucket.calls if c[:2] == ["s3", "cp"]]
+    assert upload_keys.index("downloads/pkg/1.0.0/notes.md") < upload_keys.index(
+        "simple/pkg/index.html"
+    )
+
+
+def test_main_backfill_notes_reports_and_writes(tmp_path, monkeypatch, capsys):
+    bucket = FakeBucket()
+    gh = FakeGh()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh.put("EmergentMatter", "pkg", "1.0.0", "## 1.0.0 (2026-01-01)\n\n- did a thing\n")
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+    monkeypatch.setattr(psi, "run_gh", gh.run)
+
+    rc = psi.main(["--bucket", "my-bucket", "--backfill-notes"])
+
+    assert rc == 0
+    assert bucket.objects["downloads/pkg/1.0.0/notes.md"]["content"] == b"- did a thing\n"
+    out = capsys.readouterr().out
+    assert "uploaded: downloads/pkg/1.0.0/notes.md" in out
+    assert "wrote 1 notes.md" in out
+
+
+def test_main_backfill_notes_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
+    bucket = FakeBucket()
+    gh = FakeGh()
+    _publish_metadata_for(bucket, tmp_path, "pkg", "1.0.0", "https://github.com/EmergentMatter/pkg")
+    gh.put("EmergentMatter", "pkg", "1.0.0", "## 1.0.0 (2026-01-01)\n\n- did a thing\n")
+    monkeypatch.setattr(psi, "run_aws", bucket.run)
+    monkeypatch.setattr(psi, "run_gh", gh.run)
+
+    rc = psi.main(["--bucket", "my-bucket", "--backfill-notes", "--dry-run"])
+
+    assert rc == 0
+    assert "downloads/pkg/1.0.0/notes.md" not in bucket.objects
+    assert "would write 1 notes.md" in capsys.readouterr().out
+
+
+def test_main_allows_dry_run_with_backfill_notes(monkeypatch):
+    monkeypatch.setattr(psi, "run_aws", FakeBucket().run)
+    monkeypatch.setattr(psi, "run_gh", FakeGh().run)
+    rc = psi.main(["--bucket", "my-bucket", "--backfill-notes", "--dry-run"])
+    assert rc == 0
 
 
 # -------------------------------------------------------- real aws CLI argv
@@ -755,7 +1184,7 @@ def test_main_backfill_metadata_reports_and_writes(tmp_path, monkeypatch, capsys
     assert rc == 0
     assert "downloads/pkg/1.0.0/metadata.json" in bucket.objects
     out = capsys.readouterr().out
-    assert "uploaded: downloads/pkg/pkg-1.0.0-py3-none-any.whl" in out
+    assert "uploaded: downloads/pkg/1.0.0/metadata.json" in out
     assert "wrote 1 metadata.json" in out
 
 
