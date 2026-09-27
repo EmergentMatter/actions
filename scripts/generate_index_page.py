@@ -52,6 +52,7 @@ __all__ = [
     "requires_python_of",
     "wheel_metadata",
     "wheel_metadata_json",
+    "release_notes_for_version",
 ]
 
 _DIST_SUFFIXES = (".whl", ".tar.gz")
@@ -168,6 +169,49 @@ def wheel_metadata_json(wheel_path: Path) -> dict[str, Any]:
         "requires_python": message.get("Requires-Python"),
         "project_urls": project_urls,
     }
+
+
+def release_notes_for_version(changelog_text: str, version: str) -> str | None:
+    """The `CHANGELOG.md` section for `version` -- `downloads/<package>/
+    <version>/notes.md`'s content -- or `None` if there's no matching
+    heading. Shared, pure extraction logic: both the ordinary publish
+    flow (given the release tag checkout's own `CHANGELOG.md`) and
+    `publish_static_index.py --backfill-notes` (given one fetched from
+    GitHub at the release tag) call this, so the two can never diverge.
+
+    A section is every line after the heading line matching
+    `^## <version>(\\s|\\(|$)` (version regex-escaped, so a literal `.` in
+    it never matches "any character"), up to the next line starting
+    `## ` or the end of the file. The trailing alternation keeps a
+    version from matching a longer one it's a prefix of: `## 2.0.0` must
+    not match a `## 2.0.01 (...)` or `## 2.0.0rc1 (...)` heading, since
+    neither has whitespace, `(`, or end-of-line right after `2.0.0`.
+    towncrier's own heading shape, `## {version} ({date})`, matches
+    through the whitespace alternative.
+
+    Normalises the extracted section: CRLF/CR line endings become LF (so
+    identical content produces identical bytes regardless of the
+    checkout's line-ending settings), trailing whitespace is stripped
+    from every line, leading and trailing blank lines are dropped, and
+    the result ends with exactly one newline. A heading with an empty
+    body (nothing before the next `## ` or end of file) still counts as
+    a match -- this returns `""` normalised to `"\\n"`, not `None`: the
+    heading existing is what "no matching section" is about, not whether
+    anyone wrote anything under it yet.
+    """
+    text = changelog_text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    heading = re.compile(rf"^## {re.escape(version)}(\s|\(|$)")
+    start = next((i for i, line in enumerate(lines) if heading.match(line)), None)
+    if start is None:
+        return None
+    end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
+    body = [line.rstrip() for line in lines[start + 1 : end]]
+    while body and not body[0]:
+        body.pop(0)
+    while body and not body[-1]:
+        body.pop()
+    return "\n".join(body) + "\n"
 
 
 def render_index(package_name: str, files: list[DistFile]) -> str:

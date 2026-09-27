@@ -32,6 +32,10 @@ Two things this enforces that a plain `aws s3 cp` loop would not:
    `simple/<package>/index.html` write, because that write is what
    triggers the downstream root-index Lambda, and the metadata has to
    already exist by then.
+4. **A `downloads/<package>/<version>/notes.md` per release, extracted
+   from `CHANGELOG.md` at the release tag** (see write_notes_file() and
+   CONTRACT.md's "notes.md" section), also before the index-page write.
+   No matching section in the changelog means no file, never an error.
 
 The root `simple/index.html` (the index of indexes) is deliberately never
 touched by this publish flow: that page aggregates across every package's
@@ -55,6 +59,12 @@ publish job. See regenerate_root_index_page() and docs/onboarding.md.
     # before that file existed (see CONTRACT.md and backfill_metadata()):
     publish_static_index.py --backfill-metadata --dry-run \\
         --bucket downloads-em-prod-us-east-2
+
+    # The admin-run, one-off notes.md backfill -- reads each version's
+    # already-published metadata.json for its GitHub repository, and
+    # fetches CHANGELOG.md there via `gh api` (see backfill_notes()):
+    publish_static_index.py --backfill-notes --dry-run \\
+        --bucket downloads-em-prod-us-east-2
 """
 
 from __future__ import annotations
@@ -63,6 +73,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,7 +81,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # Never runs; gives mypy the real module for attribute checks below.
@@ -90,12 +101,16 @@ __all__ = [
     "Runner",
     "sync_dist_files",
     "write_metadata_file",
+    "write_notes_file",
     "regenerate_index_page",
     "list_package_prefixes",
     "regenerate_root_index_page",
     "invalidate_cloudfront",
     "download_file",
     "backfill_metadata",
+    "parse_github_repo",
+    "fetch_changelog_at_tag",
+    "backfill_notes",
 ]
 
 # One HTTP-ish call to the `aws` CLI. Tests inject a fake in place of
@@ -110,6 +125,18 @@ class PublishStaticIndexError(RuntimeError):
 
 def run_aws(argv: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["aws", *argv], capture_output=True, text=True)
+
+
+def run_gh(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Only `fetch_changelog_at_tag()` (via `--backfill-notes`) uses this.
+    Auth comes from whatever the operator running that admin command
+    already has -- their own `gh auth login`, or the `GH_TOKEN`/
+    `GITHUB_TOKEN` environment variable `gh` already honors -- never a
+    token this script reads or handles itself. The same category of tool
+    as the maintenance scripts (onboard.py, sync.py, fleet_status.py),
+    which also shell out to `gh`; see this file's own module docstring
+    for why the ordinary publish flow never does."""
+    return subprocess.run(["gh", *argv], capture_output=True, text=True)
 
 
 @dataclass(frozen=True)
@@ -260,6 +287,24 @@ def sync_dist_files(
     return uploaded
 
 
+def _read_wheel_metadata(wheel_path: Path, *, source: str) -> dict[str, Any]:
+    """`gip.wheel_metadata_json()`, wrapped so a corrupt/unreadable wheel
+    fails through `PublishStaticIndexError` (the one exception type
+    `main()` catches and reports with `::error::`) instead of leaking a
+    raw zipfile/`ValueError` traceback. `source` is what the error names
+    -- see `write_metadata_file()`'s own `source` param for why this
+    differs between the ordinary publish flow and a backfill mode's
+    tempfile. Shared by `write_metadata_file()` (which needs the whole
+    dict) and callers that only need one field, like `main()`'s and
+    `backfill_metadata()`'s own use of `["version"]` below, so a wheel is
+    never read as anything other than through this one, consistently
+    error-wrapped path."""
+    try:
+        return gip.wheel_metadata_json(wheel_path)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise PublishStaticIndexError(f"{source}: can't read METADATA: {exc}") from exc
+
+
 def write_metadata_file(
     run: Runner,
     bucket: str,
@@ -302,10 +347,7 @@ def write_metadata_file(
     """
     source = source if source is not None else str(wheel_path)
     normalized = gip.normalize_name(package_name)
-    try:
-        metadata = gip.wheel_metadata_json(wheel_path)
-    except (OSError, ValueError, zipfile.BadZipFile) as exc:
-        raise PublishStaticIndexError(f"{source}: can't read METADATA: {exc}") from exc
+    metadata = _read_wheel_metadata(wheel_path, source=source)
     version = metadata["version"]
     content = json.dumps(metadata, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     sha256 = hashlib.sha256(content).hexdigest()
@@ -334,6 +376,81 @@ def write_metadata_file(
             key,
             tmp_path,
             content_type="application/json",
+            metadata=_metadata_dict(sha256, None),
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return "uploaded"
+
+
+def write_notes_file(
+    run: Runner,
+    bucket: str,
+    package_name: str,
+    version: str,
+    changelog_text: str | None,
+    *,
+    source: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Upload `downloads/<package>/<version>/notes.md` for one release,
+    extracted from `changelog_text` (the release tag's own `CHANGELOG.md`)
+    via `gip.release_notes_for_version()` -- the one pure function shared
+    by the ordinary publish flow (`main()` below, given the tag
+    checkout's own file) and `backfill_notes()` below (given one fetched
+    from GitHub at the release tag).
+
+    `changelog_text` is `None` when there's no `CHANGELOG.md` to read at
+    all (an optional file; a repo without one, or a fetch that came back
+    empty) -- treated exactly like "no matching section", never an
+    error: CONTRACT.md's rule is "no matching section means no file", and
+    a wholly absent changelog is the same absence one level up.
+
+    `source` names the origin in an error message, the same convention as
+    `write_metadata_file()`'s own `source` param.
+
+    Same immutability rule as `write_metadata_file()`: a key already
+    there with different content is refused, never silently overwritten.
+
+    Returns "uploaded", "skipped-identical", "no-section" (nothing to
+    upload -- not an error), or ("would-upload" only with `dry_run=True`).
+    Callers in the ordinary publish flow must run this BEFORE
+    `regenerate_index_page()`, the same requirement `write_metadata_file()`
+    has and for the same reason (the index-page write triggers the
+    downstream root-index Lambda).
+    """
+    source = source if source is not None else f"{package_name}=={version}"
+    notes = gip.release_notes_for_version(changelog_text, version) if changelog_text else None
+    if notes is None:
+        return "no-section"
+    content = notes.encode("utf-8")
+    sha256 = hashlib.sha256(content).hexdigest()
+    normalized = gip.normalize_name(package_name)
+    key = f"downloads/{normalized}/{version}/notes.md"
+
+    existing = head_object(run, bucket, key)
+    if existing is not None:
+        if existing.sha256 is None or existing.sha256 != sha256:
+            raise PublishStaticIndexError(
+                f"s3://{bucket}/{key} already exists but its content does not match "
+                f"{source}'s CHANGELOG.md section. A published version's release notes "
+                "are immutable -- refusing to overwrite it."
+            )
+        return "skipped-identical"
+
+    if dry_run:
+        return "would-upload"
+
+    with tempfile.NamedTemporaryFile("wb", suffix=".md", delete=False) as f:
+        f.write(content)
+        tmp_path = Path(f.name)
+    try:
+        upload_file(
+            run,
+            bucket,
+            key,
+            tmp_path,
+            content_type="text/markdown; charset=utf-8",
             metadata=_metadata_dict(sha256, None),
         )
     finally:
@@ -441,10 +558,14 @@ def backfill_metadata(run: Runner, bucket: str, *, dry_run: bool) -> list[tuple[
     one that's there with DIFFERENT content still raises -- that's a real
     anomaly a backfill must surface, not paper over.
 
-    Returns `(key, status)` for every wheel considered, `status` one of
-    "uploaded", "skipped-identical", or ("would-upload" only with
-    `dry_run=True`). Nothing here talks to a terminal directly, so `main()`
-    below is what prints this.
+    Returns `(destination key, status)` for every wheel considered -- the
+    `downloads/<package>/<version>/metadata.json` key this call wrote or
+    would write, NOT the source wheel key (a previous version of this
+    function reported the wheel key, which read as "this wheel was
+    uploaded", the wrong file entirely). `status` is one of "uploaded",
+    "skipped-identical", or ("would-upload" only with `dry_run=True`).
+    Nothing here talks to a terminal directly, so `main()` below is what
+    prints this.
     """
     results: list[tuple[str, str]] = []
     for package_name in list_package_prefixes(run, bucket):
@@ -455,12 +576,134 @@ def backfill_metadata(run: Runner, bucket: str, *, dry_run: bool) -> list[tuple[
                 tmp_path = Path(f.name)
             try:
                 download_file(run, bucket, key, tmp_path)
+                version = _read_wheel_metadata(tmp_path, source=key)["version"]
+                dest_key = f"downloads/{gip.normalize_name(package_name)}/{version}/metadata.json"
                 status = write_metadata_file(
                     run, bucket, package_name, tmp_path, source=key, dry_run=dry_run
                 )
             finally:
                 tmp_path.unlink(missing_ok=True)
-            results.append((key, status))
+            results.append((dest_key, status))
+    return results
+
+
+_GITHUB_REPO_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"
+)
+
+
+def parse_github_repo(url: str) -> tuple[str, str] | None:
+    """`(owner, repo)` from a `https://github.com/<owner>/<repo>` URL --
+    the shape `project_urls.Repository` carries in this org's own
+    packages -- or `None` if `url` doesn't match that shape at all.
+    Tolerates a trailing `.git` or `/`; nothing else is a GitHub project
+    URL this function knows how to read."""
+    match = _GITHUB_REPO_URL_RE.match(url.strip())
+    return (match.group("owner"), match.group("repo")) if match else None
+
+
+def fetch_changelog_at_tag(gh_run: Runner, owner: str, repo: str, version: str) -> str | None:
+    """`CHANGELOG.md`'s raw content in `owner/repo` at tag `v<version>`,
+    via `gh api` -- see `run_gh()` for what supplies its credentials.
+    `-H "Accept: application/vnd.github.raw+json"` is what makes the API
+    return the file's raw bytes directly, instead of a JSON envelope with
+    the content base64-encoded inside it.
+
+    Returns `None` if the tag or the file doesn't exist there (a 404) --
+    `backfill_notes()` below reports and skips that, per CONTRACT.md's
+    rule, rather than treating it as a hard failure that stops the whole
+    run. Any other failure (auth, rate limit, network) raises.
+    """
+    p = gh_run(
+        [
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw+json",
+            f"repos/{owner}/{repo}/contents/CHANGELOG.md",
+            "-f",
+            f"ref=v{version}",
+        ]
+    )
+    if p.returncode != 0:
+        if "404" in p.stderr or "Not Found" in p.stderr:
+            return None
+        raise PublishStaticIndexError(
+            f"gh api repos/{owner}/{repo}/contents/CHANGELOG.md?ref=v{version} failed: "
+            f"{p.stderr.strip()}"
+        )
+    return p.stdout
+
+
+def backfill_notes(
+    run: Runner, gh_run: Runner, bucket: str, *, dry_run: bool
+) -> list[tuple[str, str]]:
+    """For every version already backfilled or published with a
+    `metadata.json` (CONTRACT.md's "notes.md backfill"), read
+    `project_urls.Repository` from it, fetch `CHANGELOG.md` at tag
+    `v<version>` from that GitHub repository, and write
+    `downloads/<package>/<version>/notes.md` if it's missing.
+
+    Keyed off `metadata.json` -- never a filename parse, never a second
+    wheel download -- because that file is exactly where
+    `project_urls.Repository` and the authoritative `version` already
+    live (see `write_metadata_file()`); a version with no `metadata.json`
+    yet needs `--backfill-metadata` run first, not a second, independent
+    way to rediscover the same facts from the wheel again.
+
+    Every precondition failure -- no `metadata.json`, no `Repository` in
+    its `project_urls`, an unparseable one, a missing tag, or no
+    `CHANGELOG.md` there -- is reported and skipped, never a hard failure
+    for the whole run: one bad version must not block every other one.
+
+    Returns `(destination key, status)` for every version considered.
+    `status` is one of `write_notes_file()`'s own ("uploaded",
+    "skipped-identical", "no-section", "would-upload"), or a
+    `"skipped: <reason>"` string for a precondition failure above.
+    """
+    results: list[tuple[str, str]] = []
+    for package_name in list_package_prefixes(run, bucket):
+        prefix = f"downloads/{package_name}/"
+        metadata_keys = [
+            k for k in list_existing_keys(run, bucket, prefix) if k.endswith("/metadata.json")
+        ]
+        for metadata_key in metadata_keys:
+            version = metadata_key.split("/")[-2]
+            dest_key = f"downloads/{package_name}/{version}/notes.md"
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+                tmp_path = Path(f.name)
+            try:
+                download_file(run, bucket, metadata_key, tmp_path)
+                metadata = json.loads(tmp_path.read_text(encoding="utf-8"))
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+            repository = metadata.get("project_urls", {}).get("Repository")
+            if not repository:
+                results.append((dest_key, "skipped: no Repository project URL in metadata.json"))
+                continue
+            parsed = parse_github_repo(repository)
+            if parsed is None:
+                results.append((dest_key, f"skipped: unrecognized Repository URL {repository!r}"))
+                continue
+            owner, repo = parsed
+
+            changelog_text = fetch_changelog_at_tag(gh_run, owner, repo, version)
+            if changelog_text is None:
+                results.append(
+                    (dest_key, f"skipped: no CHANGELOG.md at tag v{version} in {owner}/{repo}")
+                )
+                continue
+
+            status = write_notes_file(
+                run,
+                bucket,
+                package_name,
+                version,
+                changelog_text,
+                source=f"{owner}/{repo}@v{version}",
+                dry_run=dry_run,
+            )
+            results.append((dest_key, status))
     return results
 
 
@@ -505,6 +748,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--package-name")
     ap.add_argument("--dist-dir", default="dist", type=Path)
     ap.add_argument(
+        "--changelog",
+        default="CHANGELOG.md",
+        type=Path,
+        help=(
+            "CHANGELOG.md in the release tag checkout, read for the notes.md section -- "
+            "never fetched over the network here (that's --backfill-notes' job). Missing "
+            "is not an error: treated exactly like no matching version section, so a repo "
+            "with no changelog yet simply publishes no notes.md."
+        ),
+    )
+    ap.add_argument(
         "--root",
         action="store_true",
         help=(
@@ -536,14 +790,31 @@ def main(argv: list[str]) -> int:
         ),
     )
     ap.add_argument(
+        "--backfill-notes",
+        action="store_true",
+        help=(
+            "One-off: for every version already on this bucket with a metadata.json, read "
+            "its project_urls.Repository, fetch CHANGELOG.md at tag v<version> from that "
+            "GitHub repository over `gh api`, and write downloads/<package>/<version>/"
+            "notes.md for any version missing one. Admin-run by hand, like "
+            "--backfill-metadata (which must run first for a version with no "
+            "metadata.json yet) -- --package-name, --dist-dir and --changelog are ignored "
+            "with this flag."
+        ),
+    )
+    ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="With --backfill-metadata: report what would be written, upload nothing.",
+        help="With --backfill-metadata or --backfill-notes: report what would be written, "
+        "upload nothing.",
     )
     args = ap.parse_args(argv)
 
-    if args.dry_run and not args.backfill_metadata:
-        print("error: --dry-run only means something with --backfill-metadata", file=sys.stderr)
+    if args.dry_run and not (args.backfill_metadata or args.backfill_notes):
+        print(
+            "error: --dry-run only means something with --backfill-metadata or --backfill-notes",
+            file=sys.stderr,
+        )
         return 1
 
     if args.root:
@@ -574,9 +845,23 @@ def main(argv: list[str]) -> int:
         print(f"{verb} {uploaded} metadata.json ({skipped} already present, {len(results)} total)")
         return 0
 
+    if args.backfill_notes:
+        try:
+            results = backfill_notes(run_aws, run_gh, args.bucket, dry_run=args.dry_run)
+        except PublishStaticIndexError as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        for key, status in results:
+            print(f"{status}: {key}")
+        uploaded = sum(1 for _, status in results if status in ("uploaded", "would-upload"))
+        verb = "would write" if args.dry_run else "wrote"
+        print(f"{verb} {uploaded} notes.md ({len(results)} version(s) considered)")
+        return 0
+
     if not args.package_name:
         print(
-            "error: --package-name is required unless --root or --backfill-metadata is given",
+            "error: --package-name is required unless --root, --backfill-metadata or "
+            "--backfill-notes is given",
             file=sys.stderr,
         )
         return 1
@@ -594,11 +879,17 @@ def main(argv: list[str]) -> int:
             raise PublishStaticIndexError(
                 f"no wheel in {args.dist_dir}/ -- can't write metadata.json without one"
             )
-        # Must run before regenerate_index_page(): its simple/<package>/index.html write
-        # triggers the root-index Lambda, and the metadata has to already exist by then.
-        write_metadata_file(
-            run_aws, args.bucket, args.package_name, args.dist_dir / wheel_file.filename
-        )
+        wheel_path = args.dist_dir / wheel_file.filename
+        # Both must run before regenerate_index_page(): its simple/<package>/index.html
+        # write triggers the root-index Lambda, and both files have to already exist by
+        # then.
+        write_metadata_file(run_aws, args.bucket, args.package_name, wheel_path)
+        version = _read_wheel_metadata(wheel_path, source=str(wheel_path))["version"]
+        try:
+            changelog_text = args.changelog.read_text(encoding="utf-8")
+        except OSError:
+            changelog_text = None
+        write_notes_file(run_aws, args.bucket, args.package_name, version, changelog_text)
         invalidation_path = regenerate_index_page(
             run_aws, args.bucket, args.package_name, new_files
         )

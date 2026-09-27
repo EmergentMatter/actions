@@ -211,7 +211,7 @@ def test_wheel_metadata_json_collapses_a_folded_summary(tmp_path):
 
 
 def test_wheel_metadata_json_raises_on_a_project_url_with_no_comma(tmp_path):
-    """ "Label, URL" is the only shape a Project-URL header has -- one with
+    """The "Label, URL" shape is the only one a Project-URL header has -- one with
     no comma can't be split into a label and a URL at all, so it must
     raise rather than be stored as e.g. {"https://example.com": ""}."""
     wheel = tmp_path / "pkg-1.0.0-py3-none-any.whl"
@@ -221,6 +221,102 @@ def test_wheel_metadata_json_raises_on_a_project_url_with_no_comma(tmp_path):
     )
     with pytest.raises(ValueError, match="malformed Project-URL"):
         gip.wheel_metadata_json(wheel)
+
+
+# A real excerpt (emergent-matter-sdm-core's own CHANGELOG.md, its first
+# two released sections, copied verbatim) -- not a hand-built
+# approximation of towncrier's shape.
+SDM_CORE_CHANGELOG_EXCERPT = (
+    Path(__file__).resolve().parent / "fixtures" / "sdm-core-changelog-excerpt.md"
+).read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------ release_notes_for_version
+
+
+def test_release_notes_for_version_is_deterministic_across_two_runs():
+    changelog = "## 1.0.0 (2026-01-01)\n\n- one\n- two\n"
+    first = gip.release_notes_for_version(changelog, "1.0.0")
+    second = gip.release_notes_for_version(changelog, "1.0.0")
+    assert first == second
+
+
+def test_release_notes_for_version_crlf_matches_lf_byte_for_byte():
+    lf = "## 1.0.0 (2026-01-01)\n\n- one\n- two\n\n## 0.9.0 (2025-12-01)\n\n- old\n"
+    crlf = lf.replace("\n", "\r\n")
+    assert gip.release_notes_for_version(lf, "1.0.0") == gip.release_notes_for_version(
+        crlf, "1.0.0"
+    )
+
+
+def test_release_notes_for_version_strips_trailing_whitespace_and_blank_edges():
+    changelog = (
+        "## 1.0.0 (2026-01-01)\n"
+        "\n"
+        "\n"
+        "- has trailing spaces   \n"
+        "- has a trailing tab\t\n"
+        "\n"
+        "\n"
+        "## 0.9.0 (2025-12-01)\n"
+    )
+    notes = gip.release_notes_for_version(changelog, "1.0.0")
+    assert notes == "- has trailing spaces\n- has a trailing tab\n"
+
+
+def test_release_notes_for_version_does_not_match_a_longer_version_it_prefixes():
+    """`## 2.0.0` must not match a `## 2.0.01` or `## 2.0.0rc1` heading --
+    neither has whitespace, `(`, or end-of-line right after `2.0.0`."""
+    changelog = (
+        "## 2.0.01 (2026-01-03)\n\n- newer patch, must not match 2.0.0\n\n"
+        "## 2.0.0rc1 (2026-01-02)\n\n- prerelease, must not match 2.0.0\n\n"
+        "## 2.0.0 (2026-01-01)\n\n- the real one\n"
+    )
+    assert gip.release_notes_for_version(changelog, "2.0.0") == "- the real one\n"
+
+
+def test_release_notes_for_version_a_literal_dot_does_not_match_any_character():
+    """`2.0.0`'s dots are regex-escaped -- a changelog heading like
+    `## 2x0x0` (dot replaced by some other single character) must not
+    match, the way an unescaped `re` pattern would let it."""
+    changelog = "## 2x0x0 (2026-01-01)\n\n- must not match\n"
+    assert gip.release_notes_for_version(changelog, "2.0.0") is None
+
+
+def test_release_notes_for_version_the_last_section_in_the_file():
+    changelog = "## 2.0.0 (2026-01-01)\n\n- newer\n\n## 1.0.0 (2025-12-01)\n\n- last one\n"
+    assert gip.release_notes_for_version(changelog, "1.0.0") == "- last one\n"
+
+
+def test_release_notes_for_version_returns_none_when_theres_no_matching_heading():
+    changelog = "## 1.0.0 (2026-01-01)\n\n- one\n"
+    assert gip.release_notes_for_version(changelog, "9.9.9") is None
+
+
+def test_release_notes_for_version_matches_towncriers_own_heading_shape():
+    """towncrier's title_format is `## {version} ({project_date})` -- the
+    space right after the version is what the `\\s` alternative matches."""
+    changelog = "## 1.2.3 (2026-03-04)\n\nsomething happened\n"
+    assert gip.release_notes_for_version(changelog, "1.2.3") == "something happened\n"
+
+
+def test_release_notes_for_version_against_a_real_towncrier_changelog():
+    """A real excerpt (emergent-matter-sdm-core's own CHANGELOG.md, its
+    first two released sections), not a hand-built approximation of
+    towncrier's shape."""
+    notes_2_0_0 = gip.release_notes_for_version(SDM_CORE_CHANGELOG_EXCERPT, "2.0.0")
+    assert notes_2_0_0 is not None
+    assert notes_2_0_0.startswith("### Major\n")
+    assert "Move `pyvista` from a required dependency" in notes_2_0_0
+    assert "## 1.0.0" not in notes_2_0_0
+    assert not notes_2_0_0.endswith("\n\n")
+
+    notes_1_0_0 = gip.release_notes_for_version(SDM_CORE_CHANGELOG_EXCERPT, "1.0.0")
+    assert notes_1_0_0 is not None
+    assert notes_1_0_0.startswith("### Major\n")
+    assert "Now depends on `emergent-matter-sdm-materials`" in notes_1_0_0
+    assert notes_1_0_0.endswith("with its license.\n")
+    assert not notes_1_0_0.endswith("\n\n")
 
 
 # ------------------------------------------------------------------ render_index

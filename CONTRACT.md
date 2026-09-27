@@ -411,7 +411,49 @@ immutability rule -- a version whose file is already there with matching content
 anomaly a backfill must surface, not paper over. `--dry-run` downloads and parses every wheel (a
 read, so this is safe) but writes nothing, reporting `would-upload` in place of `uploaded`. Like
 `--root`, this needs to list every package's `downloads/` prefix, which no per-repo publish role
-can do -- never invoked from a publish job.
+can do -- never invoked from a publish job. Each line reports the DESTINATION `metadata.json` key,
+not the source wheel it read -- the file this run actually wrote or would write.
+
+### notes.md
+
+Every static-index publish also writes `downloads/<package>/<version>/notes.md`, extracted from
+`CHANGELOG.md` at the release tag (never `main`) via `scripts/generate_index_page.py`'s
+`release_notes_for_version()` -- the one pure function shared by the ordinary publish flow (given
+the tag checkout's own file) and `--backfill-notes` below (given one fetched from GitHub). Content
+type `text/markdown; charset=utf-8`.
+
+**Extraction (deterministic).** A section is every line after the heading line matching
+`^## <version>(\s|\(|$)` (version regex-escaped), up to the next line starting `## ` or the end of
+the file. Normalised to LF line endings, trailing whitespace stripped from every line, leading and
+trailing blank lines dropped, and the result ends with exactly one newline -- so identical input
+(CRLF or LF, an extra blank line here or there) produces byte-identical output. The trailing
+alternation is what keeps a version from matching a longer one it's a prefix of: `## 2.0.0` must
+not match a `## 2.0.01 (...)` or `## 2.0.0rc1 (...)` heading. **No matching heading means no
+file** -- not an error, and true whether `CHANGELOG.md` is entirely absent (an optional file) or
+just has no section for this version yet.
+
+This upload happens BEFORE `simple/<package>/index.html` is written, for the same reason
+`metadata.json` does. Same immutability rule as the wheel/sdist and `metadata.json`: a key already
+there with different content is refused; identical content (a retried run) uploads nothing again.
+
+**Versions published before this file existed** get theirs from a one-off backfill, admin-run like
+`--backfill-metadata` (which must run first for a version with no `metadata.json` yet -- this
+backfill is keyed off that file, not a second, independent wheel download):
+
+```bash
+publish_static_index.py --backfill-notes [--dry-run] --bucket <the downloads bucket name>
+```
+
+For every version already carrying a `metadata.json`, this reads its `project_urls.Repository`,
+fetches `CHANGELOG.md` at tag `v<version>` from that GitHub repository over `gh api` (using
+whatever `gh auth login`, or the `GH_TOKEN`/`GITHUB_TOKEN` environment variable `gh` already
+honors, the operator running this has -- never a token this script reads or handles itself, the
+same as every other maintenance script's own use of `gh`), and writes `notes.md` if it's missing.
+A version with no `metadata.json` yet, no `Repository` URL, an unparseable one, a missing tag, or
+no `CHANGELOG.md` there is reported and skipped, never a hard failure for the whole run -- one bad
+version must not block every other one. `--dry-run` fetches and extracts (a read, so this is safe)
+but writes nothing, reporting `would-upload` in place of `uploaded`. Each line reports the
+destination `notes.md` key.
 
 ### Rebuilding the root index
 
