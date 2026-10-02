@@ -316,6 +316,7 @@ jobs:
         with:
           role-to-assume: ${{ inputs.aws-role-arn }}
           aws-region: ${{ inputs.aws-region }}
+          mask-aws-account-id: true
 
       - name: Publish to the static index
         if: inputs.publish-target == 'static-index' || inputs.publish-target == 'both'
