@@ -720,6 +720,7 @@ jobs:
         with:
           role-to-assume: ${{ inputs.codeartifact-read-role-arn }}
           aws-region: ${{ inputs.aws-region }}
+          mask-aws-account-id: true
 
       - name: Authenticate uv to CodeArtifact
         if: inputs.codeartifact-read-role-arn != ''
@@ -1155,6 +1156,7 @@ jobs:
         with:
           role-to-assume: ${{ inputs.aws-role-arn }}
           aws-region: ${{ inputs.aws-region }}
+          mask-aws-account-id: true
 
       - name: Publish to the static index
         if: inputs.publish-target == 'static-index' || inputs.publish-target == 'both'
