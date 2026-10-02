@@ -89,7 +89,7 @@ __all__ = [
 # ever runs inside EmergentMatter repos.
 OURS_PREFIX = "emergent-matter-"
 
-SIDECAR_PORT = 47615  # 127.0.0.1:47615 -- see docs/environments.md in sdm-sidecar
+TOOL_PORT = 47615  # the 127.0.0.1 port a tool repo's local server listens on
 VENV_LOCAL = ".venv-local"
 CONFIG_FILE = ".em-dev.toml"
 STATE_FILE = "em-dev-state.json"
@@ -437,7 +437,7 @@ def own_project_version(pyproject: dict) -> str:
 
 
 def is_real_package(pyproject: dict) -> bool:
-    """False for a `[tool.uv] package = false` project (e.g. sdm-ui): it
+    """False for a `[tool.uv] package = false` project (e.g. a UI-only app): it
     has no importable code of its own, so `-e .` must never be attempted --
     see the module docstring on the `.venv-local/lib/**/toy_ui-*` phantom
     package this omission was measured to produce otherwise."""
@@ -451,14 +451,14 @@ def dependency_group_names(pyproject: dict) -> set[str]:
 
 def em_dev_tool_config(pyproject: dict) -> dict | None:
     """The `[tool.em-dev]` table, or None if this repo hasn't opted into
-    tool mode (see the sidecar's own PR for the table it adds)."""
+    tool mode (the table a tool repo adds to its pyproject.toml)."""
     tool = pyproject.get("tool", {}).get("em-dev")
     return tool if isinstance(tool, dict) and tool.get("tool") else None
 
 
 def platform_extras(tool_em_dev: dict, *, platform: str | None = None) -> list[str]:
     """The extras this platform needs, from `tool-extras = { win32 = [...] }`.
-    Mirrors the branch in emergent-matter-sdm-sidecar's ci.yml os-matrix job:
+    Mirrors the branch a tool repo's CI os-matrix job takes:
     keyed on `sys.platform`, empty list (no extras) when unlisted."""
     plat = platform if platform is not None else sys.platform
     extras = tool_em_dev.get("tool-extras", {})
@@ -745,7 +745,7 @@ def is_editable_direct_url(dist_info_dir: Path) -> bool | None:
     mode reads editable=true here; anything that later reinstalled it from
     the registry (a plain `uv tool upgrade`, for example) reads false, and
     `status` reports the difference. Kept intentionally tiny and
-    dependency-free so sdm-sidecar's own `/status` handler can copy it
+    dependency-free so a tool's own status handler can copy it
     verbatim -- see the module docstring on why it isn't imported instead.
     """
     path = dist_info_dir / "direct_url.json"
@@ -1067,12 +1067,12 @@ def turn_off(repo: Path, *, quiet: bool = False) -> int:
 
 
 # ============================================================================
-# Tool mode (the sidecar's console script)
+# Tool mode (a repo's console script)
 # ============================================================================
 
 
-def sidecar_serve_running(port: int = SIDECAR_PORT) -> bool:
-    """Best-effort check for `sdm-sidecar serve` already listening on
+def tool_server_running(port: int = TOOL_PORT) -> bool:
+    """Best-effort check for a tool server already listening on
     127.0.0.1:<port>. Named explicitly in every refusal message, since a
     reinstall while it's running is what leaves a locked, unreplaceable
     executable on Windows."""
@@ -1160,10 +1160,10 @@ def refuse_if_serve_running() -> None:
     own executable open (a locked file on Windows, an in-use binary
     everywhere else), so reinstalling it from under a running process is
     unsafe regardless of which direction the reinstall goes."""
-    if sidecar_serve_running():
+    if tool_server_running():
         raise EmDevError(
             f"refusing to reinstall: something is already listening on "
-            f"127.0.0.1:{SIDECAR_PORT} (sdm-sidecar serve?) -- stop it first"
+            f"127.0.0.1:{TOOL_PORT} (a running tool server?) -- stop it first"
         )
 
 

@@ -67,7 +67,7 @@ def _write_core_at(
     pkg_dir: Path, *, version: str = "1.0.0", extra_deps: list[str] | None = None
 ) -> Path:
     """`emergent-matter-toy-core`: depends on materials, with an "export"
-    extra pulling exportdep -- mirrors the real sidecar's `sdm-core[export]`
+    extra pulling exportdep -- mirrors the real tool's `sdm-core[export]`
     dependency. `extra_deps` simulates a sibling that grew a new,
     unpinned third-party dependency (the "leaked new dep" scenario).
     Written at the exact directory `pkg_dir`, same reason as
@@ -160,7 +160,7 @@ def make_consumer(
 ) -> Path:
     """Write a consumer project's pyproject.toml pointed at `toy_index`,
     give it a minimal src package (unless `package=False`, mirroring
-    sdm-ui), and `uv lock` it. Returns `repo_dir`."""
+    ui-only app), and `uv lock` it. Returns `repo_dir`."""
     dist = _dist(name)
     deps_toml = ", ".join(f'"{d}"' for d in dependencies)
     group_block = ""

@@ -210,7 +210,7 @@ def test_stub_documents_the_nested_sibling_block():
     # The original single-sibling block must still be present, unmodified
     # in shape -- a repo with just one private dependency deletes only the
     # new block.
-    assert "sibling-repo: EmergentMatter/emergent-matter-sdm-materials" in text
+    assert "sibling-repo: <owner>/<sibling repo>" in text
 
 
 def test_stub_documents_the_doubly_nested_sibling_block():

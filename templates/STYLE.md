@@ -234,10 +234,7 @@ not only source code:
 - **Never cite an internal tracker or doc** in a user-facing string. Use
   a public issue, an in-repo doc, or plain prose.
 - **Remove internal process artifacts**: agent-facing journals, "note to
-  future me" comments, bootstrap prompt transcripts. Move them to
-  `docs/history/` or delete them.
-- **Add a `.mailmap`** normalizing any laptop-hostname commit emails
-  before history goes public.
+  future me" comments, bootstrap prompt transcripts. Delete them.
 - **Complete `[project]` metadata**: institutional `authors`, `urls`,
   `readme`, `classifiers`.
 - **Make cross-repo installs work from a public clone.** Publish a

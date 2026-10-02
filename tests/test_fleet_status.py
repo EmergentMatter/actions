@@ -405,7 +405,7 @@ def test_matrix_normalisation_does_not_invent_missing_checks():
 
 
 def test_virtual_project_does_not_require_a_build_context():
-    """sdm-ui-shaped case: [tool.uv] package = false, no build job, so no
+    """ui-only-shaped case: [tool.uv] package = false, no build job, so no
     build context to require -- must not be flagged missing."""
     findings = fleet_status.check_contexts(["test", "changelog"], is_virtual=True)
     assert findings == []
@@ -468,7 +468,7 @@ def test_a_repo_with_no_build_job_is_not_nagged():
 
 
 def test_virtual_project_is_not_nagged_even_when_uv_build_appears_in_a_comment():
-    """sdm-ui-shaped case: [tool.uv] package = false, no build job at all,
+    """ui-only-shaped case: [tool.uv] package = false, no build job at all,
     but the string "uv build" appears in a comment explaining why the job
     was removed. `is_virtual=True` must skip the check outright rather
     than relying on the substring match to stay silent by luck."""
@@ -828,7 +828,7 @@ def test_a_healthy_repo_has_no_actionable_findings():
 
 
 def test_evaluate_does_not_flag_a_virtual_project_missing_build():
-    """sdm-ui-shaped repo, end to end through evaluate(): [tool.uv]
+    """ui-only-shaped repo, end to end through evaluate(): [tool.uv]
     package = false, no build job, no build context, and a comment
     mentioning "uv build" to explain why the job is gone. Neither
     `contexts` nor `verify` should fire."""

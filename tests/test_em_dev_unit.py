@@ -104,11 +104,11 @@ def test_discover_ours_includes_transitive_and_excludes_own(em_dev):
         [
             {"name": "emergent-matter-sdm-core"},
             {"name": "emergent-matter-sdm-materials"},  # only arrives via core
-            {"name": "emergent-matter-sdm-sidecar"},  # this repo's own package
+            {"name": "emergent-matter-example-tool"},  # this repo's own package
             {"name": "some-third-party-lib"},
         ]
     )
-    assert em_dev.discover_ours(lock, "emergent-matter-sdm-sidecar") == [
+    assert em_dev.discover_ours(lock, "emergent-matter-example-tool") == [
         "emergent-matter-sdm-core",
         "emergent-matter-sdm-materials",
     ]
@@ -380,8 +380,8 @@ def test_console_script_name_none_when_no_scripts(em_dev):
 
 
 def test_console_script_name_returns_declared_script(em_dev):
-    data = {"project": {"scripts": {"sdm-sidecar": "sdm_sidecar.cli:main"}}}
-    assert em_dev.console_script_name(data) == "sdm-sidecar"
+    data = {"project": {"scripts": {"example-tool": "example_tool.cli:main"}}}
+    assert em_dev.console_script_name(data) == "example-tool"
 
 
 def test_local_checkout_defines_script_true_and_false(em_dev, tmp_path: Path):
@@ -396,16 +396,16 @@ def test_local_checkout_defines_script_false_when_no_pyproject(em_dev, tmp_path:
     assert em_dev.local_checkout_defines_script(tmp_path, "foo") is False
 
 
-def test_sidecar_serve_running_detects_a_real_listener(em_dev):
+def test_tool_server_running_detects_a_real_listener(em_dev):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
         srv.bind(("127.0.0.1", 0))
         srv.listen(1)
         port = srv.getsockname()[1]
-        assert em_dev.sidecar_serve_running(port=port) is True
+        assert em_dev.tool_server_running(port=port) is True
 
     # After the context manager closes the socket, the same port should
     # (almost always) no longer accept connections.
-    assert em_dev.sidecar_serve_running(port=port) is False
+    assert em_dev.tool_server_running(port=port) is False
 
 
 # ---------------------------------------------------------- git-ignore management
