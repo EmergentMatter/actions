@@ -1,6 +1,6 @@
 """Every text-mode file I/O call under `templates/` must pin `encoding="utf-8"`.
 
-Modelled on emergent-matter-sdm-ui's `tests/test_text_io_encoding.py`: same
+Modelled on a downstream app repo's `tests/test_text_io_encoding.py`: same
 gate, same reasoning, scoped to this repo's own copy of the files it ships.
 `templates/scripts/em-dev.py` and `templates/changeset.py` are copied
 byte-for-byte into every onboarded repo (see templates/manifest.toml), so
@@ -36,7 +36,7 @@ passed:
   alone rather than told to add a keyword that would raise `TypeError`.
 
 `templates/scripts/em-dev.py` cannot import a shared `textio`-style helper
-(the way emergent-matter-sdm-sidecar's own, stricter gate requires of its
+(the way a closed-source app repo's own, stricter gate requires of its
 own tree): it has to run stdlib-only, before `uv sync` has put anything on
 its importer's path -- see its own module docstring. Pinning
 `encoding="utf-8"` at each call site, the way this gate checks for, is
@@ -96,7 +96,7 @@ def _mode_of_call(call: ast.Call, *, mode_index: int) -> str | None:
 
 
 #: Names whose `.open()` is not `pathlib.Path.open` and does not take a
-#: text mode at all. See emergent-matter-sdm-ui's own copy of this gate
+#: text mode at all. See a downstream app repo's own copy of this gate
 #: for the fuller account of each one.
 NON_PATH_OPEN_OWNERS = frozenset(
     {

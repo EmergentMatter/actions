@@ -53,9 +53,9 @@ jobs:
       # docs/onboarding.md, "Publishing to a package index", for the full
       # walkthrough of every value and what each one needs.
       # publish-target: static-index   # | codeartifact | both | pypi
-      # aws-role-arn: arn:aws:iam::<account>:role/<per-repo publish role>
-      # static-index-bucket: <the downloads bucket name>
-      # static-index-distribution-id: <the CloudFront distribution id>
+      # aws-role-arn: arn:aws:iam::${{ vars.EM_PUBLISH_ACCOUNT_ID }}:role/<per-repo publish role>
+      # static-index-bucket: ${{ vars.EM_PUBLISH_BUCKET }}
+      # static-index-distribution-id: ${{ vars.EM_PUBLISH_DISTRIBUTION_ID }}
       # A "closed"-tier repo (see [tool.em-release] tier in pyproject.toml)
       # is refused for every target except `codeartifact` -- the publish
       # job checks this before anything uploads.

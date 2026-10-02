@@ -104,7 +104,7 @@ exits 0 -- the manifest has no per-repo targeting, so every onboarded repo
 receives the same file.
 
 A repo opts into also reinstalling its own console script from local code
-(the sidecar's `sdm-sidecar` command) with a `[tool.em-dev]` table in its
+(an app's own CLI command) with a `[tool.em-dev]` table in its
 `pyproject.toml`:
 
 ```toml

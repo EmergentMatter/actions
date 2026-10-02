@@ -320,8 +320,8 @@ it's conditional even there:
 - **On `ci:`, only if your CI needs a secret.** A local `uses:` call
   doesn't inherit secrets implicitly either: `workflow_call` never does,
   local or remote. If your own `ci.yml` needs a repo secret to run (the
-  concrete example: `sdm-core`'s CI checks out the private sibling
-  `emergent-matter-sdm-materials`, which needs a `MATERIALS_REPO_TOKEN`),
+  concrete example: `example-lib`'s CI checks out the private sibling
+  `example-base`, which needs a `EXAMPLE_BASE_REPO_TOKEN`),
   the `ci:` job has to say so explicitly. If your CI needs no secrets,
   **omit the line entirely** rather than adding it out of habit.
 - **On `version:`, deliberately absent: this is a security decision,
@@ -346,7 +346,7 @@ index yet:
 
 ```toml
 [tool.uv.sources]
-emergent-matter-sdm-materials = { path = "../emergent-matter-sdm-materials" }
+example-base = { path = "../example-base" }
 ```
 
 Your own CI and the shared `version.yml` each need that sibling on disk,
@@ -369,11 +369,11 @@ and they're solved in different places:
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
     with:
       actions-ref: v1
-      sibling-repo: EmergentMatter/emergent-matter-sdm-materials
+      sibling-repo: EmergentMatter/example-base
       sibling-ref: 9834441a6a4b95d6f491e129893fb37d5cecf320
-      sibling-path: emergent-matter-sdm-materials
+      sibling-path: example-base
     secrets:
-      sibling-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+      sibling-token: ${{ secrets.EXAMPLE_BASE_REPO_TOKEN }}
     permissions: { contents: write, pull-requests: write }
 ```
 
@@ -412,16 +412,16 @@ Skip this too unless your sibling's **own** `pyproject.toml` also has a
 one private dependency, and that dependency itself pins another:
 
 ```
-your repo  ->  emergent-matter-sdm-core  ->  emergent-matter-sdm-materials
+your repo  ->  example-lib  ->  example-base
 ```
 
-This is a real, current case: `emergent-matter-web-sdm-tool` pins
-`emergent-matter-sdm-core` as a path source, and `sdm-core`'s own
-`pyproject.toml` pins `emergent-matter-sdm-materials` the same way. Resolving
-web-sdm-tool needs **both** siblings on disk, not just the direct one --
+A typical case: `example-app` pins
+`example-lib` as a path source, and `example-lib`'s own
+`pyproject.toml` pins `example-base` the same way. Resolving
+example-app needs **both** siblings on disk, not just the direct one --
 `uv` resolves each repo's `[tool.uv.sources]` relative to that repo's own
-checkout, so sdm-core's own path source for sdm-materials has to resolve too,
-which means sdm-materials has to be sitting there when `uv lock` runs.
+checkout, so example-lib's own path source for example-base has to resolve too,
+which means example-base has to be sitting there when `uv lock` runs.
 
 The shared `version.yml` covers this with a second, independent input set:
 `sibling2-repo` / `sibling2-ref` / `sibling2-path` / the `sibling2-token`
@@ -440,9 +440,9 @@ checkout in `ci.yml`, and the same layout again in `version.yml`:
 
 ```
 $GITHUB_WORKSPACE/
-├── emergent-matter-web-sdm-tool/   (this repo)
-├── emergent-matter-sdm-core/       (sibling-repo -- your DIRECT dependency)
-└── emergent-matter-sdm-materials/  (sibling2-repo -- sdm-core's OWN dependency)
+├── example-app/   (this repo)
+├── example-lib/       (sibling-repo -- your DIRECT dependency)
+└── example-base/  (sibling2-repo -- example-lib's OWN dependency)
 ```
 
 ```yaml
@@ -451,15 +451,15 @@ $GITHUB_WORKSPACE/
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
     with:
       actions-ref: v1
-      sibling-repo: EmergentMatter/emergent-matter-sdm-core
+      sibling-repo: EmergentMatter/example-lib
       sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
-      sibling-path: emergent-matter-sdm-core
-      sibling2-repo: EmergentMatter/emergent-matter-sdm-materials
-      sibling2-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
-      sibling2-path: emergent-matter-sdm-materials
+      sibling-path: example-lib
+      sibling2-repo: EmergentMatter/example-base
+      sibling2-ref: <SHA -- pinned, matching example-lib's OWN ci.yml>
+      sibling2-path: example-base
     secrets:
-      sibling-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
-      sibling2-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+      sibling-token: ${{ secrets.EXAMPLE_LIB_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.EXAMPLE_BASE_REPO_TOKEN }}
     permissions: { contents: write, pull-requests: write }
 ```
 
@@ -468,7 +468,7 @@ of the same "resolved relative to that repo's own checkout" rule:
 
 - **`sibling2-ref` pins the SHA your DIRECT sibling depends on, not
   whatever `main` happens to be.** Read it off `sibling-repo`'s own
-  `ci.yml` (its `MATERIALS_REF` or equivalent), the same way you read
+  `ci.yml` (its `BASE_REF` or equivalent), the same way you read
   `sibling-ref` off your own dependency declaration. If `sibling-repo`
   bumps its own dependency, your `sibling2-ref` goes stale the same way a
   floating ref would -- pin it, and expect to bump it when the direct
@@ -495,14 +495,14 @@ a `[tool.uv.sources]` entry pointing at a local path -- i.e. a chain three
 hops deep:
 
 ```
-your repo  ->  emergent-matter-sdm-sidecar  ->  emergent-matter-sdm-core  ->  emergent-matter-sdm-materials
+your repo  ->  example-service  ->  example-lib  ->  example-base
 ```
 
-This is a real, current case: `emergent-matter-sdm-ui` pins
-`emergent-matter-sdm-sidecar` as a path source, `sdm-sidecar`'s own
-`pyproject.toml` pins `emergent-matter-sdm-core` the same way, and
-`sdm-core`'s own `pyproject.toml` pins `emergent-matter-sdm-materials` the
-same way again. Resolving sdm-ui needs **all three** siblings on disk --
+A typical case: `example-app` pins
+`example-service` as a path source, `example-service`'s own
+`pyproject.toml` pins `example-lib` the same way, and
+`example-lib`'s own `pyproject.toml` pins `example-base` the
+same way again. Resolving example-app needs **all three** siblings on disk --
 the identical reasoning as the second-sibling case, one link further
 down the chain.
 
@@ -522,10 +522,10 @@ the same layout again in `version.yml`:
 
 ```
 $GITHUB_WORKSPACE/
-├── emergent-matter-sdm-ui/          (this repo)
-├── emergent-matter-sdm-sidecar/     (sibling-repo -- your DIRECT dependency)
-├── emergent-matter-sdm-core/        (sibling2-repo -- sdm-sidecar's OWN dependency)
-└── emergent-matter-sdm-materials/   (sibling3-repo -- sdm-core's OWN dependency)
+├── example-app/          (this repo)
+├── example-service/     (sibling-repo -- your DIRECT dependency)
+├── example-lib/        (sibling2-repo -- example-service's OWN dependency)
+└── example-base/   (sibling3-repo -- example-lib's OWN dependency)
 ```
 
 ```yaml
@@ -534,19 +534,19 @@ $GITHUB_WORKSPACE/
     uses: EmergentMatter/actions/.github/workflows/version.yml@v1
     with:
       actions-ref: v1
-      sibling-repo: EmergentMatter/emergent-matter-sdm-sidecar
+      sibling-repo: EmergentMatter/example-service
       sibling-ref: <SHA -- pinned, matching the one your ci.yml uses>
-      sibling-path: emergent-matter-sdm-sidecar
-      sibling2-repo: EmergentMatter/emergent-matter-sdm-core
-      sibling2-ref: <SHA -- pinned, matching sdm-sidecar's OWN ci.yml>
-      sibling2-path: emergent-matter-sdm-core
-      sibling3-repo: EmergentMatter/emergent-matter-sdm-materials
-      sibling3-ref: <SHA -- pinned, matching sdm-core's OWN ci.yml>
-      sibling3-path: emergent-matter-sdm-materials
+      sibling-path: example-service
+      sibling2-repo: EmergentMatter/example-lib
+      sibling2-ref: <SHA -- pinned, matching example-service's OWN ci.yml>
+      sibling2-path: example-lib
+      sibling3-repo: EmergentMatter/example-base
+      sibling3-ref: <SHA -- pinned, matching example-lib's OWN ci.yml>
+      sibling3-path: example-base
     secrets:
-      sibling-token: ${{ secrets.SDM_SIDECAR_REPO_TOKEN }}
-      sibling2-token: ${{ secrets.SDM_CORE_REPO_TOKEN }}
-      sibling3-token: ${{ secrets.MATERIALS_REPO_TOKEN }}
+      sibling-token: ${{ secrets.EXAMPLE_SERVICE_REPO_TOKEN }}
+      sibling2-token: ${{ secrets.EXAMPLE_LIB_REPO_TOKEN }}
+      sibling3-token: ${{ secrets.EXAMPLE_BASE_REPO_TOKEN }}
     permissions: { contents: write, pull-requests: write }
 ```
 
@@ -565,8 +565,8 @@ non-automatic triggers (a human-pushed tag, or manual
 the fallback path with a private sibling in play.
 
 The deepest chain in the fleet today is three hops
-(`emergent-matter-sdm-ui -> emergent-matter-sdm-sidecar ->
-emergent-matter-sdm-core -> emergent-matter-sdm-materials`). There is no
+(`example-app -> example-service ->
+example-lib -> example-base`). There is no
 `sibling4` input set, and adding one is not expected to be needed soon.
 CONTRACT.md is where that would change.
 
@@ -654,11 +654,20 @@ stub's `permissions:` block again once it's there.
       actions-ref: v1
       publish: true
       publish-target: static-index
-      aws-role-arn: arn:aws:iam::<account>:role/<per-repo publish role>
-      static-index-bucket: <the downloads bucket name>
-      static-index-distribution-id: <the CloudFront distribution id>
+      aws-role-arn: arn:aws:iam::${{ vars.EM_PUBLISH_ACCOUNT_ID }}:role/<per-repo publish role>
+      static-index-bucket: ${{ vars.EM_PUBLISH_BUCKET }}
+      static-index-distribution-id: ${{ vars.EM_PUBLISH_DISTRIBUTION_ID }}
     permissions: { contents: write, pull-requests: write, id-token: write }
 ```
+
+The account id, bucket and distribution id come from three organization
+variables (Settings, Secrets and variables, Actions, Variables), not literals
+in the workflow file, so a public repo's workflow names no account:
+`EM_PUBLISH_ACCOUNT_ID`, `EM_PUBLISH_BUCKET` and `EM_PUBLISH_DISTRIBUTION_ID`.
+They are not secrets and are not masked in logs. An unset variable expands to an
+empty string, which the publish job refuses (empty `static-index-bucket`) or
+which fails at the role assumption (a malformed role ARN), so check each
+repo can read them before its first release.
 
 **Your repo's [`tier`](#licence-tier) gates this before anything uploads.**
 A `closed`-tier repo is refused for every `publish-target` except
