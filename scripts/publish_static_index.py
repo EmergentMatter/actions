@@ -470,7 +470,9 @@ def regenerate_index_page(
     by_name = {f.filename: f for f in new_files}
     for key in list_existing_keys(run, bucket, prefix):
         filename = key[len(prefix) :]
-        if not filename or filename in by_name:
+        # Only the flat wheels and sdists: <version>/metadata.json and
+        # <version>/notes.md live under the same prefix but are not index entries.
+        if not gip.is_dist_filename(filename) or filename in by_name:
             continue
         existing = head_object(run, bucket, key)
         if existing is None or existing.sha256 is None:

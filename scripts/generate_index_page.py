@@ -45,6 +45,7 @@ from typing import Any
 
 __all__ = [
     "DistFile",
+    "is_dist_filename",
     "normalize_name",
     "render_index",
     "render_root_index",
@@ -56,6 +57,11 @@ __all__ = [
 ]
 
 _DIST_SUFFIXES = (".whl", ".tar.gz")
+
+
+def is_dist_filename(name: str) -> bool:
+    """True for a bare wheel or sdist filename: no path separator, a dist suffix."""
+    return "/" not in name and name.endswith(_DIST_SUFFIXES)
 
 
 @dataclass(frozen=True)

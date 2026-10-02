@@ -518,6 +518,24 @@ def test_regenerate_index_page_includes_new_and_previously_published_files(dist_
     assert page["metadata"] == {}  # the page itself carries no sha256/requires-python metadata
 
 
+def test_regenerate_index_page_lists_only_wheels_and_sdists(dist_dir):
+    """A version's metadata.json and notes.md sit under the package prefix too,
+    but they are not distribution files and must not become index links."""
+    bucket = FakeBucket()
+    bucket.put("downloads/pkg/pkg-0.9.0-py3-none-any.whl", sha256="c" * 64)
+    bucket.put("downloads/pkg/pkg-0.9.0.tar.gz", sha256="d" * 64)
+    bucket.put("downloads/pkg/0.9.0/metadata.json", sha256="e" * 64)
+    bucket.put("downloads/pkg/0.9.0/notes.md", sha256="f" * 64)
+
+    new_files = psi.sync_dist_files(bucket.run, "my-bucket", "pkg", dist_dir)
+    psi.regenerate_index_page(bucket.run, "my-bucket", "pkg", new_files)
+
+    page = bucket.objects["simple/pkg/index.html"]["content"].decode()
+    assert "metadata.json" not in page
+    assert "notes.md" not in page
+    assert page.count("<a href=") == 4  # 0.9.0 wheel and sdist, 1.0.0 wheel and sdist
+
+
 def test_regenerate_index_page_upload_carries_no_metadata_flag(dist_dir):
     """The index page itself has no sha256/requires-python to record, so
     its upload must omit --metadata entirely rather than send it empty --

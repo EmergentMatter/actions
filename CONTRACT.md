@@ -354,7 +354,7 @@ It then regenerates `simple/<package>/index.html` from that prefix's own listing
 release's new files, using `scripts/generate_index_page.py` for the actual PEP 503 page (one
 `<a href>` per file, each a RELATIVE path back to `../../downloads/<package>/<filename>` -- a bare
 filename resolves against the page's own directory, `simple/<package>/`, and 404s -- normalized per
-PEP 503, a `#sha256=` fragment on every link, and `data-requires-python` when a wheel declares one). If `static-index-distribution-id` is set, the
+PEP 503, a `#sha256=` fragment on every link, and `data-requires-python` when a wheel declares one). Only wheels and sdists are linked; a version's `metadata.json` and `notes.md` never are. If `static-index-distribution-id` is set, the
 publish job invalidates `/simple/<package>/*` on CloudFront afterward; if it's empty, the page
 still uploads and nothing is invalidated. **The root `simple/index.html` is never written by this
 job**, by design: a per-repo role's `ListBucket` grant is scoped to its own
