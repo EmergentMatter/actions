@@ -17,13 +17,6 @@ Do not add a roadmap, a "current work" note, or a known-issues list to any
 file here. File an issue instead, and put the reason and the definition of
 done in its body.
 
-## Org Playbook
-
-This project follows the EmergentMatter engineering playbook. See
-`../engineering-playbook/CLAUDE.md` for org-wide patterns, conventions,
-and the repo catalog. When in doubt, check the playbook before inventing
-a new pattern.
-
 ## Project Overview
 
 `EmergentMatter/actions` is the org's shared release-control system: a
@@ -38,8 +31,8 @@ before changing how release control behaves.
 
 This repo holds no secrets and calls nothing at runtime. Consuming repos
 run the actual workflows in their own context using their own
-`secrets.GITHUB_TOKEN`. See `conventions/release-control.md` in the
-engineering playbook for the org-wide convention this repo implements.
+`secrets.GITHUB_TOKEN`. [`CONTRACT.md`](CONTRACT.md) is the behavioral spec
+this repo implements.
 
 ## Build & Run
 
@@ -153,7 +146,7 @@ form. See
   purpose. Keep the two copies in step when either changes, and read
   [ADR 0007](docs/adr/0007-shared-composite-action-for-build-steps-withdrawn.md)
   before reintroducing a shared action: it records what was actually
-  established, and what was only assumed during an incident.
+  established, and what was only assumed.
 
 ## Decisions
 
@@ -165,6 +158,5 @@ explaining it again in this file.
 
 ## Naming Conventions
 
-Standard playbook conventions apply (`../engineering-playbook/conventions/naming.md`);
-this repo is plain Python, not JAX/PicoGK, so the Hungarian-prefix table
-mostly doesn't come up outside scalar CLI args.
+This repo is plain Python, so the Hungarian-prefix naming table used in
+numeric (JAX/PicoGK) repos mostly doesn't come up outside scalar CLI args.

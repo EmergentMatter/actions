@@ -2,8 +2,8 @@
 
 ## Status
 
-Rejected, with remaining work. Recorded because the reasoning was nearly lost
-once and the wrong cause was very close to being written down as settled fact.
+Rejected, with remaining work. Recorded so the withdrawal is not mistaken for
+proof that a local composite action cannot work.
 
 ## Context
 
@@ -13,7 +13,7 @@ The build and release steps are duplicated between `version.yml` and
 steps have to be kept in step by hand, so factoring them into a local composite
 action at `./` was tried.
 
-It was removed again while chasing a `startup_failure` that was breaking every
+It was removed again while diagnosing a `startup_failure` that affected every
 onboarded repo.
 
 ## Decision
@@ -23,20 +23,18 @@ steps without first testing the specific question below in isolation.
 
 ## Consequences
 
-The withdrawal is the part worth recording accurately, because the obvious
-inference from it is wrong. The composite action was removed **while** chasing
-the `startup_failure`, and the real cause of that failure turned out to be the
+The obvious inference from the withdrawal is wrong. The composite action was
+removed **while** diagnosing the `startup_failure`, and the real cause of that failure turned out to be the
 publish job's `permissions:` block, documented in
 [ADR 0003](0003-the-publish-job-declares-no-permissions.md). The composite
 action was never isolated as the problem, and was very likely never the problem
 at all.
 
 So "a local `./` action cannot work in a reusable workflow" must not be
-restated anywhere as established fact. It was not established. Anyone who
-repeats it is passing on a guess made under time pressure during an incident,
-and the next person to read it will have no way to tell.
+restated anywhere as established fact. It was never established, and a repeated
+guess cannot be told apart from a finding by the next reader.
 
-What is genuinely awkward, and separate from the incident, is that `uses:`
+What is genuinely awkward, and separate from that failure, is that `uses:`
 cannot take a templated ref. A composite action could not follow the same
 `@ref` its calling workflow is pinned at without hardcoding one, which
 reintroduces the class of drift that
