@@ -15,6 +15,9 @@ onboarded repo. On each push to
 pending notes and opens or updates a release pull request that bumps the
 version and builds `CHANGELOG.md`.
 
+The repo setting "Allow GitHub Actions to create and approve pull requests"
+must be on, or the version job cannot open the release pull request.
+
 Merging that pull request creates a lightweight point tag `v1.x.y` and a GitHub
 Release, in the same run. Notes live in `CHANGELOG.md` and the Release, not in
 the tag.
@@ -106,7 +109,11 @@ from the right number.
 Do not push a breaking change out under `v1`. The automated release enforces
 this for the major number: it fails when the computed version is not `1.x.y`.
 A note of type `major` therefore stops the release rather than producing `v2`,
-and a new major always goes through the manual procedure above.
+and a new major always goes through the manual procedure above. The pull
+request that introduces a new major must also change the major guard's
+`--major` in `.github/workflows/release.yml` and ADR 0008, or every push to
+`main` fails. A pending `major` note fails every push to `main` until it is
+removed or retyped.
 
 **Adding a `permissions:` requirement to a reusable workflow is a breaking
 change**, because a caller's `permissions:` is a ceiling for every job in the

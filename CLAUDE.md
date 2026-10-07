@@ -10,7 +10,7 @@ recorded in this repo. Before proposing or starting anything:
 ```bash
 gh issue list                                    # open work, with the reasoning in each body
 gh api repos/:owner/:repo/milestones --jq '.[].title'   # what the next release commits to
-git tag --sort=-v:refname | head -1              # the current version
+git tag --sort=-v:refname | head -1              # newest point tag (can be ahead of v1; v1 is what consumers run)
 ```
 
 Do not add a roadmap, a "current work" note, or a known-issues list to any
