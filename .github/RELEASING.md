@@ -5,43 +5,94 @@ tags, not about the release-control system it ships to other repos. For
 that, see [`README.md`](../README.md) and
 [`docs/onboarding.md`](../docs/onboarding.md).
 
-## Merging to `main` is not releasing
+## How a release happens
 
-Work lands on `main` through a reviewed pull request and **changes nothing for
-any consuming repo.** Moving `v1` is a separate, deliberate act.
+This repo releases itself with the same workflow it ships. Every change that
+matters to a consumer carries a note in `changelog.d/`, named
+`+<hex>.<level>.md` with `<level>` one of `minor` or `patch`, the same as any
+onboarded repo. On each push to
+`main`, `.github/workflows/release.yml` computes the next `v1.x.y` from the
+pending notes and opens or updates a release pull request that bumps the
+version and builds `CHANGELOG.md`.
 
-That separation is the entire point of the pin. The moment `v1` moves, every
-repo pinned to it runs the new code on its next run, without any of them doing
+Merging that pull request creates a lightweight point tag `v1.x.y` and a GitHub
+Release, in the same run. Notes live in `CHANGELOG.md` and the Release, not in
+the tag.
+
+**That still changes nothing for any consumer.** Moving `v1` is a separate,
+deliberate act, done by hand by an owner. The moment `v1` moves, every repo
+pinned to it runs the new code on its next run, without any of them doing
 anything or being asked. It is the highest blast-radius action in this system,
-and it gets treated like a release rather than a side effect of merging. It
-is the same principle the product itself is built on, turned on the repo
-that implements it: merging a pull request never releases anything.
+and it gets treated like a release rather than a side effect of merging.
 
-So `main` can be a normal working branch. Land things there freely.
+Between the merge and the move there is a window in which the point tag exists
+and `v1` does not point at it. The tag reaches nobody in that window. Close it
+deliberately, using the checklist below.
 
-## Promoting a change to consumers
+Merging a change to `main` that has no note releases nothing. A release pull
+request that is open and unmerged releases nothing.
 
-Restricted to the owners in [`CODEOWNERS`](CODEOWNERS) by the tag ruleset.
+## Promoting a release to consumers
+
+Restricted to the owners in [`CODEOWNERS`](CODEOWNERS) by the tag ruleset. Do
+this after the release pull request has merged and its run is green.
+
+1. Confirm the run created the tag and the GitHub Release for `v1.X.Y`.
+2. Check the release against what consumers see: no removed or renamed input, no
+   changed default, no new required input, no new permission. If any of those
+   apply it is a breaking change, see below; do not move `v1`.
+3. Move the pin, naming the old value so the push fails if `v1` moved under you:
+
+```bash
+git fetch --tags --force origin
+old=$(git rev-parse refs/tags/v1)
+git tag -f v1 v1.X.Y
+git push --force-with-lease=refs/tags/v1:"$old" origin v1
+```
+
+4. Confirm `git ls-remote origin refs/tags/v1 refs/tags/v1.X.Y` shows the same
+   commit for both.
+
+A point tag without moving `v1` reaches nobody; moving `v1` to anything that is
+not an immutable point tag leaves no record of what consumers are now running.
+
+## Release pull request checks that never ran
+
+A release pull request is opened by `github-actions[bot]` with `GITHUB_TOKEN`,
+and events created that way do not trigger other workflows, so its required
+checks can sit as never run. CONTRACT.md's section on the known limitation is
+the account of it. Two ways through:
+
+- Close and reopen the pull request as a human. The `reopened` event is then
+  attributed to a person and the checks run.
+- An owner merges it with admin rights, which branch protection allows
+  (`enforce_admins` is off). Do this only once the same checks are green on
+  the commit the release branch was cut from, and say so on the pull request.
+
+## When the self-release workflow is broken
+
+`release.yml` calls `version.yml` from this same repo, so a defect in
+`version.yml` on `main` can stop the release of its own fix. The manual
+procedure is the fallback and stays supported. It is also the only way to cut a
+new major.
 
 ```bash
 git checkout main && git pull
 
 # 1. The immutable point tag. Annotated, and the message says what changed
-#    FOR CONSUMERS -- not what changed in the diff.
-git tag -a v1.1.0 -m "..."
-git push origin v1.1.0
+#    FOR CONSUMERS, not what changed in the diff.
+git tag -a v1.X.Y -m "..."
+git push origin v1.X.Y
 
 # 2. Move the pin that consumers actually follow.
-git tag -f v1
-git push -f origin v1
+old=$(git rev-parse refs/tags/v1)
+git tag -f v1 v1.X.Y
+git push --force-with-lease=refs/tags/v1:"$old" origin v1
 ```
 
-Optionally cut a GitHub Release on the point tag, so consumers have something
-to read.
-
-Both steps, or neither. A point tag without moving `v1` reaches nobody; moving
-`v1` without a point tag leaves no immutable record of what consumers are now
-running.
+A manual release must also leave `pyproject.toml`'s version and `CHANGELOG.md`
+agreeing with the tag, in a pull request, so the next automated release starts
+from the right number.
 
 ## `v1.x.y` versus a new `v2`
 
@@ -52,24 +103,26 @@ running.
   does not already grant. Consumers migrate by editing their pin, deliberately,
   instead of finding their pipeline broken one morning.
 
-Do not push a breaking change out under `v1`.
+Do not push a breaking change out under `v1`. The automated release enforces
+this for the major number: it fails when the computed version is not `1.x.y`.
+A note of type `major` therefore stops the release rather than producing `v2`,
+and a new major always goes through the manual procedure above.
 
 **Adding a `permissions:` requirement to a reusable workflow is a breaking
 change**, because a caller's `permissions:` is a ceiling for every job in the
 called workflow and a job asking for more than the caller granted does not
 degrade: it takes down every run in that repo. Adding a new required input with
-no default is breaking for the same reason. The mechanism, and the incident that
-established it, are in
+no default is breaking for the same reason. The mechanism is in
 [ADR 0003](../docs/adr/0003-the-publish-job-declares-no-permissions.md).
 
-## Why the promotion is not automated
+## Why moving `v1` is not automated
 
-Deliberate, not an oversight, and recorded in
-[ADR 0001](../docs/adr/0001-consumers-pin-a-moving-major-tag.md) along with the
-alternatives that were rejected.
-
-Worth revisiting when this repo is quieter. Do not weaken the tag rules to get
-there.
+Deliberate, and recorded in
+[ADR 0008](../docs/adr/0008-this-repo-releases-v1-point-tags-from-its-own-notes.md)
+and [ADR 0001](../docs/adr/0001-consumers-pin-a-moving-major-tag.md), along with
+the alternatives that were rejected. The workflow runs as `github-actions[bot]`,
+which the tag ruleset blocks, and a bypass for it would let any workflow in this
+repo move `v1`. Do not weaken the tag rules to get there.
 
 ## Tag strategy
 
@@ -131,13 +184,6 @@ cases that are not that path: a human pushing a `v*` tag by hand, and
 look redundant and are not; they cover disjoint triggers. Why the automated
 path cannot be tag-triggered is in
 [ADR 0002](../docs/adr/0002-build-and-release-run-inline-not-on-tag-push.md).
-
-## The known limitation, briefly
-
-A release PR's own status checks can show as never run. That is expected, and
-CONTRACT.md's section on the known limitation is the account of it: why it is
-accepted, and the close-and-reopen escape hatch for a human who wants those
-checks to run.
 
 ## What a consumer actually sees
 
