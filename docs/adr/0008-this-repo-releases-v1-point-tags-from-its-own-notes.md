@@ -2,14 +2,11 @@
 
 ## Status
 
-Accepted. Supersedes the "Promotion is not automated" paragraph of
-[ADR 0001](0001-consumers-pin-a-moving-major-tag.md) and nothing else in it.
+Accepted. Supersedes only the sentence in the Consequences of
+[ADR 0001](0001-consumers-pin-a-moving-major-tag.md) that calls dogfooding
+release control circular. Promotion of `v1` stays manual.
 
 ## Context
-
-Until now a point tag was cut by hand: write the tag message, push the tag,
-move `v1`. Nothing recorded what each release contained for a reader, and
-every release depended on someone remembering the whole procedure.
 
 This repo ships the release workflow that every consumer uses. Running it on
 itself removes the manual version bump and changelog, and puts this repo under

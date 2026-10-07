@@ -2,7 +2,7 @@
 
 ## Status
 
-Partly superseded by [ADR 0008](0008-this-repo-releases-v1-point-tags-from-its-own-notes.md).
+Partly superseded by [ADR 0008](0008-this-repo-releases-v1-point-tags-from-its-own-notes.md) (the dogfooding sentence in Consequences).
 
 ## Context
 
