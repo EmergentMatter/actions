@@ -274,7 +274,7 @@ def render_root_index(package_names: list[str]) -> str:
     to the one link `pip`/`uv` will actually request. Deterministic
     ordering for the same reason render_index() sorts its links.
 
-    em-platform-infra's root-index Lambda rebuilds this same page
+    The org infrastructure repo's root-index Lambda rebuilds this same page
     automatically (see CONTRACT.md's "Rebuilding the root index") and
     pins it against a golden copy of this function's output. A change to
     this function's HTML shape must be mirrored there in the same change,

@@ -391,7 +391,7 @@ what every package in this org's fleet emits) over the classic `License` field, 
 wheel would carry.
 
 This upload happens BEFORE `simple/<package>/index.html` is written, in the same job, because that
-write is what triggers the downstream root-index Lambda (em-platform-infra) that reads this file --
+write is what triggers the downstream root-index Lambda in the org's infrastructure repo that reads this file --
 the metadata has to already exist by the time that fires.
 
 Same immutability rule as the wheel/sdist themselves: a key already there with different content is
@@ -460,7 +460,7 @@ destination `notes.md` key.
 `simple/index.html` (the index of indexes PEP 503 expects at the root) is never written by the
 publish job: it aggregates across every package's prefix, and every per-repo role's `ListBucket`
 grant is scoped to its own package's prefixes, never the bucket root or another package's. The
-downloads infrastructure (em-platform-infra) rebuilds this page automatically whenever a package's
+downloads infrastructure (the org's infrastructure repo) rebuilds this page automatically whenever a package's
 `simple/<package>/index.html` is written, so no repo or workflow here needs to do it.
 
 `publish_static_index.py --root` is the manual fallback, for an empty bucket or after a failed
