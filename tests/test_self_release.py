@@ -21,6 +21,7 @@ SELF_CI = REPO_ROOT / ".github" / "workflows" / "self-ci.yml"
 CHANGELOG_CHECK = REPO_ROOT / ".github" / "workflows" / "changelog-check.yml"
 STUB_VERSION = REPO_ROOT / "templates" / "stub-version.yml"
 GUARD = REPO_ROOT / "scripts" / "check_major_ceiling.py"
+VERSION = REPO_ROOT / ".github" / "workflows" / "version.yml"
 
 
 def _code(path: Path) -> str:
@@ -89,6 +90,37 @@ def test_release_scripts_ref_is_the_commit_being_released():
 def test_release_version_waits_for_ci_and_the_major_guard():
     block = _job_block(_code(RELEASE), "version")
     assert "needs: [ci, major-guard]" in block
+
+
+def test_major_guard_runs_after_ci():
+    assert re.search(r"^    needs: ci$", _job_block(_code(RELEASE), "major-guard"), re.MULTILINE)
+
+
+def test_ci_job_calls_the_local_self_ci_workflow():
+    block = _job_block(_code(RELEASE), "ci")
+    assert re.search(r"^    uses: \./\.github/workflows/self-ci\.yml$", block, re.MULTILINE)
+
+
+def test_guard_step_pins_major_one():
+    block = _job_block(_code(RELEASE), "major-guard")
+    assert re.search(
+        r"^        run: python3 scripts/check_major_ceiling\.py --major 1$", block, re.MULTILINE
+    )
+
+
+def test_guard_defaults_match_what_version_yml_reads():
+    """The guard step passes no paths, so its defaults must be where version.yml looks."""
+    source = GUARD.read_text(encoding="utf-8")
+    guard_notes = re.search(r'"--notes-dir", default="([^"]+)"', source)
+    guard_pyproject = re.search(r'"--pyproject", default="([^"]+)"', source)
+    assert guard_notes and guard_pyproject
+    version = _code(VERSION)
+    notes = re.search(
+        r"^      notes-dir:\n(?:        .*\n)*?        default: (\S+)$", version, re.MULTILINE
+    )
+    assert notes
+    assert guard_notes.group(1) == notes.group(1)
+    assert guard_pyproject.group(1) == "pyproject.toml"
 
 
 def test_self_ci_is_callable_and_keeps_its_triggers():
