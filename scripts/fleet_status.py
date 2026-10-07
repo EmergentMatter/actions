@@ -30,8 +30,9 @@ Checks, per repo:
   templates   every `managed` file in templates/manifest.toml matches its
               live copy. (`seed-once` files, e.g. ci.yml and ruff.toml,
               are skipped: repos legitimately customise those.)
-  stamp       the `templates_version` provenance stamp against this repo's
-              newest release tag
+  stamp       the `templates_version` provenance stamp against the newest
+              release tag that `v1` already contains. A point tag newer
+              than `v1` has not reached consumers, so nothing is behind it.
   security    if SECURITY.md documents private vulnerability reporting,
               the repo actually has it turned on. It's a per-repo setting
               nothing inherits, so a public repo can carry a policy
@@ -438,7 +439,7 @@ def check_templates(
 
 
 def check_templates_version(stamp: str | None, tags: list[str]) -> list[Finding]:
-    """The `templates_version` provenance stamp against this repo's newest tag.
+    """The `templates_version` provenance stamp against the newest tag `v1` contains.
 
     A stamp onboard.py wrote is one of two shapes (see usable_stamp()): a
     vX.Y.Z point release, or a commit SHA -- the fallback when HEAD wasn't
@@ -780,17 +781,23 @@ def fetch_stamp(repo: str) -> str | None:
 
 
 def fetch_local_tags() -> list[str]:
-    """This repo's own release tags -- local, read-only, no `gh` call.
+    """This repo's own release tags that consumers can actually be on -- local, read-only.
+
+    Only tags contained in `v1` count. A point tag cut by the release
+    workflow before an owner moves `v1` has reached no consumer, so a repo
+    stamped one release earlier is current, not behind. With no local `v1`
+    to compare against (a clone without it), every `v*` tag counts.
 
     Called once in main() and shared across every repo in the sweep, not
     once per repo -- it's the same answer every time.
     """
-    p = subprocess.run(
-        ["git", "tag", "--list", "v*"], cwd=REPO_ROOT, capture_output=True, text=True
-    )
-    if p.returncode != 0:
-        return []
-    return [line.strip() for line in p.stdout.splitlines() if line.strip()]
+    for extra in (["--merged", "refs/tags/v1"], []):
+        p = subprocess.run(
+            ["git", "tag", "--list", "v*", *extra], cwd=REPO_ROOT, capture_output=True, text=True
+        )
+        if p.returncode == 0:
+            return [line.strip() for line in p.stdout.splitlines() if line.strip()]
+    return []
 
 
 def fetch_private_vuln_reporting(repo: str) -> str:

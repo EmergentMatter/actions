@@ -1,0 +1,49 @@
+name: Release
+
+# This repo releasing itself with the version workflow it ships, called by
+# local path. Mirrors templates/stub-version.yml. Merging the release PR this
+# opens creates the v1.x.y point tag and GitHub Release; moving `v1` stays a
+# manual owner step. See docs/adr/0008 and .github/RELEASING.md.
+#
+# Never add `pull_request_target` or `workflow_run` here, or `secrets:
+# inherit` on any job: this workflow runs with write access to the repo.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/self-ci.yml
+    permissions:
+      contents: read
+
+  major-guard:
+    # A `major` note fails the run here instead of producing a v2.0.0 release
+    # PR. A new major is cut by hand.
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Next release stays on major 1
+        run: python3 scripts/check_major_ceiling.py --major 1
+
+  version:
+    needs: [ci, major-guard]
+    uses: ./.github/workflows/version.yml
+    with:
+      # The commit being released is the commit that holds version.yml.
+      actions-ref: ${{ github.sha }}
+      # A virtual project: nothing to build or publish.
+      has-wheel: false
+    permissions:
+      contents: write
+      pull-requests: write

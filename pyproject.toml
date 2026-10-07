@@ -1,13 +1,14 @@
-# This repo hosts the org's reusable release workflows. It is NOT itself
-# onboarded into release control. It is versioned by its own `v*` tags,
-# which consumers pin against. See .github/RELEASING.md.
+# This repo hosts the org's reusable release workflows and releases itself
+# with them: changelog.d/ notes, a release PR, and a v1.x.y point tag when it
+# merges. Consumers pin the moving `v1` tag, which is moved by hand. It is not
+# onboarded into template sync (no [tool.em-release]). See .github/RELEASING.md.
 #
 # No [build-system] on purpose: uv treats this as a virtual project, so
 # `uv sync` installs the dev tooling without trying to build a package.
 
 [project]
 name = "emergent-matter-actions"
-version = "1.0.0"
+version = "1.15.0"
 description = "Reusable GitHub Actions workflows for versioning and releasing EmergentMatter Python repos"
 requires-python = ">=3.13"
 dependencies = []
@@ -38,6 +39,30 @@ python_version = "3.13"
 disallow_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+
+# Same shape as templates/pyproject-snippet.toml: one fragment type per bump
+# level compute_bump.py understands.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## {version} ({project_date})"
+underlines = ["-", "~", "^"]
+
+[[tool.towncrier.type]]
+directory = "major"
+name = "Major"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "minor"
+name = "Minor"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "patch"
+name = "Patch"
+showcontent = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
