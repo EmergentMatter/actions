@@ -24,7 +24,8 @@ and they're worth telling apart:
    in the repo, folds the notes into `CHANGELOG.md`, deletes them in the
    same commit, and opens (or updates) a single **"Release vX.Y.Z"** pull
    request. **Merging that PR is the release**, the one moment a tag gets
-   cut and (if configured) a package gets published.
+   cut and (if configured) a package gets published. Where it is published
+   is covered in [Publishing](#publishing).
 
 The point: nothing ships behind the repo owner's call, and the mechanical
 work (version strings, changelog, lockfile, tag) is already done and
@@ -133,7 +134,10 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── .github/workflows/version.yml           ─┐
  ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
  ├── changelog-check/action.yml              composite action, the PR gate
- ├── scripts/{compute_bump,sync_version}.py     stdlib-only, called by the above
+ ├── verify-wheel/action.yml                 composite action, installs and imports the built wheel
+ ├── scripts/{compute_bump,sync_version,check_publish_tier,
+ │            publish_static_index,generate_index_page}.py
+ │                                           stdlib-only, called by the above
  └── templates/                              what a consumer's copy starts from
         ▲                                        (templates/manifest.toml: dest + policy)
         │ uses: EmergentMatter/actions/.github/workflows/<name>.yml@v1
@@ -168,6 +172,40 @@ what the directory listing can't show you:
 Every script opens with a module docstring saying which of the two it is
 and why it exists. Full CLIs, flags, and exit codes are in
 [`docs/tooling.md`](docs/tooling.md).
+
+## Publishing
+
+A repo publishes nothing unless its `version` stub sets `publish: true`.
+When it does, `publish-target` picks where the release goes:
+
+| `publish-target` | Where |
+|---|---|
+| `pypi` (default) | PyPI, through OIDC trusted publishing |
+| `static-index` | The org's own public PEP 503 index |
+| `codeartifact` | AWS CodeArtifact, which needs a sign-in to read |
+| `both` | `static-index` and `codeartifact` together |
+
+The repo's licence tier (`tier = "open"` or `"closed"` in
+`[tool.em-release]`) limits the choice: a closed repo may only publish to
+`codeartifact`, and a repo with no tier may only publish to `pypi`.
+`check_publish_tier.py` refuses anything else before any credentials are
+assumed. Every built wheel is installed and imported by `verify-wheel`
+before it can be released. The inputs, roles, and failure modes are in
+[`CONTRACT.md`](CONTRACT.md).
+
+## Releasing this repo
+
+This repo releases itself with the same note-per-PR flow, through
+[`release.yml`](.github/workflows/release.yml), which calls
+`version.yml` by local path. Merging the release PR creates the `v1.x.y`
+point tag and its GitHub Release, and nothing more.
+
+Consumers pin `@v1`, so a new point tag reaches nobody until an owner moves
+`v1` to it by hand. That step is deliberate: moving `v1` changes the code
+running in every consuming repo at once. A `major` note fails the release,
+because a new major means every consumer migrates its pin. The procedure
+and the reasoning are in [`.github/RELEASING.md`](.github/RELEASING.md) and
+[ADR 0008](docs/adr/0008-this-repo-releases-v1-point-tags-from-its-own-notes.md).
 
 ## Opting a repo in
 
