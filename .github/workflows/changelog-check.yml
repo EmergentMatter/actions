@@ -1,0 +1,25 @@
+name: Changelog
+
+# This repo's own note check, mirroring templates/stub-changelog-check.yml
+# but running the action from this checkout rather than the `v1` pin, so a
+# change to the action is checked by itself.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # A local action path resolves against the checked-out workspace, so
+      # the repo must be checked out first. The action does its own checkout
+      # of the PR head after this one.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./changelog-check

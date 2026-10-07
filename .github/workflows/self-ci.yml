@@ -1,8 +1,8 @@
 name: Self CI
 
-# This repo's own checks, not reusable, not workflow_call. Ruff, mypy, and
-# pytest over scripts/ and tests/, matching CLAUDE.md's "Build & Run"
-# commands. Config lives in this repo's own pyproject.toml, not duplicated
+# This repo's own checks. Also callable (workflow_call) so release.yml can
+# gate the release on them. Ruff, mypy, and pytest over scripts/ and tests/,
+# matching CLAUDE.md's "Build & Run" commands. Config lives in this repo's own pyproject.toml, not duplicated
 # here as CLI flags.
 #
 # format/typecheck run without continue-on-error, since this repo has no
@@ -13,12 +13,13 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: self-ci-${{ github.ref }}
+  group: self-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

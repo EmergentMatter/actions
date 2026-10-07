@@ -8,6 +8,7 @@ state is reported as bad, with the right severity.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -901,3 +902,51 @@ def test_render_lists_broken_repos_before_healthy_ones():
     out = fleet_status.render(reports, show_info=True)
     assert out.index("o/bad") < out.index("o/healthy")
     assert "1 broken" in out
+
+
+# ------------------------------------------------------ tags consumers can be on
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _tagged_repo(tmp_path: Path) -> Path:
+    _git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "f").write_text("1")
+    _git(tmp_path, "add", "f")
+    _git(tmp_path, "commit", "-q", "-m", "one")
+    _git(tmp_path, "tag", "v1.14.0")
+    _git(tmp_path, "tag", "v1.15.0")
+    _git(tmp_path, "tag", "v1")
+    (tmp_path / "f").write_text("2")
+    _git(tmp_path, "commit", "-q", "-am", "two")
+    _git(tmp_path, "tag", "v1.16.0")
+    return tmp_path
+
+
+def test_tags_newer_than_v1_are_not_counted(tmp_path, monkeypatch):
+    """A point tag cut before `v1` moves has reached no consumer, so nobody is behind it."""
+    monkeypatch.setattr(fleet_status, "REPO_ROOT", _tagged_repo(tmp_path))
+    tags = fleet_status.fetch_local_tags()
+    assert "v1.16.0" not in tags
+    assert {"v1.14.0", "v1.15.0"} <= set(tags)
+    assert fleet_status.check_templates_version("v1.15.0", tags) == []
+
+
+def test_a_repo_one_release_behind_v1_is_still_flagged(tmp_path, monkeypatch):
+    monkeypatch.setattr(fleet_status, "REPO_ROOT", _tagged_repo(tmp_path))
+    findings = fleet_status.check_templates_version("v1.14.0", fleet_status.fetch_local_tags())
+    assert "1 version behind (v1.14.0 -> v1.15.0)" in messages(findings, "stamp")
+
+
+def test_without_a_local_v1_every_version_tag_counts(tmp_path, monkeypatch):
+    repo = _tagged_repo(tmp_path)
+    _git(repo, "tag", "-d", "v1")
+    monkeypatch.setattr(fleet_status, "REPO_ROOT", repo)
+    assert "v1.16.0" in fleet_status.fetch_local_tags()
