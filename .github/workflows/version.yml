@@ -398,8 +398,8 @@ jobs:
         # unresolvable ref evaluates to an EMPTY STRING and checkout treats an
         # empty ref as "the default branch" -- it would quietly run main while
         # the consumer believes it pinned @v1. Two earlier derivations failed
-        # exactly that way in the rehearsal: github.workflow_ref is the
-        # CALLER's ref, and github.job_workflow_sha does not exist.
+        # exactly that way: github.workflow_ref is the CALLER's ref, and
+        # github.job_workflow_sha does not exist.
         id: shared
         env:
           SHA: ${{ job.workflow_sha }}
@@ -966,9 +966,8 @@ jobs:
       - name: Remove the shared checkout before staging the PR
         # actions/checkout refuses a path outside the workspace, so .em-actions
         # necessarily lands inside the consumer's tree -- where create-pull-request
-        # would otherwise sweep it into the release PR as a gitlink. Observed
-        # live in the rehearsal: the first release PR carried a stray
-        # '.em-actions -> Subproject commit ...' entry. R3 says that PR contains
+        # would otherwise sweep it into the release PR as a gitlink, shown as a
+        # stray '.em-actions -> Subproject commit ...' entry. R3 says that PR contains
         # the version bumps, the changelog, the consumed notes and the lockfile,
         # and nothing else.
         if: >-
