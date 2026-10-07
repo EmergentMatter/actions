@@ -186,7 +186,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           # Explicit globs, not dist/*: uv build writes a dist/.gitignore,
           # which the wildcard swept into the release as 'default.gitignore'
-          # (GitHub renames assets beginning with a dot). Observed live.
+          # (GitHub renames assets beginning with a dot).
           files: |
             dist/*.whl
             dist/*.tar.gz

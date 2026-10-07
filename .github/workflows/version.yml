@@ -810,17 +810,11 @@ jobs:
       # human-pushed-tag / workflow_dispatch path. Keep the two copies in
       # step when either changes.
       #
-      # A shared composite action was tried and withdrawn, but was never
-      # proven to be the problem: it came out while chasing a
-      # startup_failure whose real cause turned out to be elsewhere (the
-      # publish job requested a permission the caller had not granted; see
-      # that job). It may well work. What is genuinely awkward is the
-      # reference: `uses:` cannot take a templated ref, so
-      # `EmergentMatter/actions/...@<ref>` could not follow the ref this
-      # workflow is pinned at, and a local `./` path has to exist wherever
-      # the runner resolves it from, which for a reusable workflow called
-      # cross-repo is not obvious and was never isolated on its own.
-      # Revisit only with a test of that `./` resolution question alone.
+      # These steps are not a shared composite action: `uses:` cannot take
+      # a templated ref, so `EmergentMatter/actions/...@<ref>` cannot follow
+      # the ref this workflow is pinned at, and a local `./` path must exist
+      # wherever the runner resolves it, which for a reusable workflow
+      # called cross-repo is not guaranteed. See ADR 0007.
       - name: Refuse publish without a wheel to publish
         if: steps.detect.outputs.is-release-commit == 'true' && inputs.publish && !inputs.has-wheel
         run: |
@@ -838,7 +832,7 @@ jobs:
           tag_name: ${{ steps.tag.outputs.tag }}
           # Explicit globs, not dist/*: uv build writes a dist/.gitignore,
           # which the wildcard swept into the release as 'default.gitignore'
-          # (GitHub renames assets beginning with a dot). Observed live.
+          # (GitHub renames assets beginning with a dot).
           files: |
             dist/*.whl
             dist/*.tar.gz

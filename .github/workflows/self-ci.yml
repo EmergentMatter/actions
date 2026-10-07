@@ -258,6 +258,7 @@ jobs:
         # does not flag its own source.
         run: |
           uv run python - <<'EOF'
+          import re
           import subprocess
           import sys
           from pathlib import Path
@@ -309,7 +310,7 @@ jobs:
           EOF
 
       - name: No references to the private playbook repo
-        # This repo is public. The org's private engineering playbook must not
+        # This repo is public. The org's private playbook repo must not
         # be named or linked from it, and a relative path to a sibling checkout
         # means nothing to anyone outside the org. Statements that are still
         # needed belong inline in the file that needs them.
@@ -318,11 +319,12 @@ jobs:
         # step does not flag its own source.
         run: |
           uv run python - <<'EOF'
+          import re
           import subprocess
           import sys
           from pathlib import Path
 
-          NEEDLE = "engineering" + "-playbook"
+          NEEDLE = re.compile("engineering" + r"[-_ ]" + "playbook", re.I)
 
           tracked = subprocess.run(
               ["git", "ls-files", "-z"],
@@ -344,7 +346,7 @@ jobs:
                   continue
               n_checked += 1
               for n_line, line in enumerate(text.splitlines(), start=1):
-                  if NEEDLE in line:
+                  if NEEDLE.search(line):
                       hits.append(f"{name}:{n_line}: {line.strip()}")
 
           if hits:
