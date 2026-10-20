@@ -259,6 +259,10 @@ jobs:
 
       - run: uv sync --locked
 
+      # A uv workspace released as several packages in lockstep builds
+      # every member here too: `uv build --all-packages`, and
+      # `all-packages: true` on the verify-wheel step below. Match the
+      # `all-packages` input on version.yml and build-release.yml.
       - run: uv build
 
       # `uv build` exiting 0 does NOT mean the wheel is usable. Verified

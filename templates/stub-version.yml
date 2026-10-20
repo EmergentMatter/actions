@@ -46,6 +46,15 @@ jobs:
       # sibling3-ref: <SHA -- pinned, matching sibling2-repo's own ci.yml>
       # sibling3-path: <doubly nested sibling repo name>
 
+      # ── Several packages from one uv workspace: DELETE unless this repo's
+      # root pyproject.toml has a `[tool.uv.workspace]` table and every
+      # member is released together, at one version, from one tag. Builds
+      # every member (`uv build --all-packages`) and bumps every member in
+      # lockstep. Keep it the same in version.yml and build-release.yml.
+      # Publishes only with `publish-target: codeartifact`. See
+      # docs/onboarding.md, "Releasing several packages together".
+      # all-packages: true
+
       # ── Publishing: DELETE this whole block unless this repo publishes
       # releases to a package index. `publish: true` also needs
       # `id-token: write` added to the permissions block below, and a

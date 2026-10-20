@@ -47,6 +47,15 @@ jobs:
       # wheel/sdist glob; must not be combined with `publish: true`.
       # has-wheel: false
 
+      # ── Several packages from one uv workspace: DELETE unless this repo's
+      # root pyproject.toml has a `[tool.uv.workspace]` table and every
+      # member is released together, at one version, from one tag. Builds
+      # every member (`uv build --all-packages`) and bumps every member in
+      # lockstep. Keep it the same in version.yml and build-release.yml.
+      # Publishes only with `publish-target: codeartifact`. See
+      # docs/onboarding.md, "Releasing several packages together".
+      # all-packages: true
+
       # ── Publish target: DELETE unless publish: true above. Defaults to
       # `pypi`, which is exactly what `publish: true` did before this
       # input existed -- an existing repo need change nothing. See

@@ -77,3 +77,67 @@ def test_verify_passes_for_a_real_installed_distribution(name):
     ok, message = verify_wheel.verify(name)
     assert ok is True, message
     assert "imported" in message
+
+
+# ------------------------------------------------ multi-package (all-packages)
+
+
+def _write_wheel(path: Path, name: str, version: str) -> Path:
+    import zipfile
+
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(f"{name.replace('-', '_')}/__init__.py", "")
+        zf.writestr(
+            f"{dist_info}/METADATA", f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+        )
+    return path
+
+
+def test_wheel_identity_reads_the_name_from_metadata_not_the_filename(tmp_path):
+    wheel = _write_wheel(tmp_path / "whatever-0-py3-none-any.whl", "my-dist", "1.2.3")
+    assert verify_wheel.wheel_identity(wheel) == ("my-dist", "1.2.3")
+
+
+def test_identify_lists_every_wheel(tmp_path):
+    a = _write_wheel(tmp_path / "a.whl", "pkg-a", "1.0.0")
+    b = _write_wheel(tmp_path / "b.whl", "pkg-b", "1.0.0")
+    ok, message = verify_wheel.identify([a, b], lockstep=True)
+    assert ok is True
+    assert message.splitlines() == ["pkg-a 1.0.0", "pkg-b 1.0.0"]
+
+
+def test_identify_lockstep_refuses_two_versions(tmp_path):
+    a = _write_wheel(tmp_path / "a.whl", "pkg-a", "1.0.0")
+    b = _write_wheel(tmp_path / "b.whl", "pkg-b", "1.1.0")
+    ok, message = verify_wheel.identify([a, b], lockstep=True)
+    assert ok is False
+    assert "lockstep" in message and "pkg-a 1.0.0" in message and "pkg-b 1.1.0" in message
+    # Without the flag the same wheels are merely listed.
+    assert verify_wheel.identify([a, b], lockstep=False)[0] is True
+
+
+def test_identify_lockstep_refuses_the_same_name_twice(tmp_path):
+    a = _write_wheel(tmp_path / "a.whl", "pkg_a", "1.0.0")
+    b = _write_wheel(tmp_path / "b.whl", "pkg-a", "1.0.0")
+    assert verify_wheel.identify([a, b], lockstep=True)[0] is False
+
+
+def test_identify_reports_an_unreadable_wheel(tmp_path):
+    bad = tmp_path / "bad.whl"
+    bad.write_bytes(b"not a zip")
+    ok, message = verify_wheel.identify([bad], lockstep=False)
+    assert ok is False and "cannot read wheel metadata" in message
+
+
+def test_main_identify_cli(tmp_path, capsys):
+    a = _write_wheel(tmp_path / "a.whl", "pkg-a", "2.0.0")
+    assert verify_wheel.main(["--identify", "--lockstep", str(a)]) == 0
+    assert capsys.readouterr().out.strip() == "pkg-a 2.0.0"
+    assert verify_wheel.main(["--identify"]) == 2
+
+
+def test_main_checks_every_name_and_fails_if_any_fails():
+    assert verify_wheel.main(["pytest", "pytest"]) == 0
+    assert verify_wheel.main(["pytest", "this-distribution-does-not-exist-xyz"]) == 1
+    assert verify_wheel.main([]) == 2

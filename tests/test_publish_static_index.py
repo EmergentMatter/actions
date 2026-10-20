@@ -182,6 +182,39 @@ def test_sync_dist_files_uploads_new_files(dist_dir):
     assert "downloads/pkg/pkg-1.0.0.tar.gz" in bucket.objects
 
 
+def test_sync_dist_files_refuses_a_dist_dir_holding_two_distributions(dist_dir):
+    _make_wheel(
+        dist_dir / "pkg_tools-1.0.0-py3-none-any.whl",
+        requires_python=">=3.13",
+        name="pkg_tools",
+    )
+    bucket = FakeBucket()
+    with pytest.raises(psi.PublishStaticIndexError, match="more than one distribution") as exc:
+        psi.sync_dist_files(bucket.run, "my-bucket", "pkg", dist_dir)
+    assert "pkg" in str(exc.value) and "pkg-tools" in str(exc.value)
+    # Refused before anything was looked up or uploaded.
+    assert bucket.calls == []
+    assert bucket.objects == {}
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("emergent_matter_sdm_tools-1.2.3-py3-none-any.whl", "emergent-matter-sdm-tools"),
+        ("emergent_matter_sdm_tools-1.2.3.tar.gz", "emergent-matter-sdm-tools"),
+        # An older sdist spelling that keeps the dashes in the name.
+        ("emergent-matter-sdm-tools-1.2.3.tar.gz", "emergent-matter-sdm-tools"),
+    ],
+)
+def test_distribution_name_of_agrees_across_wheel_and_sdist_spellings(filename, expected):
+    assert psi.distribution_name_of(filename) == expected
+
+
+def test_one_distribution_as_wheel_plus_sdist_is_not_mixed(dist_dir):
+    # The `dist_dir` fixture itself: one name, two files.
+    psi.refuse_mixed_distributions(psi.gip.dist_files_in(dist_dir))
+
+
 def test_sync_dist_files_skips_a_key_already_uploaded_with_identical_content(dist_dir):
     bucket = FakeBucket()
     first = psi.sync_dist_files(bucket.run, "my-bucket", "pkg", dist_dir)

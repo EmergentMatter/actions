@@ -1,0 +1,1 @@
+A uv workspace can release all its packages together: the new opt-in `all-packages` input on `version.yml`, `build-release.yml` and the `verify-wheel` action builds every member, bumps every member to the same version (failing if any ends up elsewhere), and verifies every wheel. The static index refuses a multi-package build.
