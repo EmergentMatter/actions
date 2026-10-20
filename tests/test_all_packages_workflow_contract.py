@@ -90,9 +90,16 @@ def test_the_bump_step_keeps_the_single_package_path_verbatim():
 
 def test_the_bump_step_locks_once_after_bumping_every_package():
     body = _step_run(_text(VERSION), "Bump [project] version and refresh the lockfile")
-    multi = body.split('if [ "${ALL_PACKAGES}" = "true" ]; then')[1].split("else")[0]
+    multi = body.split('if [ "${ALL_PACKAGES}" = "true" ]; then')[1].split("\nelse\n  uv version")[
+        0
+    ]
     assert multi.count("uv lock") == 1
-    assert multi.index("--package") < multi.index("uv lock") < multi.index("check --version")
+    assert (
+        multi.index("--package")
+        < multi.index("uv add")
+        < multi.index("uv lock")
+        < multi.index("check --version")
+    )
 
 
 def test_version_workflow_still_has_no_permissions_key_after_the_change():
@@ -114,10 +121,18 @@ def test_contract_documents_all_packages():
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv")
 def test_the_bump_step_bumps_every_member_and_fails_when_one_is_out_of_step(tmp_path):
+    _run_bump_cases(tmp_path)
+
+
+def _run_bump_cases(tmp_path):
     step = _step_run(_text(VERSION), "Bump [project] version and refresh the lockfile")
 
-    def make(tools_version: str) -> Path:
-        root = tmp_path / f"ws-{tools_version}"
+    def make(
+        tools_version: str,
+        dependency: str = "eng-tools>=1",
+        extra_dependency: str | None = None,
+    ) -> Path:
+        root = tmp_path / f"ws-{tools_version}-{abs(hash((dependency, extra_dependency)))}"
         (root / "src" / "eng").mkdir(parents=True)
         (root / "src" / "eng" / "__init__.py").write_text("")
         (root / "packages" / "tools" / "src" / "tools").mkdir(parents=True)
@@ -125,8 +140,13 @@ def test_the_bump_step_bumps_every_member_and_fails_when_one_is_out_of_step(tmp_
         build = '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n'
         (root / "pyproject.toml").write_text(
             '[project]\nname = "eng"\nversion = "1.2.3"\nrequires-python = ">=3.11"\n'
-            'dependencies = ["eng-tools>=1"]\n'
-            "[tool.uv.sources]\neng-tools = { workspace = true }\n"
+            f'dependencies = [\n  "{dependency}",  # keep this comment\n]\n'
+            + (
+                f'[project.optional-dependencies]\nextra = ["{extra_dependency}"]\n'
+                if extra_dependency
+                else ""
+            )
+            + "[tool.uv.sources]\neng-tools = { workspace = true }\n"
             '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
             + build
             + '[tool.hatch.build.targets.wheel]\npackages = ["src/eng"]\n'
@@ -165,3 +185,38 @@ def test_the_bump_step_bumps_every_member_and_fails_when_one_is_out_of_step(tmp_
     failed = run(out_of_step)
     assert failed.returncode == 1
     assert "not in lockstep" in failed.stderr and "eng-tools is at 1.1.0" in failed.stderr
+
+    # An exact pin between members moves with the bump, a range does not,
+    # and the comment beside the pin survives.
+    pinned = make("1.2.3", "eng-tools==1.2.3", "eng-tools[x]==1.2.3; python_version >= '3.11'")
+    done = run(pinned)
+    assert done.returncode == 0, done.stderr
+    text = (pinned / "pyproject.toml").read_text()
+    assert '"eng-tools==1.3.0",  # keep this comment' in text
+    # uv rewrites the entry it touches, normalizing the marker's spelling.
+    assert re.search(r"eng-tools\[x\]==1\.3\.0 ?; python_\w+ >= '3\.11'", text)
+
+    ranged = make("1.2.3", "eng-tools>=1,<2")
+    assert run(ranged).returncode == 0
+    assert '"eng-tools>=1,<2",' in (ranged / "pyproject.toml").read_text()
+
+    # The check names an internal pin left behind.
+    (pinned / "pyproject.toml").write_text(
+        text.replace('"eng-tools==1.3.0",', '"eng-tools==1.2.3",')
+    )
+    check = subprocess.run(
+        [
+            "python3",
+            str(REPO_ROOT / "scripts" / "workspace_packages.py"),
+            "--root",
+            str(pinned),
+            "check",
+            "--version",
+            "1.3.0",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert check.returncode == 1
+    assert "eng pins eng-tools==1.2.3, expected ==1.3.0" in check.stderr

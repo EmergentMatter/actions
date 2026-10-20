@@ -44,12 +44,20 @@ tags and PRs, none of which the contract has a place for.
   from the root `pyproject.toml` and applies to every package built from it. A
   repository that needs two tiers needs two repositories.
 
+- **Exact pins between packages move with the bump; ranges do not.** `uv version`
+  leaves a `==` pin from one workspace package to another at the old version, and
+  `uv lock` does not enforce it, so the built wheel would require the sibling's
+  previous release. The bump rewrites each such pin to the new version, and the
+  final check fails naming any that is not `==` it. A range such as `>=1.2,<2`
+  states compatibility, which a version bump does not change, so it is left
+  alone.
+
 ## Consequences
 
-Cross-package version constraints are the caller's to write. An exact pin on a
-sibling (`==`) is not rewritten by the bump; a range such as
-`>=1.2,<2` is. Members that must stay at one version should depend on each
-other by range.
+Cross-package constraints are the caller's to choose: an exact pin follows every
+release automatically, a range stays where it was written. Only pins in
+`[project].dependencies` and `[project.optional-dependencies]` are rewritten;
+one in a dependency group is not.
 
 `version_files` entries are synced from the root only; a version string
 declared inside a member's source tree is not touched by `sync_version.py`

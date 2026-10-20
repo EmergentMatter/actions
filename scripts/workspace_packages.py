@@ -8,11 +8,22 @@ bump itself is still `uv version`, which owns how a version is written.
 
     workspace_packages.py names                  # one distribution name per line
     workspace_packages.py check --version 1.4.0  # exit 1 unless every package is 1.4.0
+                                                 # and every internal == pin names it
+    workspace_packages.py pins --version 1.4.0   # one "<dependent>|<extra>|<requirement>"
+                                                 # line per internal == pin
 
 The packages are the root project (when it has a `[project]` table) plus
 every directory matched by `[tool.uv.workspace] members`, minus `exclude`,
 the same set `uv build --all-packages` builds. A repo with no
 `[tool.uv.workspace]` table is a workspace of one.
+
+An exact pin (`==`) from one workspace package to another is part of the
+lockstep: `uv version` does not move it, so it would keep requiring the old
+version of its sibling. `pins` lists each one with the requirement it must
+become, and `check` fails on any that is not `==` the new version. A range
+(`>=1.2,<2`) is left alone: it is a statement about compatibility that a
+version bump does not change. Pins in `[project].dependencies` and
+`[project.optional-dependencies]` are covered; dependency groups are not.
 
 A package whose version is dynamic, or missing, is an error rather than a
 skip: lockstep cannot be asserted about a version this script cannot read.
@@ -21,6 +32,7 @@ skip: lockstep cannot be asserted about a version this script cannot read.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -35,6 +47,31 @@ class Package(NamedTuple):
     name: str
     version: str | None
     path: Path
+    # (extra name or "", requirement string) for each declared dependency.
+    requirements: tuple[tuple[str, str], ...] = ()
+
+
+class InternalPin(NamedTuple):
+    dependent: str
+    extra: str
+    member: str
+    extras: str  # "[a,b]" or ""
+    version: str
+    marker: str  # "; python_version >= '3.11'" or ""
+
+    def requirement(self, version: str) -> str:
+        return f"{self.member}{self.extras}=={version}{self.marker}"
+
+
+_REQUIREMENT = re.compile(
+    r"^\s*(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*(?P<extras>\[[^\]]*\])?\s*"
+    r"(?P<spec>[^;]*?)\s*(?P<marker>;.*)?$"
+)
+_EXACT = re.compile(r"^==\s*([^\s,*]+)$")
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _read(pyproject: Path) -> dict:
@@ -61,7 +98,10 @@ def _package_at(directory: Path) -> Package | None:
             f"{project['name']} declares a dynamic version in {pyproject}; "
             "lockstep releases need a static version in every package."
         )
-    return Package(project["name"], project.get("version"), directory)
+    requirements = [("", r) for r in project.get("dependencies", [])]
+    for extra, extra_requirements in project.get("optional-dependencies", {}).items():
+        requirements += [(extra, r) for r in extra_requirements]
+    return Package(project["name"], project.get("version"), directory, tuple(requirements))
 
 
 def _expand(root: Path, patterns: list[str]) -> set[Path]:
@@ -110,13 +150,51 @@ def check_version(packages: list[Package], expected: str) -> list[str]:
     ]
 
 
+def internal_pins(packages: list[Package]) -> list[InternalPin]:
+    """Every exact pin one workspace package declares on another."""
+    members = {_normalize(p.name): p.name for p in packages}
+    pins: list[InternalPin] = []
+    for package in packages:
+        for extra, requirement in package.requirements:
+            match = _REQUIREMENT.match(requirement)
+            if match is None or _normalize(match["name"]) not in members:
+                continue
+            exact = _EXACT.match(match["spec"])
+            if exact is None:
+                continue
+            pins.append(
+                InternalPin(
+                    package.name,
+                    extra,
+                    members[_normalize(match["name"])],
+                    re.sub(r"\s+", "", match["extras"] or ""),
+                    exact.group(1),
+                    ("; " + match["marker"][1:].strip()) if match["marker"] else "",
+                )
+            )
+    return pins
+
+
+def check_pins(packages: list[Package], expected: str) -> list[str]:
+    """One message per internal exact pin that is not `== expected`."""
+    return [
+        f"{pin.dependent} pins {pin.member}=={pin.version}, expected =={expected}"
+        for pin in internal_pins(packages)
+        if pin.version != expected
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", default=".", type=Path)
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("names", help="print each package's distribution name")
-    check = sub.add_parser("check", help="fail unless every package is at --version")
+    check = sub.add_parser(
+        "check", help="fail unless every package and internal == pin is at --version"
+    )
     check.add_argument("--version", required=True)
+    pins = sub.add_parser("pins", help="list each internal == pin as it must read at --version")
+    pins.add_argument("--version", required=True)
     args = ap.parse_args(argv)
 
     try:
@@ -133,7 +211,12 @@ def main(argv: list[str] | None = None) -> int:
             print(package.name)
         return 0
 
-    problems = check_version(packages, args.version)
+    if args.command == "pins":
+        for pin in internal_pins(packages):
+            print(f"{pin.dependent}|{pin.extra}|{pin.requirement(args.version)}")
+        return 0
+
+    problems = check_version(packages, args.version) + check_pins(packages, args.version)
     if problems:
         print(
             "::error::the workspace packages are not in lockstep after the bump:\n  "

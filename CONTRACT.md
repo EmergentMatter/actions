@@ -280,7 +280,13 @@ in step, ADR 0002), changes three things and nothing else; with it off, none of 
 - **Bump (`version.yml` only):** `uv version --bump <level> --package <name>` for the root project
   and every member, then one `uv lock`, then `scripts/workspace_packages.py check` fails the run
   unless every package carries the version `compute_bump.py` computed. A member that starts out of
-  step fails the release; it is not silently corrected. The members are those
+  step fails the release; it is not silently corrected. An exact (`==`) pin from one workspace
+  package to another is rewritten to the new version first (`uv add --package <dependent>
+  "<member>==<new>" --no-sync`, so comments beside it survive), because `uv version` does not move
+  it and the built wheel would otherwise require the sibling's old version; the check fails
+  naming any pin that is not `==` the new version. A range (`>=1.2,<2`) is never touched.
+  Pins in `[project].dependencies` and `[project.optional-dependencies]` are covered; dependency
+  groups are not. The members are those
   `[tool.uv.workspace] members` matches minus `exclude`. A package with a dynamic version is
   refused.
 - **Static index:** `all-packages` with `publish-target: static-index` or `both` is refused in the
