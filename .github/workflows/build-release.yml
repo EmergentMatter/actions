@@ -201,6 +201,20 @@ jobs:
             uv build
           fi
 
+      - name: Refuse an sdist that carries the shared checkout
+        # Holds for `uv build` and `uv build --all-packages` alike: every
+        # sdist in dist/ is listed, and none may contain a .em-actions path.
+        if: inputs.has-wheel
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for sdist in dist/*.tar.gz; do
+            if tar -tzf "${sdist}" | grep -E '(^|/)\.em-actions(/|$)' >/dev/null; then
+              echo "::error::${sdist} contains .em-actions/, the shared scripts checkout. Nothing but the consumer's own files may be in the workspace when it builds."
+              exit 1
+            fi
+          done
+
       - name: Create the GitHub Release (with build artifacts)
         if: inputs.has-wheel
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -282,9 +296,18 @@ jobs:
           ref: ${{ needs.release.outputs.actions-ref }}
           path: .em-actions
 
+      - name: Move the shared scripts out of the workspace
+        # actions/checkout only writes inside the workspace, so the shared
+        # checkout lands there first. Nothing that is not the consumer's own
+        # may stay in the workspace: `uv build` packs every file git does not
+        # ignore into the sdist, and create-pull-request stages stray
+        # directories as gitlinks. Every script below runs from the new
+        # location.
+        run: mv .em-actions "${RUNNER_TEMP}/em-actions"
+
       - name: Refuse a publish target this repo's licence tier does not allow
         run: |
-          python3 ".em-actions/scripts/check_publish_tier.py" \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/check_publish_tier.py" \
             --target "${{ inputs.publish-target }}"
 
       - name: Read the package name
@@ -354,7 +377,7 @@ jobs:
         id: static-index
         run: |
           set -euo pipefail
-          python3 ".em-actions/scripts/publish_static_index.py" \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/publish_static_index.py" \
             --bucket "${{ inputs.static-index-bucket }}" \
             --package-name "${{ steps.package.outputs.name }}" \
             --dist-dir dist >> "$GITHUB_OUTPUT"

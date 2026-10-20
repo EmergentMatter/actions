@@ -157,7 +157,9 @@ def _run_bump_cases(tmp_path):
             + build
             + '[tool.hatch.build.targets.wheel]\npackages = ["src/tools"]\n'
         )
-        (root / ".em-actions").symlink_to(REPO_ROOT)
+        (tmp_path / "runner-temp").mkdir(exist_ok=True)
+        if not (tmp_path / "runner-temp" / "em-actions").exists():
+            (tmp_path / "runner-temp" / "em-actions").symlink_to(REPO_ROOT)
         return root
 
     def run(root: Path) -> subprocess.CompletedProcess[str]:
@@ -167,6 +169,7 @@ def _run_bump_cases(tmp_path):
             "LEVEL": "minor",
             "EXPECTED_NEXT": "1.3.0",
             "ALL_PACKAGES": "true",
+            "RUNNER_TEMP": str(tmp_path / "runner-temp"),
         }
         return subprocess.run(
             ["bash", "-c", step], cwd=root, env=env, capture_output=True, text=True, check=False
@@ -220,3 +223,76 @@ def _run_bump_cases(tmp_path):
     )
     assert check.returncode == 1
     assert "eng pins eng-tools==1.2.3, expected ==1.3.0" in check.stderr
+
+
+# ------------------------------------------- the shared checkout stays out of builds
+
+
+@pytest.mark.parametrize("path", [VERSION, BUILD_RELEASE])
+def test_every_shared_checkout_is_moved_out_of_the_workspace_right_after(path):
+    text = _text(path)
+    checkouts = [m.start() for m in re.finditer(r"path: \.em-actions\n", text)]
+    assert checkouts
+    for start in checkouts:
+        following = text[start : start + 700]
+        assert "- name: Move the shared scripts out of the workspace" in following
+        assert 'run: mv .em-actions "${RUNNER_TEMP}/em-actions"' in following
+
+
+@pytest.mark.parametrize("path", [VERSION, BUILD_RELEASE])
+def test_no_script_is_run_from_inside_the_workspace(path):
+    text = _text(path)
+    assert not re.search(r'"\.em-actions/', text)
+    assert '"${RUNNER_TEMP}/em-actions/scripts/' in text
+
+
+def test_the_release_pr_has_no_cleanup_step_for_the_shared_checkout():
+    assert "rm -rf .em-actions" not in _text(VERSION)
+
+
+def test_the_two_sdist_checks_are_identical_and_follow_the_build():
+    for path in (VERSION, BUILD_RELEASE):
+        text = _text(path)
+        build = text.index("- name: Build wheel + sdist")
+        check = text.index("- name: Refuse an sdist that carries the shared checkout")
+        assert (
+            build < check < text.index("- name: Create the GitHub Release (with build artifacts)")
+        )
+    assert _step_run(
+        _text(VERSION), "Refuse an sdist that carries the shared checkout"
+    ) == _step_run(_text(BUILD_RELEASE), "Refuse an sdist that carries the shared checkout")
+
+
+def _sdist(path: Path, members: list[str]) -> None:
+    import io
+    import tarfile
+
+    with tarfile.open(path, "w:gz") as tf:
+        for member in members:
+            data = b"x"
+            info = tarfile.TarInfo(member)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+
+@pytest.mark.parametrize(
+    ("members", "ok"),
+    [
+        (["pkg-1/pyproject.toml", "pkg-1/src/pkg/__init__.py"], True),
+        (["pkg-1/pyproject.toml", "pkg-1/.em-actions/scripts/x.py"], False),
+        (["pkg-1/.em-actions"], False),
+        (["pkg-1/src/not-em-actions/x.py", "pkg-1/.em-actions-notes.md"], True),
+    ],
+)
+def test_the_sdist_check_refuses_a_shared_checkout_in_any_sdist(tmp_path, members, ok):
+    step = _step_run(_text(VERSION), "Refuse an sdist that carries the shared checkout")
+    (tmp_path / "dist").mkdir()
+    _sdist(tmp_path / "dist" / "clean-1.tar.gz", ["clean-1/pyproject.toml"])
+    # The second sdist is the one under test, as an all-packages build has several.
+    _sdist(tmp_path / "dist" / "other-1.tar.gz", members)
+    done = subprocess.run(
+        ["bash", "-c", step], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert (done.returncode == 0) is ok, done.stderr
+    if not ok:
+        assert "other-1.tar.gz contains .em-actions/" in done.stdout

@@ -201,6 +201,11 @@ No context field gives a reusable workflow its own ref: `github.workflow_ref` re
 `job.workflow_sha` (the commit of the reusable workflow file itself, which cannot drift from the
 pin), falling back to `actions-ref` and logging which path it took.
 
+The shared checkout is moved to `${RUNNER_TEMP}/em-actions` right after it is made, and every
+script runs from there: only the consumer's own files may be in the workspace when `uv build` runs,
+because an sdist contains every file git does not ignore. A build step that finds a `.em-actions`
+path in any sdist in `dist/` fails the run.
+
 An unresolvable ref is refused outright. An empty checkout ref silently means "the default
 branch," and that is exactly how two earlier attempts passed while ignoring the pin entirely.
 
