@@ -715,8 +715,10 @@ What to know before you do:
   The bump applies the same level to the root project and every member, and the
   run fails if any of them does not land on the computed version, so bring all
   of them to the same version first.
-- **Depend on siblings by range**, not `==`; the bump does not rewrite an exact
-  pin.
+- **Sibling dependencies:** an exact pin (`==`) from one package to another is
+  rewritten to the new version by the bump, and the run fails if one is left
+  behind. A range (`>=1.2,<2`) is never touched. Pins in dependency groups are
+  not covered.
 - **Publish with `publish-target: codeartifact`.** The static index serves one
   package per publish and refuses a multi-package `dist/`; the publish job also
   refuses `static-index` and `both` with `all-packages` up front.

@@ -317,5 +317,7 @@ Called by `version.yml` when `all-packages` is on; you do not run it
 directly. `names` prints the distribution name of the root project and of
 every `[tool.uv.workspace]` member (minus `exclude`), one per line, which is
 the list the bump loops over. `check --version X` exits 1 unless every one of
-them is at `X`. It reads `pyproject.toml` files only; the bump itself is
+them is at `X` and every exact (`==`) pin between them names `X`. `pins
+--version X` prints each such pin as `dependent|extra|requirement` for the bump
+to rewrite. It reads `pyproject.toml` files only; the bump itself is
 `uv version`.

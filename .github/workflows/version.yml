@@ -912,11 +912,24 @@ jobs:
             # Lockstep: every workspace package takes the same bump, then the
             # check below fails the run if any of them did not land on the
             # version compute_bump.py computed (e.g. a member that started
-            # out of step). The lock is refreshed once, after all of them.
+            # out of step), or if an internal exact pin was left behind. The
+            # lock is refreshed once, after all of them.
             packages="$(python3 ".em-actions/scripts/workspace_packages.py" names)"
             while IFS= read -r package; do
               uv version --bump "${LEVEL}" --package "${package}"
             done <<< "${packages}"
+            # An exact (==) pin from one package to another is not moved by
+            # `uv version`; rewrite each to the new version. Ranges stay.
+            pins="$(python3 ".em-actions/scripts/workspace_packages.py" pins --version "${EXPECTED_NEXT}")"
+            if [ -n "${pins}" ]; then
+              while IFS='|' read -r dependent extra requirement; do
+                if [ -n "${extra}" ]; then
+                  uv add --package "${dependent}" --optional "${extra}" "${requirement}" --no-sync
+                else
+                  uv add --package "${dependent}" "${requirement}" --no-sync
+                fi
+              done <<< "${pins}"
+            fi
             uv lock
             python3 ".em-actions/scripts/workspace_packages.py" check --version "${EXPECTED_NEXT}"
           else
