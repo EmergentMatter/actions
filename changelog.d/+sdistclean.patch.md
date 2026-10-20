@@ -1,1 +1,1 @@
-The shared scripts checkout is moved out of the consumer workspace before anything builds, so a release sdist no longer contains an `.em-actions/` directory, and the build fails if one ever does.
+The shared scripts checkout is moved out of the consumer workspace before anything builds, so a release sdist no longer contains an `.em-actions/` directory, and the build fails if one ever does. `build-release.yml` now installs Python and uv in its release job before building, which it never did, and a test fails when any job runs uv before setting it up.
