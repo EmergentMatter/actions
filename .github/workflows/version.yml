@@ -96,6 +96,20 @@ on:
           below, since there is nothing to publish.
         type: boolean
         default: true
+      all-packages:
+        description: >-
+          Set to true for a uv workspace that releases several packages in
+          lockstep from one tag: `uv build --all-packages` builds every
+          workspace member, and (version.yml) the release PR bumps every
+          member to the same version, failing if any ends up elsewhere.
+          Off by default; a repo that leaves it off builds and bumps the
+          root package only, exactly as before. The publish step is
+          unchanged, so every artifact goes to the same target -- and
+          `static-index` is refused, because that index serves one package
+          per publish. See CONTRACT.md, "Releasing several packages
+          together".
+        type: boolean
+        default: false
       publish:
         description: Publish to a package index via OIDC trusted publishing. Opt-in, off by default. (S3)
         type: boolean
@@ -823,7 +837,15 @@ jobs:
 
       - name: Build wheel + sdist
         if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
-        run: uv build
+        env:
+          ALL_PACKAGES: ${{ inputs.all-packages }}
+        run: |
+          set -euo pipefail
+          if [ "${ALL_PACKAGES}" = "true" ]; then
+            uv build --all-packages
+          else
+            uv build
+          fi
 
       - name: Create the GitHub Release (with build artifacts)
         if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
@@ -883,14 +905,28 @@ jobs:
         env:
           LEVEL: ${{ steps.bump.outputs.level }}
           EXPECTED_NEXT: ${{ steps.bump.outputs.next }}
+          ALL_PACKAGES: ${{ inputs.all-packages }}
         run: |
           set -euo pipefail
-          uv version --bump "${LEVEL}"
-          uv lock
-          actual=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "${actual}" != "${EXPECTED_NEXT}" ]; then
-            echo "::error::uv computed version ${actual} but compute_bump.py expected ${EXPECTED_NEXT}. Semver bump semantics have diverged between uv and compute_bump.py's V2 rule (no 0.x special-casing)."
-            exit 1
+          if [ "${ALL_PACKAGES}" = "true" ]; then
+            # Lockstep: every workspace package takes the same bump, then the
+            # check below fails the run if any of them did not land on the
+            # version compute_bump.py computed (e.g. a member that started
+            # out of step). The lock is refreshed once, after all of them.
+            packages="$(python3 ".em-actions/scripts/workspace_packages.py" names)"
+            while IFS= read -r package; do
+              uv version --bump "${LEVEL}" --package "${package}"
+            done <<< "${packages}"
+            uv lock
+            python3 ".em-actions/scripts/workspace_packages.py" check --version "${EXPECTED_NEXT}"
+          else
+            uv version --bump "${LEVEL}"
+            uv lock
+            actual=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+            if [ "${actual}" != "${EXPECTED_NEXT}" ]; then
+              echo "::error::uv computed version ${actual} but compute_bump.py expected ${EXPECTED_NEXT}. Semver bump semantics have diverged between uv and compute_bump.py's V2 rule (no 0.x special-casing)."
+              exit 1
+            fi
           fi
 
       - name: Sync declared version strings
@@ -1107,8 +1143,17 @@ jobs:
           TARGET: ${{ inputs.publish-target }}
           ROLE_ARN: ${{ inputs.aws-role-arn }}
           BUCKET: ${{ inputs.static-index-bucket }}
+          ALL_PACKAGES: ${{ inputs.all-packages }}
         run: |
           set -euo pipefail
+          if [ "${ALL_PACKAGES}" = "true" ]; then
+            case "${TARGET}" in
+              static-index|both)
+                echo "::error::all-packages cannot publish to '${TARGET}': the static index serves one package per publish. Use publish-target 'codeartifact'."
+                exit 1
+                ;;
+            esac
+          fi
           case "${TARGET}" in
             static-index|codeartifact|both)
               if [ -z "${ROLE_ARN}" ]; then

@@ -18,6 +18,8 @@ Two things this enforces that a plain `aws s3 cp` loop would not:
    re-published out from under anyone who already installed it. The SAME
    content already being there (a retried run) is fine and uploads
    nothing again.
+   One package per run, too: a `dist/` holding more than one distribution
+   name is refused before anything uploads (see refuse_mixed_distributions()).
 2. **A `simple/<package>/index.html` that lists every release, not just
    this one.** The per-repo role can `ListBucket` only its own prefixes
    (`downloads/<package>/*` and `simple/<package>/*` -- not any other
@@ -235,6 +237,34 @@ def upload_file(
         raise PublishStaticIndexError(f"upload of s3://{bucket}/{key} failed: {p.stderr.strip()}")
 
 
+def distribution_name_of(filename: str) -> str:
+    """The normalized distribution name a wheel/sdist filename carries.
+
+    A wheel's name is its first dash-separated field (the spec escapes
+    dashes inside it); an sdist's is everything before the last dash,
+    since the version is the only field after it.
+    """
+    if filename.endswith(".whl"):
+        return gip.normalize_name(filename.split("-", 1)[0])
+    stem = filename[: -len(".tar.gz")] if filename.endswith(".tar.gz") else filename
+    return gip.normalize_name(stem.rsplit("-", 1)[0])
+
+
+def refuse_mixed_distributions(dist_files: list[gip.DistFile]) -> None:
+    """One publish is one package: refuse a dist/ holding more than one
+    distribution name. Every file below goes under a single package's
+    `downloads/<package>/` prefix and into a single `simple/<package>/`
+    page, so a second name would be published under the first one's
+    identity, where the per-package publish role also forbids it."""
+    names = sorted({distribution_name_of(f.filename) for f in dist_files})
+    if len(names) > 1:
+        raise PublishStaticIndexError(
+            f"dist/ holds more than one distribution ({', '.join(names)}). The static "
+            "index publishes one package per run, so a multi-package build cannot go "
+            "here; publish to CodeArtifact instead, or build one package at a time."
+        )
+
+
 def sync_dist_files(
     run: Runner, bucket: str, package_name: str, dist_dir: Path
 ) -> list[gip.DistFile]:
@@ -247,7 +277,9 @@ def sync_dist_files(
     normalized = gip.normalize_name(package_name)
     prefix = f"downloads/{normalized}/"
     uploaded: list[gip.DistFile] = []
-    for dist_file in gip.dist_files_in(dist_dir):
+    dist_files = gip.dist_files_in(dist_dir)
+    refuse_mixed_distributions(dist_files)
+    for dist_file in dist_files:
         key = prefix + dist_file.filename
         existing = head_object(run, bucket, key)
         if existing is not None:

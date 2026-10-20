@@ -170,8 +170,8 @@ fallback value, because which licence a repo ships under is a decision only a hu
 
 | Workflow | Inputs (all optional unless noted, with defaults) |
 |---|---|
-| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name, `codeartifact-read-role-arn`=`""`, `codeartifact-read-index-name`=`em-codeartifact`, plus the publish-target inputs below |
-| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name, `actions-ref`=`v1`, plus the publish-target inputs below |
+| `version.yml` | `release-branch`=`release/next`, `notes-dir`=`changelog.d`, `python-version`=`3.13`, `uv-version`=pinned explicit version (NOT `latest`), `skip-label`=`skip-changelog`, `actions-ref`=`v1`, `publish`=`false` (bool), `environment`=non-empty name, `codeartifact-read-role-arn`=`""`, `codeartifact-read-index-name`=`em-codeartifact`, `all-packages`=`false` (bool), plus the publish-target inputs below |
+| `build-release.yml` | `python-version`=`3.13`, `uv-version`=pinned, `publish`=`false` (bool), `environment`=non-empty name, `actions-ref`=`v1`, `all-packages`=`false` (bool), plus the publish-target inputs below |
 
 Both workflows take the SAME publish-target inputs, kept in step for the same reason their
 build/release steps are (ADR 0002): `publish-target`=`pypi`, `aws-role-arn`=`""`,
@@ -268,6 +268,32 @@ without this input both workflows failed on the resulting empty wheel/sdist glob
 producing a tag-only GitHub Release. `publish: true` combined with `has-wheel: false` is refused
 outright (there is nothing to publish); both workflows validate this before ever reaching `uv
 build`.
+
+### Releasing several packages together (`all-packages`)
+
+A repo whose root `pyproject.toml` has a `[tool.uv.workspace]` table can release every member from
+one tag at one version. `all-packages: true`, on both `version.yml` and `build-release.yml` (kept
+in step, ADR 0002), changes three things and nothing else; with it off, none of them applies:
+
+- **Build:** `uv build --all-packages` in place of `uv build`, so `dist/` holds a wheel and an
+  sdist per package. The GitHub Release globs and `uv publish dist/*` already take them all.
+- **Bump (`version.yml` only):** `uv version --bump <level> --package <name>` for the root project
+  and every member, then one `uv lock`, then `scripts/workspace_packages.py check` fails the run
+  unless every package carries the version `compute_bump.py` computed. A member that starts out of
+  step fails the release; it is not silently corrected. The members are those
+  `[tool.uv.workspace] members` matches minus `exclude`. A package with a dynamic version is
+  refused.
+- **Static index:** `all-packages` with `publish-target: static-index` or `both` is refused in the
+  publish job's input validation, before any credential is assumed, and `publish_static_index.py`
+  independently refuses any `dist/` holding more than one distribution name. The index serves one
+  package per publish. `codeartifact` takes the whole `dist/`.
+
+`check_publish_tier.py` and the major-version ceiling read the root `[project]` and
+`[tool.em-release]` only, so one tier and one version line apply to every package.
+
+The `verify-wheel` action takes the same input. With `all-packages: "true"` it installs every wheel
+in `dist/` into one clean environment, verifies each under the name its own METADATA gives, and
+fails unless they share one version. Without it, exactly one wheel is expected, as before.
 
 ### CodeArtifact read role for relocking (optional)
 

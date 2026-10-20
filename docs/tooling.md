@@ -20,6 +20,7 @@ on macOS is older than that, so use `uv run python`).
 | [`fleet_status.py`](#fleet_statuspy) | routinely, to catch drift |
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly; the `verify-wheel` action calls it |
+| `workspace_packages.py` | never directly; `version.yml` calls it when `all-packages` is on |
 | [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | manual fallback, for an empty bucket or after a failed automatic rebuild -- the downloads infrastructure rebuilds the root index automatically otherwise |
 
 `publish_static_index.py` is otherwise workflow-called (the publish job runs it per package, not a
@@ -296,3 +297,25 @@ Consumers get it via `templates/ci.yml`:
 
 A repo onboarded before v1.3.0 has its own copy of `ci.yml` and will not have
 this step. `fleet_status.py` flags that as `verify`.
+
+A uv workspace built with `uv build --all-packages` passes
+`all-packages: "true"` to the action. It then installs every wheel together,
+verifies each under the name its own METADATA gives
+(`verify_wheel.py --identify --lockstep` reads them), and fails unless they
+share one version.
+
+```yaml
+      - run: uv build --all-packages
+      - uses: EmergentMatter/actions/verify-wheel@v1
+        with:
+          all-packages: "true"
+```
+
+## `workspace_packages.py`
+
+Called by `version.yml` when `all-packages` is on; you do not run it
+directly. `names` prints the distribution name of the root project and of
+every `[tool.uv.workspace]` member (minus `exclude`), one per line, which is
+the list the bump loops over. `check --version X` exits 1 unless every one of
+them is at `X`. It reads `pyproject.toml` files only; the bump itself is
+`uv version`.

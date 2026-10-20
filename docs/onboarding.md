@@ -701,6 +701,33 @@ uv run python scripts/publish_static_index.py --root \
 
 Nothing in a consuming repo's stub triggers it.
 
+## Releasing several packages together (optional)
+
+Off by default. A repo whose root `pyproject.toml` has a
+`[tool.uv.workspace]` table can release every workspace package from one tag,
+at one version. Set `all-packages: true` on **both** `version.yml` and
+`build-release.yml` stubs (they are kept in step), `uv build --all-packages`
+and `all-packages: "true"` on the `verify-wheel` step in your `ci.yml`.
+
+What to know before you do:
+
+- **Every package moves together.** One release PR, one tag, one changelog.
+  The bump applies the same level to the root project and every member, and the
+  run fails if any of them does not land on the computed version, so bring all
+  of them to the same version first.
+- **Depend on siblings by range**, not `==`; the bump does not rewrite an exact
+  pin.
+- **Publish with `publish-target: codeartifact`.** The static index serves one
+  package per publish and refuses a multi-package `dist/`; the publish job also
+  refuses `static-index` and `both` with `all-packages` up front.
+- **One tier.** `[tool.em-release] tier` and the major-version ceiling apply to
+  the whole workspace, from the root `pyproject.toml`.
+- **The publish role must cover every package.** A role scoped per package
+  needs an entry for each distribution name the workspace builds.
+
+See [ADR 0009](adr/0009-a-workspace-releases-all-its-packages-in-lockstep.md)
+and CONTRACT.md, "Releasing several packages together".
+
 ## The config block
 
 One block, added to your existing `pyproject.toml`, copied from

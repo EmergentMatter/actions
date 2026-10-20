@@ -136,7 +136,7 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── changelog-check/action.yml              composite action, the PR gate
  ├── verify-wheel/action.yml                 composite action, installs and imports the built wheel
  ├── scripts/{compute_bump,sync_version,check_publish_tier,
- │            publish_static_index,generate_index_page}.py
+ │            publish_static_index,generate_index_page,workspace_packages}.py
  │                                           stdlib-only, called by the above
  └── templates/                              what a consumer's copy starts from
         ▲                                        (templates/manifest.toml: dest + policy)
