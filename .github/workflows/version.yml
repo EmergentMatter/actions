@@ -40,8 +40,10 @@ name: Version
 # second time, pinned to job.workflow_sha (the exact commit SHA of THIS
 # reusable workflow file; see the checkout step below for why, not
 # github.workflow_ref, which resolves to the CALLER's ref), into
-# .em-actions/, and invoke the scripts from there against the consumer's
-# checked-out pyproject.toml / changelog.d/.
+# .em-actions/, move it to ${RUNNER_TEMP}/em-actions so nothing but the
+# consumer's own files is in the workspace when it builds, and invoke the
+# scripts from there against the consumer's checked-out pyproject.toml /
+# changelog.d/.
 
 on:
   workflow_call:
@@ -440,6 +442,15 @@ jobs:
           ref: ${{ steps.shared.outputs.ref }}
           path: .em-actions
 
+      - name: Move the shared scripts out of the workspace
+        # actions/checkout only writes inside the workspace, so the shared
+        # checkout lands there first. Nothing that is not the consumer's own
+        # may stay in the workspace: `uv build` packs every file git does not
+        # ignore into the sdist, and create-pull-request stages stray
+        # directories as gitlinks. Every script below runs from the new
+        # location.
+        run: mv .em-actions "${RUNNER_TEMP}/em-actions"
+
       # ---------------------------------------------------------------
       # Private sibling checkout -- see the sibling-* inputs for why.
       # Every sibling step no-ops when sibling-repo is unset. The sibling2-*
@@ -509,9 +520,8 @@ jobs:
           rm -rf "${dest}"
           mv ".em-sibling/${SIBLING_PATH}" "${dest}"
           # .em-sibling must not survive: create-pull-request sweeps stray dirs
-          # into the release PR as gitlinks -- the same bug the '.em-actions'
-          # cleanup step below fixes. rmdir over rm -rf so it also asserts the
-          # mv took everything.
+          # into the release PR as gitlinks, and the build packs them into the
+          # sdist. rmdir over rm -rf so it also asserts the mv took everything.
           rmdir .em-sibling
           echo "sibling checked out at ${dest}"
 
@@ -601,9 +611,9 @@ jobs:
           rm -rf "${dest}"
           mv ".em-sibling2/${SIBLING2_PATH}" "${dest}"
           # .em-sibling2 must not survive: create-pull-request sweeps stray
-          # dirs into the release PR as gitlinks -- the same bug the
-          # '.em-actions' cleanup step below fixes. rmdir over rm -rf so it
-          # also asserts the mv took everything.
+          # dirs into the release PR as gitlinks, and the build packs them
+          # into the sdist. rmdir over rm -rf so it also asserts the mv took
+          # everything.
           rmdir .em-sibling2
           echo "sibling2 checked out at ${dest}"
 
@@ -703,9 +713,9 @@ jobs:
           rm -rf "${dest}"
           mv ".em-sibling3/${SIBLING3_PATH}" "${dest}"
           # .em-sibling3 must not survive: create-pull-request sweeps stray
-          # dirs into the release PR as gitlinks -- the same bug the
-          # '.em-actions' cleanup step below fixes. rmdir over rm -rf so it
-          # also asserts the mv took everything.
+          # dirs into the release PR as gitlinks, and the build packs them
+          # into the sdist. rmdir over rm -rf so it also asserts the mv took
+          # everything.
           rmdir .em-sibling3
           echo "sibling3 checked out at ${dest}"
 
@@ -847,6 +857,20 @@ jobs:
             uv build
           fi
 
+      - name: Refuse an sdist that carries the shared checkout
+        # Holds for `uv build` and `uv build --all-packages` alike: every
+        # sdist in dist/ is listed, and none may contain a .em-actions path.
+        if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for sdist in dist/*.tar.gz; do
+            if tar -tzf "${sdist}" | grep -E '(^|/)\.em-actions(/|$)' >/dev/null; then
+              echo "::error::${sdist} contains .em-actions/, the shared scripts checkout. Nothing but the consumer's own files may be in the workspace when it builds."
+              exit 1
+            fi
+          done
+
       - name: Create the GitHub Release (with build artifacts)
         if: steps.detect.outputs.is-release-commit == 'true' && inputs.has-wheel
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -893,7 +917,7 @@ jobs:
         if: steps.detect.outputs.is-release-commit == 'false'
         id: bump
         run: |
-          python3 ".em-actions/scripts/compute_bump.py" \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/compute_bump.py" \
             --notes-dir "${{ inputs.notes-dir }}" \
             --format github
 
@@ -914,13 +938,13 @@ jobs:
             # version compute_bump.py computed (e.g. a member that started
             # out of step), or if an internal exact pin was left behind. The
             # lock is refreshed once, after all of them.
-            packages="$(python3 ".em-actions/scripts/workspace_packages.py" names)"
+            packages="$(python3 "${RUNNER_TEMP}/em-actions/scripts/workspace_packages.py" names)"
             while IFS= read -r package; do
               uv version --bump "${LEVEL}" --package "${package}"
             done <<< "${packages}"
             # An exact (==) pin from one package to another is not moved by
             # `uv version`; rewrite each to the new version. Ranges stay.
-            pins="$(python3 ".em-actions/scripts/workspace_packages.py" pins --version "${EXPECTED_NEXT}")"
+            pins="$(python3 "${RUNNER_TEMP}/em-actions/scripts/workspace_packages.py" pins --version "${EXPECTED_NEXT}")"
             if [ -n "${pins}" ]; then
               while IFS='|' read -r dependent extra requirement; do
                 if [ -n "${extra}" ]; then
@@ -931,7 +955,7 @@ jobs:
               done <<< "${pins}"
             fi
             uv lock
-            python3 ".em-actions/scripts/workspace_packages.py" check --version "${EXPECTED_NEXT}"
+            python3 "${RUNNER_TEMP}/em-actions/scripts/workspace_packages.py" check --version "${EXPECTED_NEXT}"
           else
             uv version --bump "${LEVEL}"
             uv lock
@@ -947,7 +971,7 @@ jobs:
           steps.detect.outputs.is-release-commit == 'false' &&
           steps.bump.outputs.level != 'none'
         run: |
-          python3 ".em-actions/scripts/sync_version.py" --version "${{ steps.bump.outputs.next }}"
+          python3 "${RUNNER_TEMP}/em-actions/scripts/sync_version.py" --version "${{ steps.bump.outputs.next }}"
 
       - name: Build CHANGELOG.md and consume notes
         # A7: towncrier writes the changelog and deletes the fragments it
@@ -1005,18 +1029,6 @@ jobs:
           print(section)
           print("CHANGELOG_SECTION_EOF")
           PYEOF
-
-      - name: Remove the shared checkout before staging the PR
-        # actions/checkout refuses a path outside the workspace, so .em-actions
-        # necessarily lands inside the consumer's tree -- where create-pull-request
-        # would otherwise sweep it into the release PR as a gitlink, shown as a
-        # stray '.em-actions -> Subproject commit ...' entry. R3 says that PR contains
-        # the version bumps, the changelog, the consumed notes and the lockfile,
-        # and nothing else.
-        if: >-
-          steps.detect.outputs.is-release-commit == 'false' &&
-          steps.bump.outputs.level != 'none'
-        run: rm -rf .em-actions
 
       - name: Open or update the release PR
         if: >-
@@ -1133,12 +1145,21 @@ jobs:
           ref: ${{ needs.version.outputs.actions-ref }}
           path: .em-actions
 
+      - name: Move the shared scripts out of the workspace
+        # actions/checkout only writes inside the workspace, so the shared
+        # checkout lands there first. Nothing that is not the consumer's own
+        # may stay in the workspace: `uv build` packs every file git does not
+        # ignore into the sdist, and create-pull-request stages stray
+        # directories as gitlinks. Every script below runs from the new
+        # location.
+        run: mv .em-actions "${RUNNER_TEMP}/em-actions"
+
       - name: Refuse a publish target this repo's licence tier does not allow
         # Runs BEFORE any AWS credentials are assumed or anything uploads.
         # See scripts/check_publish_tier.py's module docstring for the
         # full open/closed/no-tier decision table.
         run: |
-          python3 ".em-actions/scripts/check_publish_tier.py" \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/check_publish_tier.py" \
             --target "${{ inputs.publish-target }}"
 
       - name: Read the package name
@@ -1214,7 +1235,7 @@ jobs:
         id: static-index
         run: |
           set -euo pipefail
-          python3 ".em-actions/scripts/publish_static_index.py" \
+          python3 "${RUNNER_TEMP}/em-actions/scripts/publish_static_index.py" \
             --bucket "${{ inputs.static-index-bucket }}" \
             --package-name "${{ steps.package.outputs.name }}" \
             --dist-dir dist >> "$GITHUB_OUTPUT"
