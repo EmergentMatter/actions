@@ -199,6 +199,98 @@ def test_resolve_sibling_name_mismatch_when_folder_declares_other_name(em_dev, t
     assert r.found_name == "something-else"
 
 
+# ------------------------------------------------------- workspace-member resolution
+
+ENGINE = "emergent-matter-sdm-engine"
+TOOLS = "emergent-matter-sdm-tools"
+
+
+def _make_engine(root: Path, *, tools_name: str = TOOLS) -> Path:
+    """A sibling that is a uv workspace root with one member under packages/."""
+    engine = root / ENGINE
+    engine.mkdir(parents=True)
+    (engine / "pyproject.toml").write_text(
+        f'[project]\nname = "{ENGINE}"\nversion = "1.0.0"\n'
+        '[tool.uv.workspace]\nmembers = ["packages/*"]\nexclude = ["packages/skipped"]\n'
+    )
+    member = engine / "packages" / "sdm-tools"
+    member.mkdir(parents=True)
+    (member / "pyproject.toml").write_text(f'[project]\nname = "{tools_name}"\nversion = "1.0.0"\n')
+    return member
+
+
+def test_workspace_members_indexes_member_by_declared_name(em_dev, tmp_path: Path):
+    member = _make_engine(tmp_path)
+    assert em_dev.workspace_members(tmp_path) == {TOOLS: (member, tmp_path / ENGINE)}
+
+
+def test_workspace_members_honours_exclude_and_ignores_non_workspaces(em_dev, tmp_path: Path):
+    _make_engine(tmp_path)
+    skipped = tmp_path / ENGINE / "packages" / "skipped"
+    skipped.mkdir()
+    (skipped / "pyproject.toml").write_text('[project]\nname = "emergent-matter-skipped"\n')
+    _make_sibling(tmp_path, "plain", "emergent-matter-plain")
+    assert list(em_dev.workspace_members(tmp_path)) == [TOOLS]
+
+
+def test_workspace_members_missing_root_is_empty(em_dev, tmp_path: Path):
+    assert em_dev.workspace_members(tmp_path / "nope") == {}
+
+
+def test_resolve_sibling_finds_package_as_member_of_sibling_workspace(em_dev, tmp_path: Path):
+    member = _make_engine(tmp_path)
+    (r,) = em_dev.resolve_siblings([TOOLS], tmp_path)
+    assert r.status == "local"
+    assert r.folder == member
+    assert r.via == tmp_path / ENGINE
+
+
+def test_resolve_sibling_own_name_folder_wins_over_member(em_dev, tmp_path: Path):
+    _make_engine(tmp_path)
+    _make_sibling(tmp_path, TOOLS, TOOLS)
+    (r,) = em_dev.resolve_siblings([TOOLS], tmp_path)
+    assert r.status == "local"
+    assert r.folder == tmp_path / TOOLS
+    assert r.via is None
+
+
+def test_resolve_sibling_absent_member_stays_missing(em_dev, tmp_path: Path):
+    _make_engine(tmp_path, tools_name="emergent-matter-something-else")
+    (r,) = em_dev.resolve_siblings([TOOLS], tmp_path)
+    assert r.status == "missing"
+    assert r.via is None
+
+
+def test_workspace_root_package_still_resolves_by_its_own_folder(em_dev, tmp_path: Path):
+    _make_engine(tmp_path)
+    (r,) = em_dev.resolve_siblings([ENGINE], tmp_path)
+    assert r.status == "local"
+    assert r.folder == tmp_path / ENGINE
+    assert r.via is None
+
+
+def test_filter_only_selects_a_workspace_member(em_dev, tmp_path: Path):
+    member = _make_engine(tmp_path)
+    resolutions = em_dev.resolve_siblings([ENGINE, TOOLS], tmp_path)
+    (r,) = em_dev.filter_only(resolutions, ["sdm-tools"])
+    assert r.folder == member
+
+
+def test_status_reports_where_a_member_came_from(em_dev, tmp_path: Path, monkeypatch, capsys):
+    root = tmp_path / "root"
+    member = _make_engine(root)
+    repo = root / "consumer"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "consumer"\nversion = "1.0.0"\n')
+    (repo / "uv.lock").write_text(f'[[package]]\nname = "{TOOLS}"\nversion = "1.2.3"\n')
+    monkeypatch.delenv("EM_DEV_ROOT", raising=False)
+    assert em_dev.status(repo) == 0
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if TOOLS in ln)
+    assert "local" in line
+    assert str(member) in line
+    assert f"workspace member of {root / ENGINE}" in line
+
+
 def test_resolve_root_env_wins_over_config_and_default(em_dev, tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
