@@ -29,6 +29,12 @@ Commands:
                              local mode has silently reverted
     em-dev --only a,b        make only these packages local
 
+A package is local when a sibling folder has its own name, or, failing that,
+when it is a member of a sibling's uv workspace (`[tool.uv.workspace]`), e.g.
+`emergent-matter-sdm-tools` at `../emergent-matter-sdm-engine/packages/sdm-tools`.
+A folder of the package's own name always wins; `em-dev` and `em-dev status`
+say which sibling a member came from.
+
 Stdlib only. Runs on Python 3.9+ (what macOS ships as `python3`) -- this is
 why it carries its own minimal TOML reader instead of `tomllib` (3.11+
 only), and why it is invoked directly (`python3 scripts/em-dev.py ...`),
@@ -71,6 +77,7 @@ __all__ = [
     "discover_ours",
     "SiblingResolution",
     "resolve_root",
+    "workspace_members",
     "resolve_sibling",
     "resolve_siblings",
     "filter_only",
@@ -507,7 +514,10 @@ class SiblingResolution:
 
     status is one of:
         "local"          folder exists and its own pyproject.toml declares
-                          this exact package name -- safe to install editable
+                          this exact package name -- safe to install editable.
+                          `via` is None for a folder of the package's own
+                          name, or the sibling checkout (a uv workspace root)
+                          the folder was found in as a workspace member
         "missing"        no folder at the resolved path -- published version
                           used
         "name-mismatch"  a folder exists there, but declares a different
@@ -516,13 +526,21 @@ class SiblingResolution:
                           installed under someone else's name
     """
 
-    __slots__ = ("name", "folder", "status", "found_name")
+    __slots__ = ("name", "folder", "status", "found_name", "via")
 
-    def __init__(self, name: str, folder: Path, status: str, found_name: str | None = None):
+    def __init__(
+        self,
+        name: str,
+        folder: Path,
+        status: str,
+        found_name: str | None = None,
+        via: Path | None = None,
+    ):
         self.name = name
         self.folder = folder
         self.status = status
         self.found_name = found_name
+        self.via = via
 
     def __repr__(self) -> str:  # pragma: no cover -- debugging aid only
         return f"SiblingResolution({self.name!r}, {self.folder!r}, {self.status!r})"
@@ -555,10 +573,73 @@ def resolve_root(repo: Path, config: dict, env: Mapping[str, str] | None = None)
     return repo.parent
 
 
-def resolve_sibling(name: str, root: Path) -> SiblingResolution:
+def _glob_dirs(base: Path, patterns: Any) -> set[Path]:
+    """Directories under `base` matching each glob in `patterns` (a list of
+    strings; anything else matches nothing). Forward slashes in a pattern
+    work on Windows too."""
+    found: set[Path] = set()
+    if not isinstance(patterns, list):
+        return found
+    for pattern in patterns:
+        if isinstance(pattern, str) and pattern:
+            found.update(p for p in base.glob(pattern) if p.is_dir())
+    return found
+
+
+def workspace_members(root: Path) -> dict[str, tuple[Path, Path]]:
+    """Packages that live inside a sibling's uv workspace rather than in a
+    folder of their own: normalized name -> (member folder, workspace root
+    folder). A sibling is any folder directly under `root` whose
+    `pyproject.toml` has `[tool.uv.workspace]`; its members are what the
+    `members` globs match minus `exclude`, each read for its own
+    `[project].name`. Siblings are visited in sorted order and the first
+    claim on a name wins, so the result is stable. Unreadable folders are
+    skipped -- this only ever finds more local packages, never fewer."""
+    index: dict[str, tuple[Path, Path]] = {}
+    if not root.is_dir():
+        return index
+    for sibling in sorted(p for p in root.iterdir() if p.is_dir()):
+        pyproject_path = sibling / "pyproject.toml"
+        if not pyproject_path.is_file():
+            continue
+        try:
+            workspace = toml_load(pyproject_path).get("tool", {}).get("uv", {}).get("workspace")
+        except EmDevError:
+            continue
+        if not isinstance(workspace, dict):
+            continue
+        members = _glob_dirs(sibling, workspace.get("members"))
+        members -= _glob_dirs(sibling, workspace.get("exclude"))
+        for member in sorted(members):
+            try:
+                data = toml_load(member / "pyproject.toml")
+            except (EmDevError, OSError):
+                continue
+            declared = data.get("project", {}).get("name")
+            if declared:
+                index.setdefault(normalize_name(declared), (member, sibling))
+    return index
+
+
+def resolve_sibling(
+    name: str,
+    root: Path,
+    members: Mapping[str, tuple[Path, Path]] | None = None,
+) -> SiblingResolution:
     """Resolve one `ours` package name to a folder under `root`, checking
-    that the folder's own `pyproject.toml` actually declares that name."""
+    that the folder's own `pyproject.toml` actually declares that name.
+    A folder of the package's own name always wins. Only when there is no
+    such folder is `members` (see `workspace_members`) consulted, so a
+    package that is a member of a sibling's workspace is found there."""
     folder = root / name
+    resolution = _resolve_own_folder(name, folder)
+    if resolution.status == "missing" and members and name in members:
+        member_folder, workspace_root = members[name]
+        return SiblingResolution(name, member_folder, "local", name, via=workspace_root)
+    return resolution
+
+
+def _resolve_own_folder(name: str, folder: Path) -> SiblingResolution:
     if not folder.is_dir():
         return SiblingResolution(name, folder, "missing")
     pyproject_path = folder / "pyproject.toml"
@@ -575,7 +656,14 @@ def resolve_sibling(name: str, root: Path) -> SiblingResolution:
 
 
 def resolve_siblings(names: list[str], root: Path) -> list[SiblingResolution]:
-    return [resolve_sibling(name, root) for name in names]
+    members = workspace_members(root)
+    return [resolve_sibling(name, root, members) for name in names]
+
+
+def local_detail(r: SiblingResolution) -> str:
+    """Where a local package came from, when that isn't a folder of its own
+    name: the workspace checkout it is a member of."""
+    return f"workspace member of {r.via}" if r.via is not None else ""
 
 
 def filter_only(
@@ -910,7 +998,8 @@ def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False
     out(f"sibling root: {root}")
     for r in resolutions:
         if r.status == "local":
-            out(f"  {r.name:<40} -> {r.folder}  (local)")
+            detail = local_detail(r)
+            out(f"  {r.name:<40} -> {r.folder}  (local{', ' + detail if detail else ''})")
         elif r.status == "missing":
             out(f"  {r.name:<40} -> {r.folder}  (not found -- using published version)")
         else:
@@ -1298,7 +1387,9 @@ def status(repo: Path) -> int:
         published = locked_version(lock, r.name)
         if r.status == "local":
             detail = sibling_git_detail(r.folder)
-            print(f"  {r.name:<40} local   {r.folder} {detail}".rstrip())
+            origin = local_detail(r)
+            origin = f" ({origin})" if origin else ""
+            print(f"  {r.name:<40} local   {r.folder}{origin} {detail}".rstrip())
         elif r.status == "missing":
             print(f"  {r.name:<40} published {published}  (no sibling folder at {r.folder})")
         else:

@@ -104,6 +104,13 @@ no `emergent-matter-*` dependency prints "nothing here to make local" and
 exits 0 -- the manifest has no per-repo targeting, so every onboarded repo
 receives the same file.
 
+A package is local when a sibling folder carries its own name, or, failing
+that, when it is a member of a sibling's uv workspace: with
+`emergent-matter-sdm-engine` checked out, `emergent-matter-sdm-tools` is
+installed editable from `emergent-matter-sdm-engine/packages/sdm-tools`.
+A folder of the package's own name always wins, and `em-dev status` names the
+workspace a member came from.
+
 A repo opts into also reinstalling its own console script from local code
 (an app's own CLI command) with a `[tool.em-dev]` table in its
 `pyproject.toml`:
