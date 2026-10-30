@@ -177,7 +177,7 @@ Both workflows take the SAME publish-target inputs, kept in step for the same re
 build/release steps are (ADR 0002): `publish-target`=`pypi`, `aws-role-arn`=`""`,
 `aws-region`=`us-east-2`, `static-index-bucket`=`""`, `static-index-distribution-id`=`""`,
 `codeartifact-domain`=`em`, `codeartifact-domain-owner`=`967228661072`,
-`codeartifact-repository`=`em-platform`. See "Publishing to more than one index" below for what
+`codeartifact-repository`=`em-platform`, `npm-packages`=`""`. See "Publishing to more than one index" below for what
 each does and the licence-tier guard that gates them.
 
 **`build-release.yml` now takes `actions-ref` too**, as of the publish-target inputs above. It
@@ -741,6 +741,31 @@ that workflow's own header comment. It only matters for that workflow's
 non-automatic triggers (a human-pushed tag, or `workflow_dispatch`), since
 `version.yml` is the automated release path and builds inline once it
 detects the release commit.
+
+### Publishing npm packages
+
+`npm-packages` is a whitespace-separated list of directories, each holding a `package.json`, and is
+empty by default (no npm package, behaviour unchanged). Set, it needs `publish-target:
+codeartifact` and is refused with any other target before any credential is assumed. After the
+wheels, in the same publish job and with the same assumed role, `scripts/publish_npm.py` runs once
+per directory:
+
+- The name must be scoped (`@scope/name`), not private, with no `publishConfig.registry` and no
+  `preinstall`, `install`, `postinstall` or `prepare` script. A `prepack` script is allowed and is
+  how a package copies in files that live elsewhere in its repo; npm runs it for `publish`.
+- The version in `package.json` is overwritten with the release's version (the tag without its
+  `v`), which must be plain `MAJOR.MINOR.PATCH`. The committed value is a placeholder.
+- The endpoint is the repository's `npm` endpoint from `get-repository-endpoint`. The
+  authorization token goes in `CODEARTIFACT_AUTH_TOKEN` and nowhere else. The `.npmrc` is written
+  to a fresh directory under `RUNNER_TEMP`, holds only `@scope:registry=` and the auth line for that
+  endpoint (the token as a `${CODEARTIFACT_AUTH_TOKEN}` reference), and is removed afterwards; none
+  is written into the repository.
+- A version already in CodeArtifact fails the job, as it does for a wheel. Because the npm step
+  follows the wheels, a failure here leaves the wheels published; fix the cause and release the
+  next version rather than re-running.
+
+The step is in `version.yml` and `build-release.yml`, kept in step like the rest of the publish job.
+The runner's own `node` and `npm` are used.
 
 ## Where each guarantee lives
 

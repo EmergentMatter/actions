@@ -90,9 +90,10 @@ form. See
 
 ## Technical Context
 
-- **Python only, no Node/npm.** Zero third-party runtime deps in
-  `scripts/`: stdlib only (`tomllib` is stdlib on 3.11+). Target Python
-  3.13.
+- **Python only; npm is only shelled out to.** Zero third-party runtime
+  deps in `scripts/`: stdlib only (`tomllib` is stdlib on 3.11+). Target
+  Python 3.13. `publish_npm.py` calls the runner's `npm` to publish a
+  package, and nothing here installs or runs Node code of its own.
 - **No long-lived tokens.** Every workflow uses `secrets.GITHUB_TOKEN`; no
   PATs, no GitHub App, in v1.
 - **No special handling below 1.0.** A major-level note on `0.4.2` bumps
