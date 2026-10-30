@@ -730,6 +730,16 @@ What to know before you do:
 See [ADR 0009](adr/0009-a-workspace-releases-all-its-packages-in-lockstep.md)
 and CONTRACT.md, "Releasing several packages together".
 
+## Publishing an npm package with the wheels (optional)
+
+A repo that ships an npm package beside its Python packages sets `npm-packages:` (paths, whitespace
+separated) on **both** the `version.yml` and `build-release.yml` stubs, with `publish-target:
+codeartifact`. The package must be scoped, carry a placeholder version (the release stamps the real
+one) and declare no install-time script; see CONTRACT.md, "Publishing npm packages". `sync.py` treats
+the stubs as managed: a template change that does not touch your `npm-packages` line merges around it,
+and one that does is a conflict it asks about. Give the repo a test that fails if the line goes missing,
+so a resolution that drops it is not silent.
+
 ## The config block
 
 One block, added to your existing `pyproject.toml`, copied from

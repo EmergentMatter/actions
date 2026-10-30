@@ -56,6 +56,14 @@ jobs:
       # docs/onboarding.md, "Releasing several packages together".
       # all-packages: true
 
+      # ── npm packages published with the wheels: DELETE unless this repo
+      # ships an npm package (a directory with a package.json) from the same
+      # tag. Whitespace-separated paths; needs `publish-target: codeartifact`.
+      # Keep it the same in version.yml and build-release.yml, or the manual
+      # path publishes a different set. See CONTRACT.md, "Publishing npm
+      # packages".
+      # npm-packages: packages/<npm package directory>
+
       # ── Publish target: DELETE unless publish: true above. Defaults to
       # `pypi`, which is exactly what `publish: true` did before this
       # input existed -- an existing repo need change nothing. See

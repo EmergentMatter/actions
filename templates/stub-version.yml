@@ -55,6 +55,14 @@ jobs:
       # docs/onboarding.md, "Releasing several packages together".
       # all-packages: true
 
+      # ── npm packages published with the wheels: DELETE unless this repo
+      # ships an npm package (a directory with a package.json) from the same
+      # tag. Whitespace-separated paths; needs `publish-target: codeartifact`.
+      # Keep it the same in version.yml and build-release.yml, or the manual
+      # path publishes a different set. See CONTRACT.md, "Publishing npm
+      # packages".
+      # npm-packages: packages/<npm package directory>
+
       # ── Publishing: DELETE this whole block unless this repo publishes
       # releases to a package index. `publish: true` also needs
       # `id-token: write` added to the permissions block below, and a
