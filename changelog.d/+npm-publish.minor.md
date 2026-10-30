@@ -1,0 +1,1 @@
+The release workflows take an optional `npm-packages` input: with `publish-target: codeartifact`, each listed npm package is published to the repository's npm endpoint after the wheels, at the release version, with a scope-only `.npmrc` in the runner temp dir and the token only in an environment variable.

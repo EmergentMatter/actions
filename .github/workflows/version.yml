@@ -193,6 +193,16 @@ on:
       codeartifact-repository:
         type: string
         default: em-platform
+      npm-packages:
+        description: >-
+          Whitespace-separated paths of npm packages (each a directory with
+          a package.json) to publish to the CodeArtifact repository's npm
+          endpoint, in the same run and with the same role as the wheels,
+          at the release's version. Needs `publish-target: codeartifact`
+          and is refused with any other target. Empty (the default) publishes
+          no npm package. See CONTRACT.md, "Publishing npm packages".
+        type: string
+        default: ""
       codeartifact-read-role-arn:
         description: >-
           Role to assume, over OIDC, for read-only access to CodeArtifact
@@ -1178,8 +1188,13 @@ jobs:
           ROLE_ARN: ${{ inputs.aws-role-arn }}
           BUCKET: ${{ inputs.static-index-bucket }}
           ALL_PACKAGES: ${{ inputs.all-packages }}
+          NPM_PACKAGES: ${{ inputs.npm-packages }}
         run: |
           set -euo pipefail
+          if [ -n "${NPM_PACKAGES}" ] && [ "${TARGET}" != "codeartifact" ]; then
+            echo "::error::npm-packages needs publish-target 'codeartifact', not '${TARGET}'."
+            exit 1
+          fi
           if [ "${ALL_PACKAGES}" = "true" ]; then
             case "${TARGET}" in
               static-index|both)
@@ -1277,3 +1292,32 @@ jobs:
           echo "::add-mask::${token}"
           UV_PUBLISH_USERNAME=aws UV_PUBLISH_PASSWORD="${token}" \
             uv publish --publish-url "${endpoint}" dist/*
+
+      - name: Publish npm packages to CodeArtifact
+        # After the wheels, with the same assumed role. The token is only an
+        # environment variable and publish_npm.py writes a scope-only .npmrc
+        # in the runner's temp dir, never in the repository.
+        if: inputs.publish-target == 'codeartifact' && inputs.npm-packages != ''
+        env:
+          DOMAIN: ${{ inputs.codeartifact-domain }}
+          DOMAIN_OWNER: ${{ inputs.codeartifact-domain-owner }}
+          REPOSITORY: ${{ inputs.codeartifact-repository }}
+          REGION: ${{ inputs.aws-region }}
+          NPM_PACKAGES: ${{ inputs.npm-packages }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          endpoint=$(aws codeartifact get-repository-endpoint \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --repository "${REPOSITORY}" --format npm --region "${REGION}" \
+            --query repositoryEndpoint --output text)
+          token=$(aws codeartifact get-authorization-token \
+            --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+            --region "${REGION}" --query authorizationToken --output text)
+          echo "::add-mask::${token}"
+          export CODEARTIFACT_AUTH_TOKEN="${token}"
+          for package_dir in ${NPM_PACKAGES}; do
+            python3 "${RUNNER_TEMP}/em-actions/scripts/publish_npm.py" \
+              --package-dir "${package_dir}" --version "${TAG#v}" \
+              --endpoint "${endpoint}" --temp-dir "${RUNNER_TEMP}"
+          done
