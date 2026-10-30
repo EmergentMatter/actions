@@ -6,6 +6,13 @@ Later releases are recorded here.
 
 <!-- towncrier release notes start -->
 
+## 1.18.0 (2026-10-30)
+
+### Minor
+
+- The release workflows take an optional `npm-packages` input: with `publish-target: codeartifact`, each listed npm package is checked and packed before any upload (manifest rules, release version, and byte-identity with a built wheel when the package declares it), then published before the wheels with a scope-only `.npmrc` in the runner temp dir and the token only in an environment variable. Publishing is safe to re-run: the same version with the same content is skipped, with different content it fails. `node-version` pins the Node that does it. The version and build-release stubs carry a commented `npm-packages` example.
+
+
 ## 1.17.0 (2026-10-25)
 
 ### Minor
