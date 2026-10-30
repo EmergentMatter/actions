@@ -38,7 +38,7 @@ if [ "$cmd" = pack ]; then exec "$REAL_NPM" "$@"; fi
   echo "token: $CODEARTIFACT_AUTH_TOKEN"
   rc=""
   for a in "$@"; do [ "$prev" = "--userconfig" ] && rc="$a"; prev="$a"; done
-  echo "npmrc-mode: $(stat -f %Lp "$rc" 2>/dev/null || stat -c %a "$rc")"
+  echo "npmrc-mode: $(stat -c %a "$rc" 2>/dev/null || stat -f %Lp "$rc")"
   echo "---npmrc"; cat "$rc"
 } >> "$STUB_LOG"
 if [ "$cmd" = view ]; then
