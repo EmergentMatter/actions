@@ -746,26 +746,39 @@ detects the release commit.
 
 `npm-packages` is a whitespace-separated list of directories, each holding a `package.json`, and is
 empty by default (no npm package, behaviour unchanged). Set, it needs `publish-target:
-codeartifact` and is refused with any other target before any credential is assumed. After the
-wheels, in the same publish job and with the same assumed role, `scripts/publish_npm.py` runs once
-per directory:
+codeartifact` and is refused with any other target before any credential is assumed. `node-version`
+(an exact version, default `24.18.0`) is installed with `actions/setup-node` for it. The work is
+split in two so that everything that can be wrong with a package is found before anything is
+uploaded.
+
+**Before any upload** (`scripts/publish_npm.py prepare`, no network, no credential), for each directory:
 
 - The name must be scoped (`@scope/name`), not private, with no `publishConfig.registry` and no
   `preinstall`, `install`, `postinstall` or `prepare` script. A `prepack` script is allowed and is
-  how a package copies in files that live elsewhere in its repo; npm runs it for `publish`.
+  how a package copies in files that live elsewhere in its repo; it is not run by a consumer.
 - The version in `package.json` is overwritten with the release's version (the tag without its
   `v`), which must be plain `MAJOR.MINOR.PATCH`. The committed value is a placeholder.
-- The endpoint is the repository's `npm` endpoint from `get-repository-endpoint`. The
-  authorization token goes in `CODEARTIFACT_AUTH_TOKEN` and nowhere else. The `.npmrc` is written
-  to a fresh directory under `RUNNER_TEMP`, holds only `@scope:registry=` and the auth line for that
-  endpoint (the token as a `${CODEARTIFACT_AUTH_TOKEN}` reference), and is removed afterwards; none
-  is written into the repository.
-- A version already in CodeArtifact fails the job, as it does for a wheel. Because the npm step
-  follows the wheels, a failure here leaves the wheels published; fix the cause and release the
-  next version rather than re-running.
+- `npm pack` makes the tarball that will be published.
+- If `package.json` declares `"em-release": {"mirrors-wheel-dir": "<dir in the wheel>"}`, every file
+  in the tarball other than `package.json` must exist, byte-identical, under that directory in a
+  built wheel in `dist/`. A package that republishes files a wheel carries is held to that here.
 
-The step is in `version.yml` and `build-release.yml`, kept in step like the rest of the publish job.
-The runner's own `node` and `npm` are used.
+**Then, before the wheels are uploaded** (`publish`, the only networked npm step): the repository's
+`npm` endpoint comes from `get-repository-endpoint`, and the authorization token goes in
+`CODEARTIFACT_AUTH_TOKEN` and nowhere else. The `.npmrc` is written to a fresh directory under
+`RUNNER_TEMP`, holds only `@scope:registry=` and the auth line for that endpoint (the token as a
+`${CODEARTIFACT_AUTH_TOKEN}` reference), and is removed afterwards; none is written into the
+repository.
+
+**Re-running.** `publish` is safe to run again: a version already in CodeArtifact with the same
+content (the tarball's integrity matches) is skipped, and the same version with different content
+fails the job. It runs before the wheel upload on purpose. A failure to reach CodeArtifact then
+publishes nothing, and a failed wheel upload after it leaves only an npm package whose wheels are
+missing; either way the fix is to re-run the publish job for the same version, which skips the npm
+package already there and uploads the wheels. The wheel upload is not safe to run again, as before:
+a wheel already in CodeArtifact fails the job.
+
+The steps are in `version.yml` and `build-release.yml`, kept in step like the rest of the publish job.
 
 ## Where each guarantee lives
 

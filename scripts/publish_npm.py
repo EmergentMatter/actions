@@ -1,52 +1,56 @@
 #!/usr/bin/env python3
-"""Publish one npm package to the CodeArtifact repository's npm endpoint.
+"""Pack, check and publish one npm package for a release, in two steps.
 
-Called from the publish job in version.yml / build-release.yml, after
-`aws-actions/configure-aws-credentials` has assumed the consumer's own
-per-repo role (see CONTRACT.md, "Publishing npm packages") -- so this is a
-"called from a workflow" script (README.md's "The scripts"): stdlib only,
-reads its command-line arguments, `package.json` and one environment
-variable, and shells out to `npm` (already on the runner image).
+Called from the publish job in version.yml / build-release.yml (see CONTRACT.md,
+"Publishing npm packages") -- a "called from a workflow" script (README.md's "The scripts"):
+stdlib only, shelling out to `npm`.
 
-What it enforces that a bare `npm publish` would not:
+    publish_npm.py prepare --package-dir DIR --version X.Y.Z --out-dir DIR [--wheel-dir dist]
+    publish_npm.py publish --tarball FILE --endpoint URL [--temp-dir DIR]
 
-1. **The token is only ever an environment variable.** `CODEARTIFACT_AUTH_TOKEN`
-   is read by npm itself through a `${CODEARTIFACT_AUTH_TOKEN}` reference in
-   an `.npmrc` that is written to a fresh directory under the runner's temp
-   dir and removed afterwards. The token never appears in a file, an
-   argument or this script's output, and no `.npmrc` is ever written into
-   the repository.
-2. **The `.npmrc` names one scope and nothing else.** `@scope:registry=` and
-   the auth line for that endpoint, so npm asks CodeArtifact for nothing
-   outside the package's own scope and the default registry is untouched. An
-   unscoped package name is refused, because it could only be published to
-   the default registry, and so is a `publishConfig.registry` that would send
-   it somewhere this script was not told about.
-3. **The version comes from the release, not the file.** The version in
-   `package.json` is overwritten with `--version`, the one the release
-   computed, so an npm package and its Python siblings always carry the same
-   number. It must be plain `MAJOR.MINOR.PATCH`.
-4. **A version that is already published fails the run.** CodeArtifact
-   refuses a second publish of a version; this script does not catch that
-   and does not retry, for the same reason `uv publish` is not retried.
+`prepare` needs no network and no credential, and runs for every package BEFORE any wheel
+is uploaded, so everything that can be wrong with a package is found while nothing is
+published yet:
 
-A package that needs files built or copied in before it is packed does that
-in its own `prepack` script, which npm runs for `publish`. Lifecycle scripts
-that npm runs on the consumer's machine at install time (`preinstall`,
-`install`, `postinstall`, `prepare`) are refused: a contract package is
-data, and nothing it ships may execute when it is installed.
+1. The manifest is checked: a scoped name, not private, no `publishConfig.registry`, no
+   install-time script (`preinstall`, `install`, `postinstall`, `prepare`), a plain
+   `MAJOR.MINOR.PATCH` version. A `prepack` script is allowed; it is how a package copies in
+   files that live elsewhere in its repository, and it is not run by a consumer.
+2. The release version is stamped into `package.json` (the committed one is a placeholder),
+   so an npm package and its Python siblings carry the same number.
+3. `npm pack` makes the tarball that will be published, byte for byte.
+4. If the manifest declares `"em-release": {"mirrors-wheel-dir": "<dir in the wheel>"}`, every
+   file in the tarball other than `package.json` must exist, byte-identical, under that
+   directory in a built wheel in `--wheel-dir`. A package that is a second publication of
+   files a wheel already carries is held to that here, not just in the repository's own tests.
+
+`publish` is the only step that touches the network. The token is only ever an environment
+variable (`CODEARTIFACT_AUTH_TOKEN`), read by npm through a `${CODEARTIFACT_AUTH_TOKEN}`
+reference in an `.npmrc` written to a fresh directory under the runner's temp dir and removed
+afterwards; it names one scope and the endpoint's auth line, so npm asks CodeArtifact for
+nothing outside the package's own scope, and no `.npmrc` is ever written into the repository.
+
+`publish` is safe to run again. If the package's version is already in the repository with
+the same content (the tarball's integrity matches), it is skipped; if the version exists with
+different content the run fails, because that is the one case a re-run must never paper over.
+A version that does not exist yet is published; any other failure to ask (network, auth)
+fails the run.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -112,37 +116,145 @@ def npmrc_text(scope: str, endpoint: str) -> str:
     )
 
 
-def inside(package_dir: Path, root: Path) -> bool:
-    return package_dir.resolve().is_relative_to(root.resolve())
+def inside(path: Path, root: Path) -> bool:
+    return path.resolve().is_relative_to(root.resolve())
 
 
-def publish(package_dir: Path, version: str, endpoint: str, temp_root: Path) -> None:
-    if not os.environ.get(TOKEN_VAR):
-        raise PublishError(f"{TOKEN_VAR} is not set")
+def integrity_of(tarball: Path) -> str:
+    """npm's `dist.integrity` for these bytes."""
+    return "sha512-" + base64.b64encode(hashlib.sha512(tarball.read_bytes()).digest()).decode(
+        "ascii"
+    )
+
+
+def tarball_files(tarball: Path) -> dict[str, bytes]:
+    """The tarball's regular files by path, without npm's leading `package/`."""
+    files: dict[str, bytes] = {}
+    with tarfile.open(tarball) as archive:
+        for member in archive.getmembers():
+            if member.isfile():
+                extracted = archive.extractfile(member)
+                assert extracted is not None
+                files[member.name.removeprefix("package/")] = extracted.read()
+    return files
+
+
+def check_mirrors_wheel(files: dict[str, bytes], mirror: str, wheel_dir: Path) -> None:
+    """Every tarball file but package.json is byte-identical under `mirror/` in a built wheel."""
+    wheels = sorted(wheel_dir.glob("*.whl"))
+    if not wheels:
+        raise PublishError(f"mirrors-wheel-dir is declared but {wheel_dir} holds no wheel")
+    prefix = mirror.strip("/") + "/"
+    in_wheels: dict[str, bytes] = {}
+    for wheel in wheels:
+        with zipfile.ZipFile(wheel) as archive:
+            for name in archive.namelist():
+                if name.startswith(prefix) and not name.endswith("/"):
+                    in_wheels.setdefault(name[len(prefix) :], archive.read(name))
+    if not in_wheels:
+        raise PublishError(f"no built wheel holds {prefix}")
+    contract = {n: b for n, b in files.items() if n != "package.json"}
+    if not contract:
+        raise PublishError("the tarball holds nothing but package.json")
+    missing = sorted(n for n in contract if n not in in_wheels)
+    differing = sorted(n for n in contract if n in in_wheels and in_wheels[n] != contract[n])
+    if missing or differing:
+        raise PublishError(
+            "the tarball does not match the wheel's "
+            + prefix
+            + (f"; not in the wheel: {', '.join(missing)}" if missing else "")
+            + (f"; differs: {', '.join(differing)}" if differing else "")
+        )
+
+
+def prepare(package_dir: Path, version: str, out_dir: Path, wheel_dir: Path) -> Path:
     if not inside(package_dir, Path.cwd()):
         raise PublishError(f"{package_dir} is outside the workspace")
     manifest = read_manifest(package_dir)
-    scope = check_manifest(manifest, version)
-    endpoint = check_endpoint(endpoint)
+    check_manifest(manifest, version)
     manifest["version"] = version
     (package_dir / "package.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "NPM_CONFIG_USERCONFIG": os.devnull}  # no registry, no credential
+    result = subprocess.run(
+        [
+            "npm",
+            "pack",
+            "--pack-destination",
+            str(out_dir.resolve()),
+            "--json",
+            "--loglevel",
+            "error",
+        ],
+        cwd=package_dir,
+        env=env,
+        check=False,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise PublishError(f"npm pack failed for {manifest['name']} (exit {result.returncode})")
+    filename = json.loads(result.stdout)[0]["filename"]
+    tarball = out_dir / filename
+    release_config = manifest.get("em-release")
+    mirror = release_config.get("mirrors-wheel-dir") if isinstance(release_config, dict) else None
+    if mirror is not None:
+        check_mirrors_wheel(tarball_files(tarball), str(mirror), wheel_dir)
+    print(f"Packed {manifest['name']}@{version}: {tarball}")
+    return tarball
+
+
+def existing_integrity(npm_view: subprocess.CompletedProcess[str]) -> str | None:
+    """The published version's integrity, None if it is not there; anything else is an error."""
+    if npm_view.returncode == 0 and npm_view.stdout.strip():
+        value = json.loads(npm_view.stdout)
+        if isinstance(value, str):
+            return value
+        raise PublishError(f"unexpected answer from npm view: {npm_view.stdout.strip()[:200]}")
+    if "E404" in npm_view.stderr:
+        return None
+    raise PublishError(
+        f"could not ask the registry whether the version exists: {npm_view.stderr.strip()[:300]}"
+    )
+
+
+def publish(tarball: Path, endpoint: str, temp_root: Path) -> None:
+    if not os.environ.get(TOKEN_VAR):
+        raise PublishError(f"{TOKEN_VAR} is not set")
+    files = tarball_files(tarball)
+    if "package.json" not in files:
+        raise PublishError(f"{tarball} has no package.json")
+    manifest = json.loads(files["package.json"])
+    version = str(manifest.get("version"))
+    scope = check_manifest(manifest, version)
+    endpoint = check_endpoint(endpoint)
+    name = manifest["name"]
 
     workdir = Path(tempfile.mkdtemp(prefix="em-npm-", dir=temp_root))
     try:
         npmrc = workdir / "npmrc"
         npmrc.touch(mode=0o600)
         npmrc.write_text(npmrc_text(scope, endpoint), encoding="utf-8")
-        print(f"Publishing {manifest['name']}@{version} to {endpoint}")
-        result = subprocess.run(
-            ["npm", "publish", "--userconfig", str(npmrc), "--registry", endpoint],
-            cwd=package_dir,
+        config = ["--userconfig", str(npmrc), "--registry", endpoint]
+        view = subprocess.run(
+            ["npm", "view", f"{name}@{version}", "dist.integrity", "--json", *config],
             check=False,
+            capture_output=True,
+            text=True,
         )
+        existing = existing_integrity(view)
+        if existing is not None:
+            if existing == integrity_of(tarball):
+                print(f"{name}@{version} is already published with the same content; skipping.")
+                return
+            raise PublishError(f"{name}@{version} already exists with different content")
+        print(f"Publishing {name}@{version} to {endpoint}")
+        result = subprocess.run(["npm", "publish", str(tarball.resolve()), *config], check=False)
         if result.returncode != 0:
             raise PublishError(
-                f"npm publish failed for {manifest['name']}@{version} (exit {result.returncode})"
+                f"npm publish failed for {name}@{version} (exit {result.returncode})"
             )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -150,15 +262,22 @@ def publish(package_dir: Path, version: str, endpoint: str, temp_root: Path) -> 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--package-dir", required=True, type=Path)
-    parser.add_argument("--version", required=True, help="the release version, no leading v")
-    parser.add_argument(
-        "--endpoint", required=True, help="the CodeArtifact npm repository endpoint"
-    )
-    parser.add_argument("--temp-dir", type=Path, default=Path(tempfile.gettempdir()))
+    sub = parser.add_subparsers(dest="command", required=True)
+    prep = sub.add_parser("prepare", help="check, stamp and pack; no network")
+    prep.add_argument("--package-dir", required=True, type=Path)
+    prep.add_argument("--version", required=True, help="the release version, no leading v")
+    prep.add_argument("--out-dir", required=True, type=Path)
+    prep.add_argument("--wheel-dir", type=Path, default=Path("dist"))
+    pub = sub.add_parser("publish", help="publish a packed tarball; the only networked step")
+    pub.add_argument("--tarball", required=True, type=Path)
+    pub.add_argument("--endpoint", required=True, help="the CodeArtifact npm repository endpoint")
+    pub.add_argument("--temp-dir", type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args(argv)
     try:
-        publish(args.package_dir, args.version, args.endpoint, args.temp_dir)
+        if args.command == "prepare":
+            prepare(args.package_dir, args.version, args.out_dir, args.wheel_dir)
+        else:
+            publish(args.tarball, args.endpoint, args.temp_dir)
     except PublishError as err:
         print(f"::error::{err}", file=sys.stderr)
         return 1
