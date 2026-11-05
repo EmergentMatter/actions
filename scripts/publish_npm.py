@@ -55,9 +55,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
+import io
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -100,9 +103,11 @@ def check_manifest(manifest: dict[str, object], version: str) -> str:
     if manifest.get("private") is True:
         raise PublishError(f"{name} is marked private; npm would refuse to publish it")
     publish_config = manifest.get("publishConfig")
-    if isinstance(publish_config, dict) and "registry" in publish_config:
+    if isinstance(publish_config, dict) and any(
+        key == "registry" or key.endswith(":registry") for key in publish_config
+    ):
         raise PublishError(
-            f"{name} sets publishConfig.registry; the endpoint is not the package's to pick"
+            f"{name} sets a registry in publishConfig; the endpoint is not the package's to pick"
         )
     scripts = manifest.get("scripts")
     if isinstance(scripts, dict):
@@ -201,17 +206,73 @@ def check_files_present(manifest: dict[str, object], files: dict[str, bytes]) ->
 
 
 def check_members(tarball: Path) -> None:
-    """The tarball holds only plain files and directories, all under `package/`."""
+    """The tarball holds only plain files and directories, all under `package/`, each once.
+
+    Every name must already be in normal form. A name like `package/./package.json` or
+    `package//package.json` is the same file to npm as `package/package.json`, but a different
+    key to a reader that looks names up as written, so the two would disagree about which
+    manifest was checked. Such names, backslashes and repeated names are refused outright.
+    """
+    seen: set[str] = set()
     with tarfile.open(tarball) as archive:
         for member in archive.getmembers():
             name = member.name
+            if "\\" in name or "\x00" in name or name != posixpath.normpath(name):
+                raise PublishError(f"{tarball.name} holds {name!r}, which is not a normal path")
             parts = name.split("/")
-            if parts[0] != "package" or ".." in parts or name.startswith("/"):
+            if (
+                parts[0] != "package"
+                or name.startswith("/")
+                or (member.isfile() and len(parts) < 2)
+            ):
                 raise PublishError(f"{tarball.name} holds {name!r}, outside package/")
             if not (member.isfile() or member.isdir()):
                 raise PublishError(f"{tarball.name} holds {name!r}, which is not a plain file")
+            if name in seen:
+                raise PublishError(f"{tarball.name} holds {name!r} more than once")
+            seen.add(name)
             if parts[-1] == ".npmrc":
                 raise PublishError(f"{tarball.name} holds {name!r}; a package never ships .npmrc")
+
+
+def read_members(tarball: Path) -> dict[str, tuple[bytes, int]]:
+    """Each regular file as `name -> (bytes, mode)`, after `check_members` has passed."""
+    check_members(tarball)
+    members: dict[str, tuple[bytes, int]] = {}
+    with tarfile.open(tarball) as archive:
+        for member in archive.getmembers():
+            if member.isfile():
+                extracted = archive.extractfile(member)
+                assert extracted is not None
+                members[member.name.removeprefix("package/")] = (
+                    extracted.read(),
+                    0o755 if member.mode & 0o111 else 0o644,
+                )
+    return members
+
+
+def write_canonical(members: dict[str, tuple[bytes, int]], dest: Path) -> None:
+    """Write `members` as a tarball with one fixed layout: sorted, no owner, no time.
+
+    The same members always give the same bytes, so what is published is exactly what was
+    checked, and a re-run's integrity matches the first run's.
+    """
+    with (
+        dest.open("wb") as raw,
+        gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed,
+        tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive,
+    ):
+        for name in sorted(members):
+            data, mode = members[name]
+            info = tarfile.TarInfo(f"package/{name}")
+            info.size = len(data)
+            info.mode = mode
+            info.mtime = 0
+            archive.addfile(info, io.BytesIO(data))
+
+
+def canonical_name(manifest: dict[str, object], version: str) -> str:
+    return f"{str(manifest['name']).removeprefix('@').replace('/', '-')}-{version}.tgz"
 
 
 def verify(
@@ -223,33 +284,34 @@ def verify(
     candidates = sorted(artifact_dir.glob("*.tgz"))
     if not candidates:
         raise PublishError(f"{artifact_dir} holds no .tgz")
-    matching: list[tuple[Path, dict[str, object], dict[str, bytes]]] = []
+    matching: list[tuple[Path, dict[str, object], dict[str, tuple[bytes, int]]]] = []
     for candidate in candidates:
-        check_members(candidate)
-        files = tarball_files(candidate)
-        if "package.json" not in files:
+        members = read_members(candidate)
+        if "package.json" not in members:
             raise PublishError(f"{candidate.name} has no package.json")
-        manifest = json.loads(files["package.json"])
+        manifest = json.loads(members["package.json"][0])
         if isinstance(manifest, dict) and manifest.get("name") == expected:
-            matching.append((candidate, manifest, files))
+            matching.append((candidate, manifest, members))
     if len(matching) != 1:
         raise PublishError(
             f"expected exactly one tarball for {expected} in {artifact_dir}, found {len(matching)}"
         )
-    tarball, manifest, files = matching[0]
+    tarball, manifest, members = matching[0]
     check_manifest(manifest, version)
     if manifest.get("version") != version:
         raise PublishError(
             f"{tarball.name} is version {manifest.get('version')}, not the release {version}"
         )
+    files = {name: data for name, (data, _mode) in members.items()}
     check_files_present(manifest, files)
     release_config = manifest.get("em-release")
     mirror = release_config.get("mirrors-wheel-dir") if isinstance(release_config, dict) else None
     if mirror is not None:
         check_mirrors_wheel(files, str(mirror), wheel_dir)
+    # What is published is rebuilt from exactly the bytes checked above, not the artifact itself.
     out_dir.mkdir(parents=True, exist_ok=True)
-    destination = out_dir / tarball.name
-    shutil.copyfile(tarball, destination)
+    destination = out_dir / canonical_name(manifest, version)
+    write_canonical(members, destination)
     print(f"Verified {expected}@{version}: {destination}")
     return destination
 
@@ -308,13 +370,45 @@ def existing_integrity(npm_view: subprocess.CompletedProcess[str]) -> str | None
     )
 
 
+def npm_environment(workdir: Path) -> dict[str, str]:
+    """What npm may see: PATH, a HOME that is the temp dir, and the token. Nothing else.
+
+    Not `AWS_*`, and no variable an `.npmrc` could expand into a request.
+    """
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(workdir),
+        TOKEN_VAR: os.environ[TOKEN_VAR],
+    }
+
+
+def npm_config(workdir: Path, endpoint: str) -> list[str]:
+    """Flags that pin every config file npm reads to ones in `workdir`.
+
+    `--prefix` fixes the project directory, so no `.npmrc` found by walking up from anywhere
+    else is read; the user and global files are ours and the global one is empty.
+    """
+    globalrc = workdir / "globalnpmrc"
+    globalrc.write_text("", encoding="utf-8")
+    return [
+        "--userconfig",
+        str(workdir / "npmrc"),
+        "--globalconfig",
+        str(globalrc),
+        "--prefix",
+        str(workdir),
+        "--registry",
+        endpoint,
+    ]
+
+
 def publish(tarball: Path, endpoint: str, temp_root: Path) -> None:
     if not os.environ.get(TOKEN_VAR):
         raise PublishError(f"{TOKEN_VAR} is not set")
-    files = tarball_files(tarball)
-    if "package.json" not in files:
+    members = read_members(tarball)
+    if "package.json" not in members:
         raise PublishError(f"{tarball} has no package.json")
-    manifest = json.loads(files["package.json"])
+    manifest = json.loads(members["package.json"][0])
     version = str(manifest.get("version"))
     scope = check_manifest(manifest, version)
     endpoint = check_endpoint(endpoint)
@@ -322,24 +416,34 @@ def publish(tarball: Path, endpoint: str, temp_root: Path) -> None:
 
     workdir = Path(tempfile.mkdtemp(prefix="em-npm-", dir=temp_root))
     try:
+        # npm runs here, never in the caller's checkout: a committed `.npmrc` there could name
+        # another registry and be sent the token. The tarball published is rebuilt from the
+        # bytes just checked, so npm reads the manifest that was.
+        publishable = workdir / "publish.tgz"
+        write_canonical(members, publishable)
         npmrc = workdir / "npmrc"
         npmrc.touch(mode=0o600)
         npmrc.write_text(npmrc_text(scope, endpoint), encoding="utf-8")
-        config = ["--userconfig", str(npmrc), "--registry", endpoint]
+        config = npm_config(workdir, endpoint)
+        env = npm_environment(workdir)
         view = subprocess.run(
             ["npm", "view", f"{name}@{version}", "dist.integrity", "--json", *config],
             check=False,
             capture_output=True,
             text=True,
+            cwd=workdir,
+            env=env,
         )
         existing = existing_integrity(view)
         if existing is not None:
-            if existing == integrity_of(tarball):
+            if existing == integrity_of(publishable):
                 print(f"{name}@{version} is already published with the same content; skipping.")
                 return
             raise PublishError(f"{name}@{version} already exists with different content")
         print(f"Publishing {name}@{version} to {endpoint}")
-        result = subprocess.run(["npm", "publish", str(tarball.resolve()), *config], check=False)
+        result = subprocess.run(
+            ["npm", "publish", "./publish.tgz", *config], check=False, cwd=workdir, env=env
+        )
         if result.returncode != 0:
             raise PublishError(
                 f"npm publish failed for {name}@{version} (exit {result.returncode})"

@@ -773,7 +773,11 @@ uploaded.
 `CODEARTIFACT_AUTH_TOKEN` and nowhere else. The `.npmrc` is written to a fresh directory under
 `RUNNER_TEMP`, holds only `@scope:registry=` and the auth line for that endpoint (the token as a
 `${CODEARTIFACT_AUTH_TOKEN}` reference), and is removed afterwards; none is written into the
-repository.
+repository. npm runs in that directory, never in the caller's checkout, with `--prefix`,
+`--userconfig` and an empty `--globalconfig` all inside it, and with only `PATH`, a `HOME` that is
+that directory, and the token in its environment (no `AWS_*`). A `.npmrc` committed to the
+checkout, or written there by a package script, therefore cannot name another registry or be sent
+the token.
 
 **Re-running.** `publish` is safe to run again: a version already in CodeArtifact with the same
 content (the tarball's integrity matches) is skipped, and the same version with different content
@@ -802,8 +806,17 @@ a failure) and refuses it unless:
 - its version is exactly the release's, so the caller builds at the release commit, whose
   `package.json` already carries the bumped version;
 - every plain path in `files` is in it;
-- every member is a plain file or directory under `package/`, with no `..`, no absolute path and
-  no `.npmrc`.
+- every member is a plain file or directory under `package/`, each named once, in normal form
+  (no `.` or empty part, no `..`, no backslash, no trailing slash on a file, no absolute path) and
+  never `.npmrc`. A tarball can otherwise hold `package/package.json` and
+  `package/./package.json`, which npm treats as one file (the last wins) and a reader that
+  keys on the written name treats as two, so the manifest that was checked would not be the one
+  npm publishes.
+
+What is published is not the artifact: `verify` rebuilds a canonical tarball (sorted members, no
+owner, no time, mode 644 or 755) from exactly the bytes it checked, and `publish` does the same
+again from the tarball it is given, so npm reads the manifest that was checked and a re-run's
+integrity matches the first run's.
 
 The checks are on the shape of what was built, not on what the build did; the build is the caller's
 own code at a commit that passed review. `npm-tarballs-artifact` needs `npm-packages`, and is
