@@ -761,7 +761,9 @@ uploaded.
   how a package copies in files that live elsewhere in its repo; it is not run by a consumer.
 - The version in `package.json` is overwritten with the release's version (the tag without its
   `v`), which must be plain `MAJOR.MINOR.PATCH`. The committed value is a placeholder.
-- `npm pack` makes the tarball that will be published.
+- `npm pack` makes the tarball that will be published, and every plain path in `files` (no glob)
+  must be in it. A build output that was never built is a package with nothing in it, and a
+  published version cannot be taken back.
 - If `package.json` declares `"em-release": {"mirrors-wheel-dir": "<dir in the wheel>"}`, every file
   in the tarball other than `package.json` must exist, byte-identical, under that directory in a
   built wheel in `dist/`. A package that republishes files a wheel carries is held to that here.
