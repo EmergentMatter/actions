@@ -28,6 +28,8 @@ Commands:
     em-dev status            local vs published per package, and whether
                              local mode has silently reverted
     em-dev --only a,b        make only these packages local
+    em-dev token             print the shell lines that sign uv in to a
+                             private package index (see "token" below)
 
 A package is local when a sibling folder has its own name, or, failing that,
 when it is a member of a sibling's uv workspace (`[tool.uv.workspace]`), e.g.
@@ -54,6 +56,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -949,9 +952,24 @@ def pip_install(
     `uv pip install` reach the real published index at all. `--no-sources`
     alone still reads `pyproject.toml`, but ignores only its
     `[tool.uv.sources]` table (path/git/workspace overrides), which is
-    exactly and only what must not leak into this install."""
+    exactly and only what must not leak into this install.
+
+    The cost of `--no-sources` is that an `explicit = true` index is used
+    only for a name some source pins to it, so with sources ignored such an
+    index serves nothing and a published package that lives only there (a
+    sibling not checked out) cannot be found. So every index the project
+    declares is passed again on the command line, which is ordinary and
+    outranks the default index: a name on our index still cannot fall
+    through to the public one."""
+    declared = toml_load(repo / "pyproject.toml").get("tool", {}).get("uv", {}).get("index", [])
+    indexes = [
+        arg
+        for entry in declared
+        if isinstance(entry, dict) and entry.get("url")
+        for arg in ("--index", index_spec(entry))
+    ]
     return run_uv(
-        ["pip", "install", "--no-sources", *args],
+        ["pip", "install", "--no-sources", *indexes, *args],
         cwd=repo,
         env={"VIRTUAL_ENV": str(venv_dir)},
         check=check,
@@ -1218,6 +1236,15 @@ def tool_dirs(env: Mapping[str, str] | None = None) -> tuple[Path, Path]:
     return resolved_tool_dir, resolved_bin_dir
 
 
+def index_spec(entry: dict) -> str:
+    """`name=url` for a named `[[tool.uv.index]]` entry, bare `url` for an
+    unnamed one. The name is what uv keys credentials on
+    (`UV_INDEX_<NAME>_USERNAME`/`_PASSWORD`), so dropping it would lose the
+    sign-in `em-dev token` sets up for an index that needs one."""
+    name = entry.get("name")
+    return f"{name}={entry['url']}" if name else str(entry["url"])
+
+
 def index_args(pyproject: dict) -> list[str]:
     """`--index <url>` / `--find-links <url>` for every index this
     project's own `pyproject.toml` declares under `[tool.uv]`.
@@ -1238,7 +1265,7 @@ def index_args(pyproject: dict) -> list[str]:
     for entry in uv_cfg.get("index", []):
         url = entry.get("url") if isinstance(entry, dict) else None
         if url:
-            args += ["--index", url]
+            args += ["--index", index_spec(entry)]
     for url in uv_cfg.get("find-links", []):
         args += ["--find-links", url]
     return args
@@ -1417,6 +1444,146 @@ def status(repo: Path) -> int:
 
 
 # ============================================================================
+# `em-dev token`
+# ============================================================================
+
+#: Where each setting comes from, in order: a flag, then this environment
+#: variable, then an organization variable of the same name read with `gh`.
+#: The profile is a developer's own AWS config and is never an org variable.
+TOKEN_ENV = {
+    "domain": "EM_CODEARTIFACT_DOMAIN",
+    "domain_owner": "EM_CODEARTIFACT_DOMAIN_OWNER",
+    "region": "EM_CODEARTIFACT_REGION",
+    "profile": "EM_CODEARTIFACT_PROFILE",
+    "index_name": "EM_CODEARTIFACT_INDEX_NAME",
+}
+TOKEN_ORG_SETTINGS = ("domain", "domain_owner", "region")
+DEFAULT_INDEX_NAME = "em-codeartifact"
+GITHUB_ORG = "EmergentMatter"
+
+
+def org_variable(name: str) -> str | None:
+    """An organization variable's value via `gh`, or None when `gh` is
+    missing, not signed in, or the variable is unset."""
+    try:
+        proc = subprocess.run(
+            ["gh", "variable", "get", name, "--org", GITHUB_ORG],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    value = proc.stdout.strip()
+    return value if proc.returncode == 0 and value else None
+
+
+def resolve_token_settings(
+    flags: Mapping[str, str | None], env: Mapping[str, str] | None = None
+) -> dict[str, str | None]:
+    """Resolve every token setting: flag, then environment, then (for the
+    domain, its owner and the region) the organization variable. Nothing is
+    defaulted except the index name, so no account, domain or profile is
+    written into this file."""
+    active_env = env if env is not None else os.environ
+    settings: dict[str, str | None] = {}
+    for key, env_name in TOKEN_ENV.items():
+        value = flags.get(key) or active_env.get(env_name) or None
+        if value is None and key in TOKEN_ORG_SETTINGS:
+            value = org_variable(env_name)
+        settings[key] = value
+    settings["index_name"] = settings["index_name"] or DEFAULT_INDEX_NAME
+    return settings
+
+
+def token_env_names(index_name: str) -> tuple[str, str]:
+    """The pair uv reads for an index of this name: the name upper-cased
+    with dashes as underscores."""
+    key = index_name.upper().replace("-", "_")
+    return f"UV_INDEX_{key}_USERNAME", f"UV_INDEX_{key}_PASSWORD"
+
+
+def format_token_lines(index_name: str, token: str, fmt: str) -> str:
+    user_var, pass_var = token_env_names(index_name)
+    pairs = [(user_var, "aws"), (pass_var, token)]
+    if fmt == "json":
+        return json.dumps(dict(pairs))
+    if fmt == "powershell":
+        return "\n".join(f"$env:{k} = '{v}'" for k, v in pairs)
+    if fmt == "cmd":
+        return "\n".join(f"set {k}={v}" for k, v in pairs)
+    return "\n".join(f"export {k}={shlex.quote(v)}" for k, v in pairs)
+
+
+def fetch_codeartifact_token(settings: Mapping[str, str | None]) -> str:
+    """The token `aws codeartifact get-authorization-token` returns.
+
+    Checks the session first and signs in once if it has lapsed. Every
+    message goes to stderr, because stdout is evaluated by the caller's
+    shell and must carry nothing but the assignments."""
+    missing = [TOKEN_ENV[k] for k in TOKEN_ORG_SETTINGS if not settings.get(k)]
+    if missing:
+        raise EmDevError(
+            "missing settings: "
+            + ", ".join(missing)
+            + " (set each as an environment variable or organization variable, "
+            "or pass the matching flag)"
+        )
+    profile = settings.get("profile")
+    base = ["aws"] + (["--profile", profile] if profile else [])
+
+    def aws(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(base[:1] + args + base[1:], text=True, check=False, **kwargs)
+        except OSError as exc:
+            raise EmDevError(f"cannot run the AWS CLI ({exc}); install it first") from exc
+
+    if aws(["sts", "get-caller-identity"], capture_output=True).returncode != 0:
+        if not profile:
+            raise EmDevError(
+                "no usable AWS credentials; set EM_CODEARTIFACT_PROFILE (or --profile) "
+                "to an SSO profile so this can sign in"
+            )
+        print(f"signing in to AWS profile {profile!r} ...", file=sys.stderr)
+        # stdout=2 is the stderr descriptor: the login prompts must not reach stdout.
+        if aws(["sso", "login"], stdout=2).returncode != 0:
+            raise EmDevError(f"`aws sso login --profile {profile}` failed")
+    proc = aws(
+        [
+            "codeartifact",
+            "get-authorization-token",
+            "--domain",
+            str(settings["domain"]),
+            "--domain-owner",
+            str(settings["domain_owner"]),
+            "--region",
+            str(settings["region"]),
+            "--query",
+            "authorizationToken",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+    )
+    token = proc.stdout.strip()
+    if proc.returncode != 0 or not token:
+        raise EmDevError(
+            "could not get a CodeArtifact token (is the profile allowed to read?):\n"
+            + proc.stderr.strip()
+        )
+    return token
+
+
+def print_token(flags: Mapping[str, str | None], fmt: str) -> int:
+    """`em-dev token`: print the assignments for `eval "$(em-dev token)"`.
+    The token is written to stdout only, never to a file."""
+    settings = resolve_token_settings(flags)
+    token = fetch_codeartifact_token(settings)
+    print(format_token_lines(str(settings["index_name"]), token, fmt))
+    return 0
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -1438,6 +1605,19 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run", add_help=False).add_argument("cmd", nargs=argparse.REMAINDER)
     sub.add_parser("off")
     sub.add_parser("status")
+    token = sub.add_parser(
+        "token", description="Print shell lines that sign uv in to the private index."
+    )
+    token.add_argument("--profile", help="AWS SSO profile (else EM_CODEARTIFACT_PROFILE)")
+    token.add_argument("--domain", help="CodeArtifact domain (else EM_CODEARTIFACT_DOMAIN)")
+    token.add_argument(
+        "--domain-owner", help="domain owner account (else EM_CODEARTIFACT_DOMAIN_OWNER)"
+    )
+    token.add_argument("--region", help="AWS region (else EM_CODEARTIFACT_REGION)")
+    token.add_argument("--index-name", help="[[tool.uv.index]] name (default em-codeartifact)")
+    token.add_argument(
+        "--format", choices=["sh", "powershell", "cmd", "json"], default="sh", help="output form"
+    )
 
     args, extra = ap.parse_known_args(argv)
     repo = Path.cwd()
@@ -1450,6 +1630,15 @@ def main(argv: list[str] | None = None) -> int:
             return turn_off(repo)
         if args.command == "status":
             return status(repo)
+        if args.command == "token":
+            flags = {
+                "profile": args.profile,
+                "domain": args.domain,
+                "domain_owner": args.domain_owner,
+                "region": args.region,
+                "index_name": args.index_name,
+            }
+            return print_token(flags, args.format)
 
         exit_code = make_local(repo, only=args.only)
         if exit_code != 0:

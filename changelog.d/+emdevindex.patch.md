@@ -1,0 +1,1 @@
+`em-dev` passes every index the project declares on its `uv pip install` command line, so a published package that lives only on an `explicit = true` index is found even though `--no-sources` ignores the source that pins it. A named index is passed as `name=url`, so credentials keyed on the name keep working in tool mode too.

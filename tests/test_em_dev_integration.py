@@ -12,6 +12,7 @@ idempotence, rebuild-on-lock-change, `off`, and `package = false`.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -274,3 +275,48 @@ def test_main_status_and_off(em_dev, app_repo, toy_sibling_src, monkeypatch, cap
     assert "local" in out
     assert em_dev.main(["off"]) == 0
     assert not (app_repo / em_dev.VENV_LOCAL).exists()
+
+
+def test_package_on_an_explicit_index_is_found_with_sources_ignored(
+    em_dev, tmp_path, toy_simple_index, toy_sibling_src
+):
+    """`--no-sources` ignores the source that pins a name to an `explicit`
+    index, which leaves that index serving nothing: a published package
+    that is not checked out as a sibling then cannot be found. Every
+    declared index is passed on the command line to keep it reachable."""
+    repo = tmp_path / "app"
+    (repo / "src" / "emergent_matter_toy_app").mkdir(parents=True)
+    (repo / "src" / "emergent_matter_toy_app" / "__init__.py").write_text("")
+    (repo / "pyproject.toml").write_text(
+        f"""\
+[project]
+name = "emergent-matter-toy-app"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["{CORE}>=1.0,<2", "{MATERIALS}>=1.0,<2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/emergent_matter_toy_app"]
+
+[[tool.uv.index]]
+name = "toy"
+url = "{toy_simple_index}"
+explicit = true
+
+[tool.uv.sources]
+{CORE} = {{ index = "toy" }}
+{MATERIALS} = {{ index = "toy" }}
+"""
+    )
+    subprocess.run(["uv", "lock"], cwd=repo, check=True, capture_output=True, text=True)
+    _copy_sibling(tmp_path, toy_sibling_src / CORE, CORE)
+
+    assert em_dev.make_local(repo) == 0
+
+    python = _venv_python(repo, em_dev)
+    assert str(tmp_path / CORE) in _import_file(python, "emergent_matter_toy_core")
+    assert str(tmp_path / MATERIALS) not in _import_file(python, "emergent_matter_toy_materials")

@@ -47,6 +47,7 @@ runs:
         PY_VERSION: ${{ inputs.python-version }}
         ALL_PACKAGES: ${{ inputs.all-packages }}
         VERIFY_SCRIPT: ${{ github.action_path }}/../scripts/verify_wheel.py
+        INDEXES_SCRIPT: ${{ github.action_path }}/../scripts/declared_indexes.py
       run: |
         set -euo pipefail
 
@@ -102,9 +103,20 @@ runs:
         # All wheels of a workspace go into ONE environment: a member that
         # depends on a sibling resolves it from the wheel beside it, not
         # from an index the sibling has not been published to yet.
+        #
+        # That directory sees none of the project's own uv configuration, so
+        # every index the project declares is passed explicitly. Without it a
+        # wheel whose dependencies live on a declared index cannot be
+        # installed here, however well it installs in the project itself.
+        index_args=()
+        while IFS= read -r spec; do
+          index_args+=(--index "${spec}")
+        done < <(python3 "${INDEXES_SCRIPT}" pyproject.toml)
+
         workdir="$(mktemp -d)"
         uv venv --python "${PY_VERSION}" "${workdir}/venv"
-        uv pip install --python "${workdir}/venv/bin/python" "${install_targets[@]}"
+        uv pip install --python "${workdir}/venv/bin/python" \
+          ${index_args[@]+"${index_args[@]}"} "${install_targets[@]}"
 
         cp "${VERIFY_SCRIPT}" "${workdir}/verify_wheel.py"
         cd "${workdir}"

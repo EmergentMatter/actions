@@ -1,0 +1,1 @@
+`em-dev token` prints the shell lines that sign uv in to a private package index from an AWS SSO profile. The domain, its owner and the region come from a flag, an environment variable or an organization variable; nothing is built in.
