@@ -804,7 +804,7 @@ the same file). Everything below is in the files; nothing is edited by hand.
 - **Dependabot.** `dependabot.yml` is filled at onboarding from the repo's own
   declared indexes; the private one takes the values of the organization
   variables `EM_CODEARTIFACT_READ_ROLE_ARN`, `_REGION`, `_DOMAIN` and
-  `_DOMAIN_OWNER`, which `gh` must be able to read.
+  `_DOMAIN_OWNER`, which `gh` must be able to read (or the same names set in the environment). A missing variable stops onboarding before any file is written.
 - **Lock sources.** The `test` job runs `check-lock-sources`: a package named
   `emergent-matter-*` locked from an index the project does not declare fails.
   A `[tool.uv.sources]` entry covers only a direct requirement, so every
