@@ -14,8 +14,8 @@ stdlib only, shelling out to `npm`.
 is uploaded, so everything that can be wrong with a package is found while nothing is
 published yet:
 
-1. The manifest is checked: a scoped name, not private, `publishConfig` limited to `access` and `tag`, no
-   install-time script (`preinstall`, `install`, `postinstall`, `prepare`), a plain
+1. The manifest is checked: a scoped name, not private, `publishConfig` limited to `access` and
+   `tag`, no install-time script (`preinstall`, `install`, `postinstall`, `prepare`), a plain
    `MAJOR.MINOR.PATCH` version. A `prepack` script is allowed; it is how a package copies in
    files that live elsewhere in its repository, and it is not run by a consumer.
 2. The release version is stamped into `package.json` (the committed one is a placeholder),
