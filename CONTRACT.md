@@ -808,7 +808,8 @@ a failure) and refuses it unless:
 - every plain path in `files` is in it;
 - every member is a plain file or directory under `package/`, each named once, in normal form
   (no `.` or empty part, no `..`, no backslash, no trailing slash on a file, no absolute path),
-  with every segment ASCII letters, digits and `. _ @ + -`, no two names equal after NFC and case
+  with every segment ASCII letters, digits and `. _ @ + -`, not ending in a dot, and not starting (before
+  the first dot) with a Windows device name such as `con`, `aux` or `lpt1`, no two names equal after NFC and case
   folding (a case-folding filesystem would extract them to one file), and never `.npmrc`. A tarball can otherwise hold `package/package.json` and
   `package/./package.json`, which npm treats as one file (the last wins) and a reader that
   keys on the written name treats as two, so the manifest that was checked would not be the one

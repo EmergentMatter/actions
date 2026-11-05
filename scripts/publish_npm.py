@@ -82,6 +82,13 @@ PUBLISH_CONFIG_KEYS = ("access", "tag")
 # Starts with a letter: npm refuses a tag that is a valid semver range ("1", "1.x", "1.2.3").
 DIST_TAG = re.compile(r"^[a-z][a-z0-9._-]*$")
 SEGMENT = re.compile(r"^[A-Za-z0-9._@+-]+$")
+# Windows drops a trailing dot and treats these as devices whatever the extension, so a file
+# named so extracts to a different name or not at all.
+RESERVED_STEMS = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{n}" for n in range(1, 10)}
+    | {f"lpt{n}" for n in range(1, 10)}
+)
 
 
 class PublishError(Exception):
@@ -245,6 +252,14 @@ def check_members(tarball: Path) -> None:
                 raise PublishError(f"{tarball.name} holds {name!r}, outside package/")
             if not (member.isfile() or member.isdir()):
                 raise PublishError(f"{tarball.name} holds {name!r}, which is not a plain file")
+            if any(
+                part.endswith(".") or part.split(".", 1)[0].casefold() in RESERVED_STEMS
+                for part in parts
+            ):
+                raise PublishError(
+                    f"{tarball.name} holds {name!r}; a name ending in a dot or starting with a "
+                    "Windows device name does not extract the same everywhere"
+                )
             if not all(SEGMENT.match(part) for part in parts):
                 raise PublishError(
                     f"{tarball.name} holds {name!r}; names are limited to ASCII letters, digits "
