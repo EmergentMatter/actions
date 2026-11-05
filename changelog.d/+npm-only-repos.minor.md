@@ -1,0 +1,1 @@
+A repo with a package.json and no pyproject.toml now versions and releases through version.yml and build-release.yml, and the changelog-check action works there. The version is read from and written to package.json, and the publish tier is read from its em-release block. Repos with a pyproject.toml are unchanged.

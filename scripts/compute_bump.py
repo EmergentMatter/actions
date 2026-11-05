@@ -22,6 +22,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--notes-dir", default="changelog.d")
     parser.add_argument("--pyproject", default="pyproject.toml")
+    parser.add_argument(
+        "--package-json",
+        default="package.json",
+        help="Version source when --pyproject does not exist (an npm-only repo).",
+    )
     parser.add_argument("--format", choices=["github", "json"], default="github")
     return parser.parse_args(argv)
 
@@ -34,6 +39,19 @@ def read_current_version(pyproject_path: Path) -> str:
     except KeyError:
         print(f"error: [project] version not found in {pyproject_path}", file=sys.stderr)
         sys.exit(1)
+
+
+def read_package_json_version(package_json_path: Path) -> str:
+    try:
+        data = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"error: {package_json_path} is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    version = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(version, str):
+        print(f"error: version not found in {package_json_path}", file=sys.stderr)
+        sys.exit(1)
+    return version
 
 
 def max_level(notes_dir: Path) -> tuple[str | None, int]:
@@ -131,7 +149,14 @@ def emit(result: dict[str, str | int], fmt: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
 
-    current = read_current_version(Path(args.pyproject))
+    pyproject = Path(args.pyproject)
+    package_json = Path(args.package_json)
+    # pyproject.toml wins whenever it exists, so a Python repo that also carries a package.json
+    # is read exactly as before. package.json is the version source only for a repo with none.
+    if not pyproject.is_file() and package_json.is_file():
+        current = read_package_json_version(package_json)
+    else:
+        current = read_current_version(pyproject)
     level, count = max_level(Path(args.notes_dir))
 
     if level is None:
