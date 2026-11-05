@@ -179,6 +179,21 @@ def test_prepare_refuses_a_missing_package_json(env):
     assert prepare(env, env["work"] / "empty") == 1
 
 
+def test_prepare_refuses_a_files_entry_that_is_not_in_the_tarball(env, capsys):
+    pkg = package(env["work"], files=["data.json", "dist"])
+    assert prepare(env, pkg) == 1
+    err = capsys.readouterr().err
+    assert "dist" in err
+    assert "data.json" not in err.split("lists", 1)[1].split("in files")[0]
+
+
+def test_prepare_accepts_a_files_directory_and_ignores_globs_and_negations(env):
+    pkg = package(env["work"], files=["data.json", "dist", "!dist/skip.txt", "docs/*.md"])
+    (pkg / "dist").mkdir()
+    (pkg / "dist" / "index.js").write_text("export {}\n")
+    assert prepare(env, pkg) == 0
+
+
 MIRROR = {"em-release": {"mirrors-wheel-dir": "pkg_chat"}}
 
 

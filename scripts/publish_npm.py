@@ -19,7 +19,10 @@ published yet:
 2. The release version is stamped into `package.json` (the committed one is a placeholder),
    so an npm package and its Python siblings carry the same number.
 3. `npm pack` makes the tarball that will be published, byte for byte.
-4. If the manifest declares `"em-release": {"mirrors-wheel-dir": "<dir in the wheel>"}`, every
+4. Every plain path in the manifest's `files` list (no glob) must be in the tarball. A build
+   output that was never built is a package with the right name and nothing in it, and a
+   published version cannot be taken back, so this fails before any upload.
+5. If the manifest declares `"em-release": {"mirrors-wheel-dir": "<dir in the wheel>"}`, every
    file in the tarball other than `package.json` must exist, byte-identical, under that
    directory in a built wheel in `--wheel-dir`. A package that is a second publication of
    files a wheel already carries is held to that here, not just in the repository's own tests.
@@ -167,6 +170,25 @@ def check_mirrors_wheel(files: dict[str, bytes], mirror: str, wheel_dir: Path) -
         )
 
 
+def check_files_present(manifest: dict[str, object], files: dict[str, bytes]) -> None:
+    """Every plain `files` entry of the manifest names something that is in the tarball."""
+    declared = manifest.get("files")
+    if not isinstance(declared, list):
+        return
+    missing = []
+    for entry in declared:
+        if not isinstance(entry, str) or any(c in entry for c in "*?[]{}!"):
+            continue
+        path = entry.removeprefix("./").rstrip("/")
+        if path and not any(name == path or name.startswith(path + "/") for name in files):
+            missing.append(entry)
+    if missing:
+        raise PublishError(
+            f"{manifest['name']} lists {', '.join(missing)} in files but the tarball holds "
+            "nothing there; was it built before this step?"
+        )
+
+
 def prepare(package_dir: Path, version: str, out_dir: Path, wheel_dir: Path) -> Path:
     if not inside(package_dir, Path.cwd()):
         raise PublishError(f"{package_dir} is outside the workspace")
@@ -198,6 +220,7 @@ def prepare(package_dir: Path, version: str, out_dir: Path, wheel_dir: Path) -> 
         raise PublishError(f"npm pack failed for {manifest['name']} (exit {result.returncode})")
     filename = json.loads(result.stdout)[0]["filename"]
     tarball = out_dir / filename
+    check_files_present(manifest, tarball_files(tarball))
     release_config = manifest.get("em-release")
     mirror = release_config.get("mirrors-wheel-dir") if isinstance(release_config, dict) else None
     if mirror is not None:
