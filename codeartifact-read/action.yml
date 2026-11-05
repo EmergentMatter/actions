@@ -1,0 +1,77 @@
+name: Read the private package index
+description: >-
+  Sign uv in to the org's private CodeArtifact package index for this job:
+  assume a read-only role over OIDC, fetch a token, and export the
+  UV_INDEX_<NAME>_USERNAME/_PASSWORD pair uv reads for an index of that name.
+  Does nothing when the project's pyproject.toml declares no index of that
+  name, so a repo that reads only the public index needs no role. The job
+  must grant `id-token: write`.
+inputs:
+  role-arn:
+    description: >-
+      Read-only role to assume. Pass `${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}`.
+      Required when the project declares the index.
+    default: ""
+  index-name:
+    description: The `name` of the [[tool.uv.index]] entry that points at the private index.
+    default: em-codeartifact
+  domain:
+    description: CodeArtifact domain (the same default as version.yml).
+    default: em
+  domain-owner:
+    description: Account that owns the domain (the same default as version.yml).
+    default: "967228661072"
+  region:
+    description: AWS region of the domain (the same default as version.yml).
+    default: us-east-2
+
+runs:
+  using: composite
+  steps:
+    - name: Does this project use the private index?
+      id: needed
+      shell: bash
+      env:
+        INDEX_NAME: ${{ inputs.index-name }}
+        SCRIPT: ${{ github.action_path }}/../scripts/declared_indexes.py
+      run: |
+        set -euo pipefail
+        if python3 "${SCRIPT}" pyproject.toml | cut -d= -f1 | grep -qx "${INDEX_NAME}"; then
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "needed=false" >> "$GITHUB_OUTPUT"
+          echo "No index named ${INDEX_NAME} in pyproject.toml; nothing to sign in to."
+        fi
+
+    - name: Require a role
+      if: steps.needed.outputs.needed == 'true' && inputs.role-arn == ''
+      shell: bash
+      run: |
+        echo "::error::pyproject.toml declares the private index but no role was passed. Set the EM_CODEARTIFACT_READ_ROLE_ARN variable and pass it as role-arn."
+        exit 1
+
+    - name: Assume the read-only role
+      if: steps.needed.outputs.needed == 'true'
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+        mask-aws-account-id: true
+
+    - name: Authenticate uv to the index
+      if: steps.needed.outputs.needed == 'true'
+      shell: bash
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        DOMAIN_OWNER: ${{ inputs.domain-owner }}
+        REGION: ${{ inputs.region }}
+        INDEX_NAME: ${{ inputs.index-name }}
+      run: |
+        set -euo pipefail
+        token=$(aws codeartifact get-authorization-token \
+          --domain "${DOMAIN}" --domain-owner "${DOMAIN_OWNER}" \
+          --region "${REGION}" --query authorizationToken --output text)
+        echo "::add-mask::${token}"
+        env_name=$(echo "${INDEX_NAME}" | tr '[:lower:]-' '[:upper:]_')
+        echo "UV_INDEX_${env_name}_USERNAME=aws" >> "$GITHUB_ENV"
+        echo "UV_INDEX_${env_name}_PASSWORD=${token}" >> "$GITHUB_ENV"

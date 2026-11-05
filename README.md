@@ -156,6 +156,7 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
  ├── changelog-check/action.yml              composite action, the PR gate
  ├── verify-wheel/action.yml                 composite action, installs and imports the built wheel
+ ├── codeartifact-read/action.yml            composite action, signs uv in to the private index
  ├── check-lock-sources/action.yml           composite action, org packages must come from a declared index
  ├── scripts/{compute_bump,sync_version,check_publish_tier,
  │            publish_static_index,generate_index_page,workspace_packages,

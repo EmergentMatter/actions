@@ -40,11 +40,13 @@ Stdlib only. GitHub access shells out to `gh`.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -66,6 +68,7 @@ _VALID_TIERS = {"open", "closed"}
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 CI_DEST = ".github/workflows/ci.yml"
+PUBLISH_STUBS = (".github/workflows/version.yml", ".github/workflows/build-release.yml")
 LABEL = "skip-changelog"
 LABEL_DESC = "Exempts this PR from the changelog note requirement"
 LABEL_COLOR = "cfd3d7"
@@ -73,6 +76,7 @@ PVR_PATH = "private-vulnerability-reporting"
 PVR_NAME = "private vulnerability reporting"
 
 _VALID_POLICIES = {"managed", "seed-once"}
+_VALID_RENDERS = {"dependabot"}
 
 # The independent, appendable blocks templates/pyproject-snippet.toml is
 # made of, in file order. Each is written only if the target repo doesn't
@@ -93,6 +97,7 @@ class TemplateEntry:
     dest: str  # relative to the target repo root
     policy: str  # "managed" | "seed-once"
     tier: str | None = None  # None (every repo) | "open" | "closed"
+    render: str | None = None  # None (copied byte for byte) | "dependabot"
 
 
 def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
@@ -105,7 +110,11 @@ def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
         data = tomllib.load(f)
     entries = [
         TemplateEntry(
-            source=raw["source"], dest=raw["dest"], policy=raw["policy"], tier=raw.get("tier")
+            source=raw["source"],
+            dest=raw["dest"],
+            policy=raw["policy"],
+            tier=raw.get("tier"),
+            render=raw.get("render"),
         )
         for raw in data.get("template", [])
     ]
@@ -113,6 +122,9 @@ def load_manifest(path: Path | None = None) -> list[TemplateEntry]:
     if bad:
         word = "policy" if len(bad) == 1 else "policies"
         raise OnboardError(f"manifest.toml: unknown {word} {sorted(bad)!r}")
+    bad_renders = {e.render for e in entries if e.render is not None} - _VALID_RENDERS
+    if bad_renders:
+        raise OnboardError(f"manifest.toml: unknown render {sorted(bad_renders)!r}")
     bad_tiers = {e.tier for e in entries if e.tier is not None} - _VALID_TIERS
     if bad_tiers:
         word = "tier" if len(bad_tiers) == 1 else "tiers"
@@ -143,8 +155,19 @@ def entries_for_tier(manifest: list[TemplateEntry], tier: str | None) -> list[Te
     as a genuine difference and surfaces for `--theirs` or a human to
     decide -- never a silent swap of licence text a repo may be relying on
     for compliance.
+
+    A tiered entry also REPLACES the untiered entry for the same `dest` when
+    the repo declares that tier. This is how a closed-tier repo gets its own
+    stubs, CI and Dependabot file while every other repo keeps the common
+    ones: the untiered entry stays the default, and a repo with no declared
+    tier still gets it.
     """
-    return [e for e in manifest if e.tier is None or e.tier == tier]
+    specific = {e.dest for e in manifest if e.tier is not None and e.tier == tier}
+    return [
+        e
+        for e in manifest
+        if (e.tier is None and e.dest not in specific) or (e.tier is not None and e.tier == tier)
+    ]
 
 
 POINT_RELEASE_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
@@ -222,6 +245,7 @@ class Plan:
     ci_job_names: list[str] = field(default_factory=list)
     ci_is_ours: bool = False
     missing_config_sections: set[str] = field(default_factory=lambda: set(SNIPPET_SECTIONS))
+    publish: bool = False
 
 
 # ------------------------------------------------------------------ detection
@@ -378,7 +402,9 @@ def build_plan(repo: Path, declared: list[str], tier: str) -> Plan:
             continue  # handled below -- it gets bespoke treatment, not a plain copy
         target = repo / entry.dest
         if target.exists():
-            same = target.read_bytes() == (TEMPLATES / entry.source).read_bytes()
+            same = entry.render is None and (
+                target.read_bytes() == (TEMPLATES / entry.source).read_bytes()
+            )
             note = (
                 "already present and identical"
                 if same
@@ -449,6 +475,104 @@ def build_plan(repo: Path, declared: list[str], tier: str) -> Plan:
         plan.candidates = propose_version_files(repo, version)
 
     return plan
+
+
+# ------------------------------------------------------------ closed-tier files
+
+#: The organization onboarding reads variables from. Like the rest of this
+#: repo's maintenance scripts it only ever runs for the org's own repos.
+GITHUB_ORG = os.environ.get("EM_GITHUB_ORG", "EmergentMatter")
+
+#: Variables the private-index registry of a Dependabot file is built from.
+#: The CI sign-in reads the same one for its role (EM_CODEARTIFACT_READ_ROLE_ARN).
+DEPENDABOT_VARIABLES = (
+    "EM_CODEARTIFACT_READ_ROLE_ARN",
+    "EM_CODEARTIFACT_REGION",
+    "EM_CODEARTIFACT_DOMAIN",
+    "EM_CODEARTIFACT_DOMAIN_OWNER",
+)
+
+_ROLE_ARN_RE = re.compile(r"^arn:aws[a-z-]*:iam::(\d{12}):role/(?:.*/)?([^/]+)$")
+
+
+def org_variable(name: str) -> str | None:
+    """An organization variable's value read with `gh`, or None."""
+    p = subprocess.run(
+        ["gh", "variable", "get", name, "--org", GITHUB_ORG], capture_output=True, text=True
+    )
+    value = p.stdout.strip()
+    return value if p.returncode == 0 and value else None
+
+
+def activate_publish(text: str) -> str:
+    """Turn a closed-tier stub into the form for a repo that publishes.
+
+    Lines ending in `#reader` are dropped; lines carrying `#publisher# `
+    are uncommented. Done once, at onboarding, so the file a publisher ends
+    up with reads as written by hand from then on."""
+    out = []
+    for line in text.split("\n"):
+        if line.rstrip().endswith("#reader"):
+            continue
+        m = re.match(r"^(\s*)#publisher# ?(.*)$", line)
+        out.append(f"{m.group(1)}{m.group(2)}" if m else line)
+    return "\n".join(out)
+
+
+def render_dependabot(
+    template: str,
+    pyproject_data: dict,
+    lookup: Callable[[str], str | None] = org_variable,
+) -> str:
+    """Fill templates/dependabot-closed.yml from the indexes this repo's own
+    pyproject.toml declares. A private-index entry (its URL names a
+    CodeArtifact host) becomes an OIDC registry built from organization
+    variables; any other named index becomes a plain registry. Fails with
+    the variables that could not be read rather than writing a file that
+    Dependabot would reject."""
+    declared = pyproject_data.get("tool", {}).get("uv", {}).get("index", [])
+    named = [e for e in declared if isinstance(e, dict) and e.get("name") and e.get("url")]
+
+    private = [e for e in named if "codeartifact" in e["url"]]
+    values: dict[str, str] = {}
+    if private:
+        missing = []
+        for var in DEPENDABOT_VARIABLES:
+            value = lookup(var)
+            if value is None:
+                missing.append(var)
+            else:
+                values[var] = value
+        if missing:
+            raise OnboardError(
+                "cannot build the Dependabot registry for the private index: organization "
+                f"variable(s) not readable: {', '.join(missing)}. Set them, sign in with `gh`, "
+                "and run again."
+            )
+        arn = _ROLE_ARN_RE.match(values["EM_CODEARTIFACT_READ_ROLE_ARN"])
+        if arn is None:
+            raise OnboardError("EM_CODEARTIFACT_READ_ROLE_ARN is not an IAM role ARN")
+
+    ordered = sorted(named, key=lambda e: "codeartifact" not in e["url"])
+    blocks = []
+    for entry in ordered:
+        lines = [f"  {entry['name']}:", "    type: python-index", f"    url: {entry['url']}"]
+        if entry in private:
+            lines += [
+                f"    aws-region: {values['EM_CODEARTIFACT_REGION']}",
+                f"    account-id: '{arn.group(1)}'",
+                f"    role-name: {arn.group(2)}",
+                f"    domain: {values['EM_CODEARTIFACT_DOMAIN']}",
+                f"    domain-owner: '{values['EM_CODEARTIFACT_DOMAIN_OWNER']}'",
+                "    audience: sts.amazonaws.com",
+            ]
+        blocks.append("\n".join(lines))
+    registries = ("\nregistries:\n" + "\n".join(blocks) + "\n") if blocks else ""
+    refs = (
+        "    registries:\n" + "".join(f"      - {e['name']}\n" for e in ordered) if ordered else ""
+    )
+    text = template.replace("@@REGISTRIES@@\n", registries)
+    return text.replace("@@REGISTRY_REFS@@\n", refs)
 
 
 # -------------------------------------------------------------------- writing
@@ -546,7 +670,12 @@ def render_config_block(
     return "".join(parts)
 
 
-def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> list[str]:
+def apply_plan(
+    plan: Plan,
+    version_files: list[str],
+    templates_version: str,
+    lookup: Callable[[str], str | None] = org_variable,
+) -> list[str]:
     """Write every `create` action in `plan`. Returns the target paths written."""
     done = []
     for action in plan.actions:
@@ -587,6 +716,19 @@ def apply_plan(plan: Plan, version_files: list[str], templates_version: str) -> 
             # carries a shebang and is 100755 in templates/, and a copy that lands
             # non-executable trips ruff's EXE001 in every repo onboarded with it.
             shutil.copy(TEMPLATES / entry.source, dest)
+            if entry.render == "dependabot":
+                dest.write_text(
+                    render_dependabot(
+                        (TEMPLATES / entry.source).read_text(encoding="utf-8"),
+                        read_pyproject(plan.repo_path),
+                        lookup,
+                    ),
+                    encoding="utf-8",
+                )
+            elif plan.publish and entry.dest in PUBLISH_STUBS:
+                dest.write_text(
+                    activate_publish(dest.read_text(encoding="utf-8")), encoding="utf-8"
+                )
         done.append(action.target)
     return done
 
@@ -744,8 +886,20 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="This repo has no version string outside pyproject.toml",
     )
+    ap.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "This closed-tier repo publishes its own releases to the private index: turn the "
+            "publish lines of the version and build-release stubs on. Without it the stubs "
+            "only read the index."
+        ),
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+    if args.publish and args.tier != "closed":
+        print("error: --publish applies to a closed-tier repo", file=sys.stderr)
+        return 1
 
     repo = Path(args.repo_path).resolve()
     if not (repo / ".git").exists():
@@ -758,6 +912,7 @@ def main(argv: list[str]) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    plan.publish = args.publish
     print_plan(plan)
 
     for v in args.version_file:

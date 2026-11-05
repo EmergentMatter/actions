@@ -1,0 +1,40 @@
+# .github/workflows/build-release.yml
+#
+# NOT part of the automated release path. version.yml builds and creates
+# the GitHub Release itself, inline, the moment it pushes the release tag,
+# because the tag it pushes cannot trigger a workflow. For why, see "Why
+# the release is not tag-triggered" in
+# https://github.com/EmergentMatter/actions/blob/main/CONTRACT.md
+#
+# This stub covers the paths that are not automated: a human pushing a
+# `v*` tag by hand (which DOES trigger workflows), and `workflow_dispatch`
+# for manually rebuilding a past release's GitHub Release/wheel. Neither
+# path can complete a PUBLISH once this repo's environment restricts
+# deployment to `main` (both run against a tag): re-publish a release
+# whose publish job failed by re-running that original version.yml run's
+# failed job instead. See CONTRACT.md, "Re-publishing a release".
+#
+# Lines marked `#reader` are removed, and lines marked `#publisher#` are
+# uncommented, when onboarding is run with --publish.
+name: Build & Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+jobs:
+  release:
+    uses: EmergentMatter/actions/.github/workflows/build-release.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+    with:
+      # MUST match the @ref above.
+      actions-ref: v1
+      publish: false  #reader
+      #publisher# publish: true
+      #publisher# publish-target: codeartifact
+      #publisher# environment: production
+      #publisher# aws-role-arn: arn:aws:iam::${{ vars.EM_PUBLISH_ACCOUNT_ID }}:role/${{ vars.EM_PUBLISH_ROLE_NAME }}
+
+      # Keep in step with version.yml.
+      # all-packages: true

@@ -1,0 +1,384 @@
+# Starting CI template for a closed-tier repo: one that resolves packages
+# from the org's private index. Seeded once by onboarding; adjust as the repo
+# needs. It is the open-tier template with three additions, in this order:
+#
+#   * every job that runs `uv sync` signs in to the private index first
+#     (EmergentMatter/actions/codeartifact-read, a no-op without that index
+#     in pyproject.toml) and so carries `id-token: write`;
+#   * `test` also runs check-lock-sources, so a package of ours that came
+#     from an index the project does not declare turns the check red;
+#   * a `floor` job tests the package at the lowest version each direct
+#     dependency's range allows. Delete it for a repo whose direct
+#     dependencies carry no floor worth holding.
+#
+# Consistent job
+# names across every repo that copies this (C4), so "the lint job" and
+# "the build job" mean the same thing everywhere:
+#
+#   lint      - advisory during rollout; see the staged-rollout note on the
+#               lint job below. Turning a linter on across an established
+#               codebase produces a pile of findings unrelated to whatever
+#               PR happens to trip the check first, and a check people
+#               learn to click past is worse than no check. Clear the
+#               backlog in its own dedicated PR before enforcing. Don't
+#               skip straight to blocking.
+#   format    - `ruff format --check .`, staged the same way as lint.
+#   typecheck - `mypy src`, staged the same way as lint. See STYLE.md.
+#   test      - runs the repo's test suite. If there isn't one yet, it
+#               still runs (and passes) rather than being skipped outright,
+#               see the "no tests" branch below. The floor is never
+#               zero (C5).
+#   build     - `uv build`, then install the built wheel into a clean
+#               environment and import it, then keep the artifacts. A
+#               green test suite only proves the source tree works; tests
+#               run against source, but users install the built package,
+#               so a repo can be fully green on tests and still be broken
+#               to install. This stage is what actually catches that
+#               (C2) -- and it takes the verify step to do it, because
+#               `uv build` alone reports success for a wheel containing
+#               nothing.
+#
+# A repo with a TypeScript package uncomments the `ts` job below it.
+#
+# `uv sync --locked` in every job fails if uv.lock is out of date, so this
+# always runs on a clean, from-lockfile install rather than trusting
+# whatever's already resolved on a developer's machine (C3).
+#
+# Must stay callable both directly on pull_request AND as a reusable
+# workflow_call: the version.yml stub does `needs: ci` onto this file by
+# reference (`uses: ./.github/workflows/ci.yml`).
+#
+# `name: CI` below is what makes checks display as `CI / lint` etc.
+# instead of falling back to the file path (`.github/workflows/ci.yml /
+# lint`). Safe to add: required-status-check contexts are job names
+# (`lint`, `format`, `typecheck`, `test`, `build`), not the workflow name,
+# so this doesn't touch branch protection.
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Every job below carries the same `if:`, skipping a draft PR's checks until it is
+  # marked ready (or run by hand via workflow_dispatch). The `github.event_name !=
+  # 'pull_request' ||` half is essential, not decorative: version.yml calls this file
+  # via workflow_call on pushes to main, where `github.event.pull_request` does not
+  # exist and a bare `draft == false` would evaluate false, silently skipping every
+  # release-path check.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    # id-token: write is for the sign-in step; granted per job.
+    permissions:
+      contents: read
+      id-token: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # STAGED ROLLOUT. `continue-on-error` does NOT make lint non-blocking
+    # on pull requests, and believing otherwise gets the rollout backwards.
+    # Verified on a real run, not assumed:
+    #
+    #   job conclusion .................. failure
+    #   workflow RUN conclusion ......... success  <- all this line changes
+    #   CHECK RUN conclusion ............ failure  <- branch protection sees this
+    #
+    # So a failing lint job still reports a failed check and still blocks a
+    # PR the moment `lint` is a required status check. What this line
+    # actually buys is that a lint failure doesn't fail the whole run, so
+    # it doesn't take down `version.yml`'s `needs: ci` and stall a release
+    # while the backlog is still being cleared.
+    #
+    # Whether lint blocks PRs is controlled by ONE thing: whether `lint` is
+    # in the repo's required status checks. The two levers move together:
+    #
+    #   Phase 1  keep this line, and leave `lint` OUT of required contexts
+    #            -> advisory everywhere, visible to anyone who looks
+    #   Phase 2  clear the existing findings in a dedicated lint-only PR
+    #   Phase 3  delete this line AND add `lint` to required contexts
+    #            -> enforced on PRs and on the release path
+    #
+    # Deleting this line without adding the context leaves lint unenforced
+    # on PRs while newly able to stall a release -- the worst of both.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sign in to the private index (a no-op for a project that does not
+      # declare one). Before `uv sync`, in every job that runs it.
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          # Distinct per job: lint/test/build all cache the same
+          # dependency set and, run concurrently, raced the same
+          # setup-uv-2-... cache key ("Failed to save: Unable to reserve
+          # cache") without this.
+          cache-suffix: lint
+
+      - run: uv sync --locked
+
+      - run: uv run ruff check .
+
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    # id-token: write is for the sign-in step; granted per job.
+    permissions:
+      contents: read
+      id-token: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job format.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sign in to the private index (a no-op for a project that does not
+      # declare one). Before `uv sync`, in every job that runs it.
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: format
+
+      - run: uv sync --locked
+
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    # id-token: write is for the sign-in step; granted per job.
+    permissions:
+      contents: read
+      id-token: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    # STAGED ROLLOUT. Same as lint above. Managed by lint_gate.py --job typecheck.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sign in to the private index (a no-op for a project that does not
+      # declare one). Before `uv sync`, in every job that runs it.
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: typecheck
+
+      - run: uv sync --locked
+
+      - name: mypy
+        run: |
+          if [ -d src ]; then
+            uv run mypy src
+          else
+            echo "No src/ directory yet -- nothing to typecheck."
+          fi
+
+  # Optional: uncomment for a repo with a TypeScript package. Bun is the
+  # package manager and script runner; adjust `ui` to your package's
+  # directory if it differs. See STYLE.md's "TypeScript" section.
+  # ts:
+  #   name: ts
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  #   # STAGED ROLLOUT. Same as lint above. lint_gate.py doesn't manage
+  #   # this job (its working directory isn't the repo root) -- flip
+  #   # continue-on-error and the required context by hand.
+  #   continue-on-error: true
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #
+  #     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+  #       with:
+  #         bun-version: "1.4.0"   # match package.json's engines.bun
+  #
+  #     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+  #       # Drop this step if the suite never shells out to node.
+  #       with:
+  #         node-version: "22"
+  #
+  #     - working-directory: ui
+  #       run: bun install --frozen-lockfile
+  #     - working-directory: ui
+  #       run: bun run lint
+  #     - working-directory: ui
+  #       run: bun run typecheck
+  #     - working-directory: ui
+  #       run: bun run format:check
+  #     - working-directory: ui
+  #       run: bun run test
+  #     - working-directory: ui
+  #       run: bun run build
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    # id-token: write is for the sign-in step; granted per job.
+    permissions:
+      contents: read
+      id-token: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sign in to the private index (a no-op for a project that does not
+      # declare one). Before `uv sync`, in every job that runs it.
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: test
+
+      # Install must be the step immediately before the test run, with
+      # nothing that writes a version string in between. Some repos have
+      # tests that read INSTALLED package metadata (importlib.metadata),
+      # not the source tree. E.g. emergent-matter-sdm-materials asserts
+      # importlib.metadata.version() agrees with the module's __version__.
+      # A fresh sync right before the test step, on every run, makes that
+      # class of "environment vs. tree" drift structurally impossible.
+      # It's a concrete instance of why C3 requires a clean-machine,
+      # from-lockfile install rather than a persisted/cached environment.
+      # If you add a step here later, keep it above this line, not between
+      # sync and test.
+      - run: uv sync --locked
+
+      # If the test job becomes the slow part of CI, two levers are worth
+      # knowing about, in this order. Both were measured on sdm-core, whose
+      # suite ran 286s here:
+      #
+      #   1. `uv run pytest -n auto` splits the suite across the runner's
+      #      cores with pytest-xdist (add it to the dev dependency group).
+      #      Check for ordering dependencies first -- run the suite serial
+      #      and parallel and compare the pass/fail/skip counts. Expect less
+      #      than a laptop suggests: a standard runner is 2-core on a private
+      #      repo, 4-core on a public one. This took sdm-core to 241s.
+      #
+      #   2. If the suite is dominated by compilation rather than by the code
+      #      under test (JAX/XLA, numba, heavy imports), cache the compiler's
+      #      output between runs with actions/cache. That is what actually
+      #      moved sdm-core: 241s to 149s. Key it on uv.lock, so a dependency
+      #      bump starts cold instead of restoring artifacts built against a
+      #      different compiler.
+      #
+      # Neither is a default. On a suite that already finishes in 15s, worker
+      # startup costs more than it saves.
+      - uses: EmergentMatter/actions/check-lock-sources@v1
+
+      - name: Run tests
+        run: |
+          if [ -d tests ]; then
+            uv run pytest
+          else
+            echo "No tests/ directory yet, nothing to run. (install + build still ran below.)"
+          fi
+
+  # Tests the package against the LOWEST version each direct dependency's
+  # range allows, in a throwaway environment, with uv.lock left alone. A
+  # floor nobody tests is a promise nobody keeps: the range says "1.1 and
+  # up", the code quietly needs 1.3, and the first consumer on 1.1 finds
+  # out. Transitive dependencies stay at their newest, so this answers one
+  # question only: is each declared floor true.
+  floor:
+    name: floor
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: floor
+
+      - name: Install at the floor and run the tests
+        run: |
+          uv venv .venv-floor
+          export VIRTUAL_ENV="$PWD/.venv-floor"
+          uv pip install --resolution lowest-direct --group dev -e .
+          if [ -d tests ]; then
+            "$VIRTUAL_ENV/bin/python" -m pytest
+          else
+            echo "No tests/ directory yet, nothing to run."
+          fi
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    # id-token: write is for the sign-in step; granted per job.
+    permissions:
+      contents: read
+      id-token: write
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sign in to the private index (a no-op for a project that does not
+      # declare one). Before `uv sync`, in every job that runs it.
+      - uses: EmergentMatter/actions/codeartifact-read@v1
+        with:
+          role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          python-version: "3.13"
+          cache-suffix: build
+
+      - run: uv sync --locked
+
+      # A uv workspace released as several packages in lockstep builds
+      # every member here too: `uv build --all-packages`, and
+      # `all-packages: true` on the verify-wheel step below. Match the
+      # `all-packages` input on version.yml and build-release.yml.
+      - run: uv build
+
+      # `uv build` exiting 0 does NOT mean the wheel is usable. Verified
+      # against hatchling: a wheel target naming a package directory that
+      # doesn't exist, and `exclude = ["*"]`, both build "successfully" and
+      # produce an artifact with nothing importable in it. Without this step
+      # the build stage only catches builds that fail outright, which is a
+      # weaker claim than the one at the top of this file.
+      #
+      # This installs the wheel into a clean environment, from outside the
+      # checkout, and imports what it declares. Referenced rather than
+      # inlined so a fix reaches every repo when `v1` moves -- unlike this
+      # file, which is a copy.
+      - uses: EmergentMatter/actions/verify-wheel@v1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error

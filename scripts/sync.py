@@ -369,6 +369,19 @@ def decide_and_apply(
     )
 
 
+def dests_needing_a_tier(manifest: list[onboard.TemplateEntry]) -> set[str]:
+    """Managed destinations a repo with no declared tier cannot be synced
+    for: those that have a tiered entry and no untiered one. A destination
+    with an untiered entry (the common stub a closed repo's own variant
+    replaces) is synced for such a repo as usual."""
+    untiered = {e.dest for e in manifest if e.tier is None}
+    return {
+        e.dest
+        for e in manifest
+        if e.policy == "managed" and e.tier is not None and e.dest not in untiered
+    }
+
+
 def sync_repo(
     repo: Path, actions_repo: Path, *, dry_run: bool, side: str | None, only: list[str] | None
 ) -> list[EntryResult]:
@@ -393,7 +406,7 @@ def sync_repo(
     if tier is None:
         # Every managed dest that HAS a tiered entry in the full manifest,
         # but got filtered out above because this repo hasn't declared one.
-        no_tier_dests = {e.dest for e in manifest if e.policy == "managed" and e.tier is not None}
+        no_tier_dests = dests_needing_a_tier(manifest)
         for dest in sorted(no_tier_dests):
             if only is None or dest in only:
                 results.append(

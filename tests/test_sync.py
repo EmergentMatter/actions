@@ -856,3 +856,14 @@ def test_switching_tier_surfaces_as_an_undecided_difference_not_a_silent_swap(
     # licence text already on disk must never be silently replaced.
     assert result.action == "local-edit"
     assert (repo / "LICENSE").read_text() == "Apache-2.0 text\n"
+
+
+def test_a_no_tier_repo_is_not_told_to_pick_a_tier_for_a_dest_that_has_a_common_entry():
+    entries = [
+        sync.onboard.TemplateEntry("a-open", "A", "managed", "open"),
+        sync.onboard.TemplateEntry("a-closed", "A", "managed", "closed"),
+        sync.onboard.TemplateEntry("a-common", "A", "managed", None),
+        sync.onboard.TemplateEntry("l-open", "L", "managed", "open"),
+        sync.onboard.TemplateEntry("l-closed", "L", "managed", "closed"),
+    ]
+    assert sync.dests_needing_a_tier(entries) == {"L"}

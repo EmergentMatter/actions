@@ -782,6 +782,52 @@ version_files = [
 
 Then run `sync.py` once to pick up the matching `LICENSE`/`NOTICE`.
 
+### Closed-tier repos
+
+A `closed` repo resolves packages from the organization's private index, so
+it gets its own stubs, CI and Dependabot file instead of the common ones
+(`templates/manifest.toml`: a tiered entry replaces the untiered entry for
+the same file). Everything below is in the files; nothing is edited by hand.
+
+- **Sign-in.** Every `ci.yml` job that runs `uv sync` first runs
+  `EmergentMatter/actions/codeartifact-read@v1` and carries
+  `id-token: write`. The step assumes the role in the repository (or
+  organization) variable `EM_CODEARTIFACT_READ_ROLE_ARN` and does nothing
+  when `pyproject.toml` declares no index named `em-codeartifact`.
+- **The `ci:` caller in `version.yml` grants `id-token: write`.** A called
+  workflow's `permissions:` is a ceiling checked at parse time: without the
+  grant, pull requests pass and the run on `main` is rejected before any job
+  starts. The `version:` job also reads the index, so it grants it too.
+- **Declared indexes reach the wheel check.** `verify-wheel` installs the
+  built wheel away from the checkout, so it passes every index in
+  `[[tool.uv.index]]` explicitly; the build job needs no `UV_INDEX`.
+- **Dependabot.** `dependabot.yml` is filled at onboarding from the repo's own
+  declared indexes; the private one takes the values of the organization
+  variables `EM_CODEARTIFACT_READ_ROLE_ARN`, `_REGION`, `_DOMAIN` and
+  `_DOMAIN_OWNER`, which `gh` must be able to read.
+- **Lock sources.** The `test` job runs `check-lock-sources`: a package named
+  `emergent-matter-*` locked from an index the project does not declare fails.
+  A `[tool.uv.sources]` entry covers only a direct requirement, so every
+  organization package that appears only as a dependency of a dependency also
+  needs an entry in `[tool.uv] constraint-dependencies`.
+- **Floor.** The `floor` job runs the tests with each direct dependency at the
+  lowest version its range allows, so a floor that is not true fails. Delete
+  it where there is no floor worth holding.
+
+By default the stubs only read the index (`publish: false`). A repo that
+publishes its own releases is onboarded with `--publish`, which turns on
+`publish: true`, `publish-target: codeartifact`, `environment: production` and
+the role ARN built from `EM_PUBLISH_ACCOUNT_ID` and a per-repository variable,
+`EM_PUBLISH_ROLE_NAME`. Create the `production` environment (deployments
+restricted to `main`) and that variable before the first release.
+
+**Converting a repo that was open.** Changing `tier` does not change files
+already on disk: `sync.py` treats an installed `LICENSE`, `NOTICE` and
+`version.yml` as local edits. Delete `LICENSE`, `NOTICE`, `ci.yml`,
+`dependabot.yml`, `version.yml` and `build-release.yml`, set `tier = "closed"`,
+and run `onboard.py --tier closed` (with `--publish` if it publishes); review
+the diff.
+
 That second section, `version_files`, is the part every repo gets
 slightly wrong the first time. See the worked example right below.
 
