@@ -21,6 +21,7 @@ on macOS is older than that, so use `uv run python`).
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly; the `verify-wheel` action calls it |
 | [`check_lock_sources.py`](#check_lock_sourcespy) | run by the `check-lock-sources` action, or by hand on a lock |
+| [`check_duplicate_modules.py`](#check_duplicate_modulespy) | run by the `check-duplicate-modules` action in a companion's CI |
 | `declared_indexes.py` | never directly; the `verify-wheel` action calls it |
 | `workspace_packages.py` | never directly; `version.yml` calls it when `all-packages` is on |
 | [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | manual fallback, for an empty bucket or after a failed automatic rebuild -- the downloads infrastructure rebuilds the root index automatically otherwise |
@@ -310,6 +311,25 @@ package) anything but the `private-index`. A wheel whose dependencies live on a 
 `explicit = true` index serves only names a source pins to it) installs there
 exactly as it does in the project, and credentials set for an index by name
 (`UV_INDEX_<NAME>_USERNAME`/`_PASSWORD`) still apply.
+
+---
+
+## `check_duplicate_modules.py`
+
+```bash
+uv run python scripts/check_duplicate_modules.py [--project .]
+```
+
+For a companion package, marked by `[tool.em-companion] public = "<import name>"`: fails if a
+module of the companion has the same relative path as a module of the installed public
+package (an `__init__.py` is not counted), or defines a class or function (no leading
+underscore) that a public module also defines. Read from source text, nothing is imported.
+`allow = ["path:...", "name:..."]` excuses an intentional shim during a quarterly move.
+Without the table it does nothing. Use it in CI as the composite action:
+
+```yaml
+      - uses: EmergentMatter/actions/check-duplicate-modules@v1
+```
 
 ---
 

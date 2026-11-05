@@ -6,7 +6,9 @@
 #     (EmergentMatter/actions/codeartifact-read, a no-op without that index
 #     in pyproject.toml) and so carries `id-token: write`;
 #   * `test` also runs check-lock-sources, so a package of ours that came
-#     from an index the project does not declare turns the check red;
+#     from an index the project does not declare turns the check red, and
+#     check-duplicate-modules, which holds a companion to adding and never
+#     copying its public package;
 #   * a `floor` job tests the package at the lowest version each direct
 #     dependency's range allows. Delete it for a repo whose direct
 #     dependencies carry no floor worth holding.
@@ -286,6 +288,10 @@ jobs:
       # Neither is a default. On a suite that already finishes in 15s, worker
       # startup costs more than it saves.
       - uses: EmergentMatter/actions/check-lock-sources@v1
+
+      # A companion adds to its public package and never copies it (a no-op without
+      # [tool.em-companion] in pyproject.toml).
+      - uses: EmergentMatter/actions/check-duplicate-modules@v1
 
       - name: Run tests
         run: |
