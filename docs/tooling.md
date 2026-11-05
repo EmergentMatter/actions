@@ -325,10 +325,12 @@ module of the companion has the same relative path as a module of the installed 
 package (an `__init__.py` is not counted), or defines a class or function (no leading
 underscore) that a public module also defines. Read from source text, nothing is imported.
 `allow = ["path:...", "name:..."]` excuses an intentional shim during a quarterly move.
-Without the table it does nothing. Use it in CI as the composite action:
+Without the table it warns (`::warning::`) and does nothing; with `--require` a missing table is a failure, and a table spelled with an underscore is refused either way. Use it in CI as the composite action:
 
 ```yaml
       - uses: EmergentMatter/actions/check-duplicate-modules@v1
+        with:
+          require: ${{ endsWith(github.repository, '-private') }}
 ```
 
 ---

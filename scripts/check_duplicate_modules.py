@@ -19,8 +19,11 @@ A project opts in with ``[tool.em-companion]`` in its ``pyproject.toml``::
     allow = ["path:assembly/old.py", "name:OldThing"]   # intentional, e.g. a shim
 
 ``allow`` holds the exceptions a quarterly move needs (a re-export shim for a module that
-just went public), each removed with the shim. Without the table the check does nothing, so
-a repo that is not a companion can run it unchanged.
+just went public), each removed with the shim. Without the table the check warns and
+does nothing, so a repo that is not a companion can run it unchanged; with ``--require`` a
+missing table is a failure, which is how a repo that IS a companion (its name ends in
+``-private``) cannot lose the check by misspelling the table. A table spelled with an
+underscore (``[tool.em_companion]``) is refused either way.
 
 Run it with the project's own interpreter (``uv run python``): the public package is found
 the way the project imports it.
@@ -96,14 +99,36 @@ def duplicates(companion: Path, public: Path, allow: set[str]) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--project", default=".", help="the project directory (default: .)")
+    ap.add_argument(
+        "--require",
+        action="store_true",
+        help="a missing [tool.em-companion] table is a failure, not a skip",
+    )
     args = ap.parse_args(argv)
     project = Path(args.project).resolve()
-    config = (
-        tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
-        .get("tool", {})
-        .get("em-companion")
-    )
+    tool = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8")).get("tool", {})
+    for key in tool:
+        if key != "em-companion" and key.replace("_", "-").lower() == "em-companion":
+            print(
+                f"::error::[tool.{key}] is not the table this check reads: it is "
+                "[tool.em-companion]",
+                file=sys.stderr,
+            )
+            return 1
+    config = tool.get("em-companion")
     if config is None:
+        if args.require:
+            print(
+                "::error::this project must declare the public package it extends: add "
+                '[tool.em-companion] public = "<import name>" to pyproject.toml',
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "::warning::[tool.em-companion] is absent, so no duplicate-module check ran. If "
+            "this package extends a public one, declare it.",
+            file=sys.stderr,
+        )
         print("not a companion ([tool.em-companion] absent): nothing to check")
         return 0
     public = public_root(config["public"])
