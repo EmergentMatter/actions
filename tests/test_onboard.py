@@ -853,3 +853,19 @@ def test_no_github_writes_files_and_never_calls_gh(tmp_path, monkeypatch, capsys
     assert code == 0
     assert (repo / ".github" / "workflows" / "version.yml").is_file()
     assert "--no-github" in capsys.readouterr().out
+
+
+def test_an_unrenderable_file_stops_the_plan_before_anything_is_written(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "p"\nversion = "1.0.0"\n'
+        '[[tool.uv.index]]\nname = "priv"\nurl = "https://x.d.codeartifact.r.amazonaws.com/s/"\n'
+    )
+    with pytest.raises(onboard.OnboardError, match="EM_CODEARTIFACT_READ_ROLE_ARN"):
+        onboard.build_plan(tmp_path, [], "closed", lookup=lambda name: None)
+    assert not (tmp_path / ".github").exists()
+
+
+def test_an_environment_variable_stands_in_for_the_organization_variable(monkeypatch):
+    monkeypatch.setenv("EM_CODEARTIFACT_DOMAIN", "from-env")
+    assert onboard.org_variable("EM_CODEARTIFACT_DOMAIN") == "from-env"

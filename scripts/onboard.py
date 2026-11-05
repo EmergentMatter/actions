@@ -368,7 +368,12 @@ def insert_marker(text: str) -> str | None:
     return "\n".join(lines[:anchor] + block + lines[anchor:])
 
 
-def build_plan(repo: Path, declared: list[str], tier: str) -> Plan:
+def build_plan(
+    repo: Path,
+    declared: list[str],
+    tier: str,
+    lookup: Callable[[str], str | None] | None = None,
+) -> Plan:
     """Work out everything onboarding a repo would do, without writing
     anything. `declared` is the `--version-file` values already on the
     command line; an empty list means propose candidates instead. `tier`
@@ -413,6 +418,11 @@ def build_plan(repo: Path, declared: list[str], tier: str) -> Plan:
             plan.actions.append(Action("skip", entry.dest, note))
         else:
             plan.actions.append(Action("create", entry.dest, f"from templates/{entry.source}"))
+
+    for entry in manifest:
+        # A rendered file that cannot be rendered stops the plan, before anything is written.
+        if entry.render == "dependabot" and not (repo / entry.dest).exists():
+            render_dependabot((TEMPLATES / entry.source).read_text(encoding="utf-8"), data, lookup)
 
     ci = repo / CI_DEST
     if ci.exists():
@@ -496,7 +506,10 @@ _ROLE_ARN_RE = re.compile(r"^arn:aws[a-z-]*:iam::(\d{12}):role/(?:.*/)?([^/]+)$"
 
 
 def org_variable(name: str) -> str | None:
-    """An organization variable's value read with `gh`, or None."""
+    """An organization variable's value: the environment variable of the same name if set
+    (a rehearsal, or a machine with no `gh` sign-in), else read with `gh`, else None."""
+    if os.environ.get(name):
+        return os.environ[name]
     p = subprocess.run(
         ["gh", "variable", "get", name, "--org", GITHUB_ORG], capture_output=True, text=True
     )
