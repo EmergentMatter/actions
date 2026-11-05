@@ -39,7 +39,10 @@ Reads pending note files, returns the release that should be cut.
   `1.0.0`. (V2)
 - Unknown/unparseable fragment type → **exit 1 with a loud message**. Never guess. (V3)
 - No notes at all → `level=none`, exit 0. The caller stops; this is not an error.
-- Current version is read from `[project] version` in pyproject via `tomllib`.
+- Current version is read from `[project] version` in pyproject via `tomllib`. When `--pyproject`
+  does not exist but `--package-json` (default `package.json`) does, it is read from that file's
+  `version` instead; `pyproject.toml` wins whenever it exists. See "A repo with only a
+  `package.json`".
 - `--format json` → one JSON object on stdout.
   `--format github` → `key=value` lines appended to `$GITHUB_OUTPUT`.
 - Keys emitted: `level`, `current`, `next`, `count`.
@@ -271,8 +274,8 @@ common case, a repo whose `pyproject.toml` declares a real package. A "virtual" 
 (`[tool.uv] package = false`, no `[project.scripts]`) has nothing for `uv build` to build, and
 without this input both workflows failed on the resulting empty wheel/sdist glob rather than
 producing a tag-only GitHub Release. `publish: true` combined with `has-wheel: false` is refused
-outright (there is nothing to publish); both workflows validate this before ever reaching `uv
-build`.
+outright (there is nothing to publish) unless `npm-packages` is set; both workflows validate this
+before ever reaching `uv build`.
 
 ### Releasing several packages together (`all-packages`)
 
@@ -780,12 +783,40 @@ a wheel already in CodeArtifact fails the job.
 
 The steps are in `version.yml` and `build-release.yml`, kept in step like the rest of the publish job.
 
+### A repo with only a `package.json`
+
+A repository with no `pyproject.toml` and a `package.json` at its root is an npm-only repo. It
+passes `has-wheel: false` (the detection step refuses `true`, and refuses `all-packages`), a
+non-empty `npm-packages`, and `publish-target: codeartifact`. Nothing changes for a repo that has
+a `pyproject.toml`, whether or not it also has a `package.json`: `pyproject.toml` wins.
+
+- **Version source.** `compute_bump.py` reads `version` from `package.json` (so the `changelog-check`
+  action works too). The release PR runs `scripts/set_package_version.py`, which rewrites the one
+  top-level `"version"` line and re-reads it; there is no `uv version`, no `uv lock` and no
+  `sync_version.py` step, because there is no `[project]` table, lockfile entry or
+  `[tool.em-release] version_files` to keep in step. A lockfile that records the root package's
+  own version is the repo's to handle.
+- **Changelog.** Still `towncrier build`, run with `uvx`; the repo carries a `towncrier.toml`
+  instead of `[tool.towncrier]`.
+- **Release.** The GitHub Release is created with no build artifacts (the `has-wheel: false` step).
+  The publish job skips the wheel download and the wheel upload, and runs `publish_npm.py` for
+  each package in `npm-packages` exactly as before.
+- **Tier.** `check_publish_tier.py` reads the tier from `package.json` as
+  `"em-release": {"tier": "closed"}`, and the same table applies: a closed repo may only use
+  `codeartifact`, and a repo with no tier is refused every AWS target. The publish job refuses an
+  npm-only repo with any other target, or with an empty `npm-packages`, before any credential is
+  assumed.
+- **Manifest rules are unchanged.** `publish_npm.py` still refuses `"private": true` and
+  `publishConfig.registry`, so an npm-only repo carries neither. The endpoint stays the workflow's
+  to pick.
+
 ## Where each guarantee lives
 
 | Path | What it owns |
 |---|---|
 | `scripts/compute_bump.py` | Notes → bump level → next version (V1, V2, V3) |
 | `scripts/sync_version.py` | Writing the version to every declared location, and nothing else (V4, V5) |
+| `scripts/set_package_version.py` | The same for a repo whose only version is `package.json`'s |
 | `.github/workflows/version.yml` | The release-PR loop and tagging (R1–R5, S1) |
 | `changelog-check/action.yml` | The PR gate (E2, E4, E5, E6) |
 | `.github/workflows/build-release.yml` | Build, GitHub Release, opt-in publish (S2, S3, S4) |

@@ -26,17 +26,28 @@ Exit 1 with a clear message on a disallowed combination, an unrecognized
 as sync_version.py's `--check`.
 
     check_publish_tier.py --target pypi|static-index|codeartifact|both
-                           [--pyproject pyproject.toml]
+                           [--pyproject pyproject.toml] [--package-json package.json]
+
+A repo with no pyproject.toml (npm-only) declares its tier in package.json instead, as
+`"em-release": {"tier": "closed"}`, and the same table applies. pyproject.toml wins whenever
+it exists. A package.json with no tier is "no tier declared", which refuses every AWS target.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tomllib
 from pathlib import Path
 
-__all__ = ["PublishTierError", "VALID_TARGETS", "resolve_tier", "validate"]
+__all__ = [
+    "PublishTierError",
+    "VALID_TARGETS",
+    "resolve_tier",
+    "resolve_tier_from_package_json",
+    "validate",
+]
 
 VALID_TARGETS = {"pypi", "static-index", "codeartifact", "both"}
 _VALID_TIERS = {"open", "closed"}
@@ -65,6 +76,21 @@ def resolve_tier(pyproject_path: Path) -> str | None:
     return tier
 
 
+def resolve_tier_from_package_json(package_json_path: Path) -> str | None:
+    """`em-release.tier` in package.json, or None if this repo hasn't declared one."""
+    try:
+        data = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PublishTierError(f"{package_json_path} is not valid JSON: {exc}") from exc
+    config = data.get("em-release") if isinstance(data, dict) else None
+    tier = config.get("tier") if isinstance(config, dict) else None
+    if tier is not None and tier not in _VALID_TIERS:
+        raise PublishTierError(
+            f"em-release tier is {tier!r} in {package_json_path}, not 'open' or 'closed'"
+        )
+    return tier
+
+
 def validate(target: str, tier: str | None) -> None:
     """Raise PublishTierError if `target` is not allowed for `tier`."""
     if target not in VALID_TARGETS:
@@ -89,14 +115,19 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--target", required=True)
     ap.add_argument("--pyproject", default=Path("pyproject.toml"), type=Path)
+    ap.add_argument("--package-json", default=Path("package.json"), type=Path)
     args = ap.parse_args(argv)
 
-    if not args.pyproject.is_file():
+    npm_only = not args.pyproject.is_file() and args.package_json.is_file()
+    if not npm_only and not args.pyproject.is_file():
         print(f"error: no such file: {args.pyproject}", file=sys.stderr)
         return 1
 
     try:
-        tier = resolve_tier(args.pyproject)
+        if npm_only:
+            tier = resolve_tier_from_package_json(args.package_json)
+        else:
+            tier = resolve_tier(args.pyproject)
         validate(args.target, tier)
     except PublishTierError as exc:
         print(f"::error::{exc}", file=sys.stderr)
