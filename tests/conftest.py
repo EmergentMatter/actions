@@ -219,16 +219,13 @@ def em_dev(tmp_path: Path):
     return module
 
 
-@pytest.fixture(scope="session")
-def toy_simple_index(toy_index: Path, tmp_path_factory: pytest.TempPathFactory) -> str:
-    """`toy_index`'s wheels as a PEP 503 index (`simple/<name>/index.html`)
-    behind a `file://` URL: the shape a declared `[[tool.uv.index]]` has,
-    which a flat `find-links` directory is not. Returns the `.../simple` URL."""
+def simple_index_from(wheel_dir: Path, root: Path) -> str:
+    """A PEP 503 index (`simple/<name>/index.html`) over the wheels in `wheel_dir`, written
+    under `root`, behind a `file://` URL. Returns the `.../simple` URL."""
     import hashlib
 
-    root = tmp_path_factory.mktemp("toy-simple-index")
     pages: dict[str, list[str]] = {}
-    for wheel in sorted(toy_index.glob("*.whl")):
+    for wheel in sorted(wheel_dir.glob("*.whl")):
         dist_name = wheel.name.split("-")[0].replace("_", "-")
         digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
         pages.setdefault(dist_name, []).append(
@@ -239,3 +236,10 @@ def toy_simple_index(toy_index: Path, tmp_path_factory: pytest.TempPathFactory) 
         page.mkdir(parents=True)
         (page / "index.html").write_text("<html><body>" + "\n".join(links) + "</body></html>")
     return (root / "simple").as_uri()
+
+
+@pytest.fixture(scope="session")
+def toy_simple_index(toy_index: Path, tmp_path_factory: pytest.TempPathFactory) -> str:
+    """`toy_index`'s wheels as a PEP 503 index behind a `file://` URL: the shape a declared
+    `[[tool.uv.index]]` has, which a flat `find-links` directory is not."""
+    return simple_index_from(toy_index, tmp_path_factory.mktemp("toy-simple-index"))

@@ -138,7 +138,7 @@ def test_index_name_sets_the_variable_pair(em_dev, fakes, monkeypatch, capsys):
     ("fmt", "expected"),
     [
         ("powershell", "$env:UV_INDEX_X_PASSWORD = 't'"),
-        ("cmd", "set UV_INDEX_X_PASSWORD=t"),
+        ("cmd", 'set "UV_INDEX_X_PASSWORD=t"'),
         ("sh", "export UV_INDEX_X_PASSWORD=t"),
     ],
 )
@@ -153,3 +153,25 @@ def test_the_script_names_no_account_domain_or_profile():
 
     assert not re.search(r"\b\d{12}\b", text)
     assert "us-east-2" not in text
+
+
+def test_powershell_doubles_a_single_quote_and_leaves_other_characters_literal(em_dev):
+    lines = em_dev.format_token_lines("x", "a'b$c`d&e", "powershell").splitlines()
+    assert lines[1] == "$env:UV_INDEX_X_PASSWORD = 'a''b$c`d&e'"
+
+
+def test_cmd_quotes_the_whole_assignment_so_metacharacters_are_literal(em_dev):
+    lines = em_dev.format_token_lines("x", "a&b|c<d>e^f", "cmd").splitlines()
+    assert lines[1] == 'set "UV_INDEX_X_PASSWORD=a&b|c<d>e^f"'
+
+
+@pytest.mark.parametrize("token", ['a"b', "a%PATH%b", "a\nb"])
+def test_cmd_refuses_a_token_it_cannot_carry(em_dev, token):
+    with pytest.raises(em_dev.EmDevError):
+        em_dev.format_token_lines("x", token, "cmd")
+
+
+def test_a_line_break_is_refused_for_every_shell_format(em_dev):
+    for fmt in ("sh", "powershell", "cmd"):
+        with pytest.raises(em_dev.EmDevError, match="line break"):
+            em_dev.format_token_lines("x", "a\nb", fmt)

@@ -576,3 +576,18 @@ def test_index_args_keep_the_index_name_so_credentials_follow_it(em_dev):
         "--index",
         "https://unnamed.test/simple",
     ]
+
+
+def test_org_source_problems_name_public_and_undeclared_indexes(em_dev):
+    compiled = (
+        "emergent-matter-a==1.0\n    # from https://pypi.org/simple\n"
+        "emergent-matter-b==2.0\n    # from https://elsewhere.test/simple/\n"
+        "emergent-matter-c==3.0\n    # from https://mine.test/simple\n"
+        "emergent-matter-d==4.0\n    # via x\n"
+        "requests==1.0\n    # from https://pypi.org/simple\n"
+    )
+    assert em_dev.org_source_problems(compiled, {"https://mine.test/simple"}) == [
+        "emergent-matter-a 1.0 came from https://pypi.org/simple, the public index",
+        "emergent-matter-b 2.0 came from https://elsewhere.test/simple/, "
+        "an index this project does not declare",
+    ]

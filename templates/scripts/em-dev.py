@@ -942,6 +942,94 @@ def export_constraints(repo: Path, out_path: Path, *, skip_names: list[str]) -> 
     run_uv(args, cwd=repo)
 
 
+PUBLIC_INDEX_HOSTS = ("pypi.org", "files.pythonhosted.org", "test.pypi.org")
+_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)")
+_FROM = re.compile(r"^\s*#\s*from\s+(\S+)")
+
+
+def org_source_problems(compiled: str, declared_urls: set[str]) -> list[str]:
+    """Organization packages in `uv pip compile --emit-index-annotation` output that came
+    from the public index, or from an index the project does not declare.
+
+    Passing a declared index with `--index` makes an `explicit = true` index an ordinary one,
+    so an organization name that is not on it would silently fall through to the default
+    index. Resolving first and judging where each one came from keeps that from happening. A
+    package with no recorded index (a flat `find-links` directory) is not judged."""
+    found: list[str] = []
+    name = version = None
+    index = None
+
+    def close() -> None:
+        if name is None or index is None or not name.lower().startswith(OURS_PREFIX):
+            return
+        url = index.rstrip("/")
+        host = re.sub(r"^[a-z]+://([^/:]+).*$", r"\1", url)
+        if host in PUBLIC_INDEX_HOSTS:
+            found.append(f"{name} {version} came from {index}, the public index")
+        elif url not in declared_urls:
+            found.append(
+                f"{name} {version} came from {index}, an index this project does not declare"
+            )
+
+    for line in compiled.splitlines():
+        pin = _PIN.match(line)
+        if pin:
+            close()
+            name, version, index = pin.group(1), pin.group(2), None
+            continue
+        source = _FROM.match(line)
+        if source:
+            index = source.group(1)
+    close()
+    return found
+
+
+def check_org_sources(
+    repo: Path,
+    venv_dir: Path,
+    constraints_path: Path,
+    editable_paths: list[str],
+    package: bool,
+    groups: list[str],
+) -> None:
+    """Raise if the install would take an organization package from where it must not.
+    Skipped for a project that declares no `[[tool.uv.index]]`."""
+    declared = {
+        str(e["url"]).rstrip("/")
+        for e in toml_load(repo / "pyproject.toml").get("tool", {}).get("uv", {}).get("index", [])
+        if isinstance(e, dict) and e.get("url")
+    }
+    if not declared:
+        return
+    requirements = venv_dir / "requirements.in"
+    lines = [f"-e {path}" for path in editable_paths] + (["-e ."] if package else [])
+    requirements.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    args = ["pip", "compile", "--no-sources", "--emit-index-annotation", "--no-header", "-c"]
+    args += [str(constraints_path), str(requirements)]
+    if "dev" in groups:
+        args += ["--group", "dev"]
+    args += index_args_for_repo(repo)
+    proc = run_uv(args, cwd=repo, env={"VIRTUAL_ENV": str(venv_dir)})
+    problems = org_source_problems(proc.stdout, declared)
+    if problems:
+        raise EmDevError(
+            "refusing to install: an organization package would not come from a declared index:\n  "
+            + "\n  ".join(problems)
+            + "\nName it in [tool.uv.sources] and [tool.uv] constraint-dependencies."
+        )
+
+
+def index_args_for_repo(repo: Path) -> list[str]:
+    """`--index name=url` for every `[[tool.uv.index]]` the project declares."""
+    declared = toml_load(repo / "pyproject.toml").get("tool", {}).get("uv", {}).get("index", [])
+    return [
+        arg
+        for entry in declared
+        if isinstance(entry, dict) and entry.get("url")
+        for arg in ("--index", index_spec(entry))
+    ]
+
+
 def pip_install(
     repo: Path, venv_dir: Path, args: list[str], *, check: bool = True
 ) -> subprocess.CompletedProcess:
@@ -961,13 +1049,7 @@ def pip_install(
     declares is passed again on the command line, which is ordinary and
     outranks the default index: a name on our index still cannot fall
     through to the public one."""
-    declared = toml_load(repo / "pyproject.toml").get("tool", {}).get("uv", {}).get("index", [])
-    indexes = [
-        arg
-        for entry in declared
-        if isinstance(entry, dict) and entry.get("url")
-        for arg in ("--index", index_spec(entry))
-    ]
+    indexes = index_args_for_repo(repo)
     return run_uv(
         ["pip", "install", "--no-sources", *indexes, *args],
         cwd=repo,
@@ -1045,6 +1127,7 @@ def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False
 
     constraints_path = venv_dir / "constraints.txt"
     export_constraints(repo, constraints_path, skip_names=editable_names)
+    check_org_sources(repo, venv_dir, constraints_path, editable_paths, package, groups)
 
     def install_args(*, siblings: list[str]) -> list[str]:
         a = ["-c", str(constraints_path)]
@@ -1504,14 +1587,24 @@ def token_env_names(index_name: str) -> tuple[str, str]:
 
 
 def format_token_lines(index_name: str, token: str, fmt: str) -> str:
+    """The assignments for the user's shell, with the value quoted for it.
+
+    sh single-quotes (`shlex.quote`); PowerShell single-quotes and doubles any `'`, which
+    leaves `$` and backticks literal; cmd quotes the whole assignment, which protects `& | < >
+    ^` but not `%`, and has no way to carry `"` or a line break, so a token with one is refused
+    rather than written wrong."""
     user_var, pass_var = token_env_names(index_name)
     pairs = [(user_var, "aws"), (pass_var, token)]
     if fmt == "json":
         return json.dumps(dict(pairs))
+    if any(c in token for c in "\r\n\0"):
+        raise EmDevError("the token contains a line break and cannot be written as an assignment")
     if fmt == "powershell":
-        return "\n".join(f"$env:{k} = '{v}'" for k, v in pairs)
+        return "\n".join("$env:{} = '{}'".format(k, v.replace("'", "''")) for k, v in pairs)
     if fmt == "cmd":
-        return "\n".join(f"set {k}={v}" for k, v in pairs)
+        if any(c in token for c in '"%'):
+            raise EmDevError('the token contains a " or a % and cannot be written for cmd')
+        return "\n".join(f'set "{k}={v}"' for k, v in pairs)
     return "\n".join(f"export {k}={shlex.quote(v)}" for k, v in pairs)
 
 

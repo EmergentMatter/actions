@@ -1,9 +1,10 @@
 name: Check lock sources
 description: >-
-  Fail when a package named with the org prefix in uv.lock was resolved from
-  an index the project does not declare under [[tool.uv.index]]. A source
-  routes only a direct requirement, so a transitive org package without a
-  constraint can silently come from the default index.
+  Fail when an organization package in uv.lock was resolved from an index it must not come
+  from: the public index (even when the project declares it), an index the project does not
+  declare under [[tool.uv.index]], or, for a closed package, anything but the private index. A
+  source routes only a direct requirement, so a transitive org package without a constraint
+  can silently come from the default index.
 inputs:
   lock-file:
     description: Path to the lock file.
@@ -14,6 +15,17 @@ inputs:
   prefix:
     description: Package-name prefix that marks a package as the org's own.
     default: emergent-matter-
+  org-names:
+    description: Comma-separated exact names, outside the prefix, that are also the org's own.
+    default: sdm-view,em-release-control-test
+  private-index:
+    description: >-
+      The `name` of the declared [[tool.uv.index]] that closed packages must come from. Empty
+      or not declared: a closed package in the lock is a failure.
+    default: ""
+  private-names:
+    description: Comma-separated fnmatch patterns for the closed packages.
+    default: "*-private,*-cem-kit,emergent-matter-sdm-sidecar,emergent-matter-sdm-engine,emergent-matter-sdm-tools"
 
 runs:
   using: composite
@@ -25,6 +37,11 @@ runs:
         LOCK_FILE: ${{ inputs.lock-file }}
         PYPROJECT: ${{ inputs.pyproject }}
         PREFIX: ${{ inputs.prefix }}
+        ORG_NAMES: ${{ inputs.org-names }}
+        PRIVATE_INDEX: ${{ inputs.private-index }}
+        PRIVATE_NAMES: ${{ inputs.private-names }}
       run: |
         set -euo pipefail
-        python3 "${SCRIPT}" --lock "${LOCK_FILE}" --pyproject "${PYPROJECT}" --prefix "${PREFIX}"
+        python3 "${SCRIPT}" --lock "${LOCK_FILE}" --pyproject "${PYPROJECT}" \
+          --prefix "${PREFIX}" --org-names "${ORG_NAMES}" \
+          --private-index "${PRIVATE_INDEX}" --private-names "${PRIVATE_NAMES}"
