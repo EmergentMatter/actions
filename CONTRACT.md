@@ -783,6 +783,33 @@ missing; either way the fix is to re-run the publish job for the same version, w
 package already there and uploads the wheels. The wheel upload is not safe to run again, as before:
 a wheel already in CodeArtifact fails the job.
 
+### A tarball built by the caller
+
+A package whose tarball is built output (a component library's `dist/`) cannot be packed from a
+fresh checkout, and the publish job must not run the caller's install or build: it holds the
+OIDC token that assumes the publish role. So the caller builds in its own job, with
+`permissions: contents: read` and no credential, packs the tarball, and uploads it as an
+artifact in the same run. The `version` (or release) job's caller job `needs` that job.
+
+`npm-tarballs-artifact` names the artifact. Set, the publish job downloads it and runs
+`publish_npm.py verify` for each directory in `npm-packages` instead of `prepare`. `verify` never
+runs `npm`, `bun` or a package script; it only reads the tarball. For each package it finds the one
+tarball whose `package.json` names the package the checkout's directory holds (none or several is
+a failure) and refuses it unless:
+
+- the manifest rules of `prepare` hold (scoped, not private, no `publishConfig.registry`, no
+  install-time script);
+- its version is exactly the release's, so the caller builds at the release commit, whose
+  `package.json` already carries the bumped version;
+- every plain path in `files` is in it;
+- every member is a plain file or directory under `package/`, with no `..`, no absolute path and
+  no `.npmrc`.
+
+The checks are on the shape of what was built, not on what the build did; the build is the caller's
+own code at a commit that passed review. `npm-tarballs-artifact` needs `npm-packages`, and is
+empty by default, which packs from the checkout as before. The artifact is read only after the
+earlier validation steps and before any credential is assumed.
+
 The steps are in `version.yml` and `build-release.yml`, kept in step like the rest of the publish job.
 
 ### A repo with only a `package.json`

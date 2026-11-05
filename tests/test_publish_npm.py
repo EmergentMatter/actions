@@ -374,3 +374,148 @@ def test_node_is_pinned_by_commit_and_version_in_both_workflows():
         body = step(path.read_text(encoding="utf-8"), "Set up Node")
         assert "actions/setup-node@" in body and "# v" in body
         assert "node-version: ${{ inputs.node-version }}" in body
+
+
+# --------------------------------------------------------------------- verify
+
+
+def built(env: dict[str, Path], **over: object) -> Path:
+    """A tarball made the way a caller's own job would: packed from a built directory."""
+    pkg = package(env["work"], **over)
+    out = env["work"] / "built"
+    assert (
+        pn.main(["prepare", "--package-dir", str(pkg), "--version", "1.4.0", "--out-dir", str(out)])
+        == 0
+    )
+    return out
+
+
+def run_verify(env: dict[str, Path], artifacts: Path, version: str = "1.4.0") -> int:
+    return pn.main(
+        [
+            "verify",
+            "--package-dir",
+            str(env["work"] / "pkg"),
+            "--artifact-dir",
+            str(artifacts),
+            "--version",
+            version,
+            "--out-dir",
+            str(env["out"]),
+        ]
+    )
+
+
+def raw_tarball(dest: Path, members: dict[str, str | None], name: str = "x.tgz") -> Path:
+    """A tarball written by hand: a value of None is a symlink member."""
+    import io
+    import tarfile
+
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / name
+    with tarfile.open(path, "w:gz") as archive:
+        for member, content in members.items():
+            info = tarfile.TarInfo(member)
+            if content is None:
+                info.type = tarfile.SYMTYPE
+                info.linkname = "/etc/passwd"
+                archive.addfile(info)
+            else:
+                data = content.encode()
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+    return path
+
+
+def manifest_text(**over: object) -> str:
+    return json.dumps(
+        {"name": "@emergentmatter/contract", "version": "1.4.0", "files": ["data.json"], **over}
+    )
+
+
+def test_verify_accepts_what_the_caller_built_and_never_runs_npm(env):
+    artifacts = built(env)
+    shutil.rmtree(env["out"], ignore_errors=True)
+    env["log"].unlink(missing_ok=True)
+    assert run_verify(env, artifacts) == 0
+    assert set(pn.tarball_files(tarball(env))) == {"package.json", "data.json"}
+    assert not env["log"].exists(), "verify must not run npm"
+
+
+def test_verify_refuses_a_version_that_is_not_the_release(env, capsys):
+    assert run_verify(env, built(env), "1.5.0") == 1
+    assert "not the release 1.5.0" in capsys.readouterr().err
+    assert not list(env["out"].glob("*.tgz"))
+
+
+@pytest.mark.parametrize(
+    ("over", "why"),
+    [
+        ({"private": True}, "private"),
+        ({"publishConfig": {"registry": "https://registry.npmjs.org/"}}, "publishConfig"),
+        ({"scripts": {"postinstall": "node x.js"}}, "install-time"),
+        ({"files": ["data.json", "dist"]}, "nothing there"),
+    ],
+)
+def test_verify_refuses_a_tarball_that_fails_the_manifest_checks(env, capsys, over, why):
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    raw_tarball(
+        artifacts,
+        {"package/package.json": manifest_text(**over), "package/data.json": "{}"},
+    )
+    assert run_verify(env, artifacts) == 1
+    assert why in capsys.readouterr().err
+
+
+def test_verify_refuses_a_tarball_for_another_package_or_two_for_this_one(env, capsys):
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    raw_tarball(artifacts, {"package/package.json": manifest_text(name="@emergentmatter/other")})
+    assert run_verify(env, artifacts) == 1
+    assert "found 0" in capsys.readouterr().err
+    for name in ("a.tgz", "b.tgz"):
+        raw_tarball(
+            artifacts, {"package/package.json": manifest_text(), "package/data.json": "{}"}, name
+        )
+    assert run_verify(env, artifacts) == 1
+    assert "found 2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        {"package/package.json": manifest_text(), "package/data.json": "{}", "evil": "x"},
+        {"package/package.json": manifest_text(), "package/../up.json": "x"},
+        {"package/package.json": manifest_text(), "package/data.json": None},
+        {"package/package.json": manifest_text(), "package/.npmrc": "x"},
+    ],
+    ids=["outside-package", "dotdot", "symlink", "npmrc"],
+)
+def test_verify_refuses_unsafe_members(env, members):
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    raw_tarball(artifacts, members)
+    assert run_verify(env, artifacts) == 1
+
+
+def test_verify_refuses_an_empty_artifact_directory(env):
+    package(env["work"])
+    (env["work"] / "built").mkdir()
+    assert run_verify(env, env["work"] / "built") == 1
+
+
+@pytest.mark.parametrize("path", ["version.yml", "build-release.yml"])
+def test_a_caller_built_tarball_is_verified_never_built_by_the_publish_job(path):
+    text = (ROOT / ".github" / "workflows" / path).read_text(encoding="utf-8")
+    assert "npm-tarballs-artifact:" in text
+    publish = text[text.index("\n  publish:") :]
+    assert "name: ${{ inputs.npm-tarballs-artifact }}" in publish
+    pack = publish[publish.index("- name: Pack and check npm packages") :][:900]
+    assert "inputs.npm-tarballs-artifact == ''" in pack
+    verify_step = publish[publish.index("- name: Verify the npm tarballs the caller built") :][:900]
+    assert "inputs.npm-tarballs-artifact != ''" in verify_step
+    assert 'publish_npm.py" verify' in verify_step
+    for forbidden in ("npm ci", "npm install", "bun install", "bun run", "npm run"):
+        assert forbidden not in publish, forbidden
+    assert "npm-tarballs-artifact needs npm-packages" in publish
