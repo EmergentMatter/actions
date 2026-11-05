@@ -296,7 +296,7 @@ jobs:
           fi
 
   # Tests the package against the LOWEST version each direct dependency's
-  # range allows, in a throwaway environment, with uv.lock left alone. A
+  # range allows, in a throwaway copy, with uv.lock left alone. A
   # floor nobody tests is a promise nobody keeps: the range says "1.1 and
   # up", the code quietly needs 1.3, and the first consumer on 1.1 finds
   # out. Transitive dependencies stay at their newest, so this answers one
@@ -321,13 +321,18 @@ jobs:
           python-version: "3.13"
           cache-suffix: floor
 
+      # Resolved in a throwaway copy of the project, so the real uv.lock is
+      # never rewritten and the project's own sources and constraints apply
+      # (`uv pip install` ignores the constraint that routes a
+      # transitive package of ours to the private index).
       - name: Install at the floor and run the tests
         run: |
-          uv venv .venv-floor
-          export VIRTUAL_ENV="$PWD/.venv-floor"
-          uv pip install --resolution lowest-direct --group dev -e .
+          copy="$RUNNER_TEMP/floor"
+          cp -R . "$copy"
+          cd "$copy"
+          uv sync --resolution lowest-direct
           if [ -d tests ]; then
-            "$VIRTUAL_ENV/bin/python" -m pytest
+            uv run --no-sync python -m pytest
           else
             echo "No tests/ directory yet, nothing to run."
           fi
