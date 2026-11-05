@@ -1,0 +1,23 @@
+name: Check duplicate modules
+description: >-
+  For a companion package ([tool.em-companion] in pyproject.toml): fail when it contains a
+  module whose relative path, or a public class or function name, duplicates the public
+  package it extends. Does nothing for a project without that table. Run after the
+  environment is synced, since the public package is found the way the project imports it.
+inputs:
+  project:
+    description: The project directory.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Check duplicate modules
+      shell: bash
+      env:
+        SCRIPT: ${{ github.action_path }}/../scripts/check_duplicate_modules.py
+        PROJECT: ${{ inputs.project }}
+      run: |
+        set -euo pipefail
+        cd "${PROJECT}"
+        uv run --no-sync python "${SCRIPT}"

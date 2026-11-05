@@ -810,6 +810,11 @@ the same file). Everything below is in the files; nothing is edited by hand.
   A `[tool.uv.sources]` entry covers only a direct requirement, so every
   organization package that appears only as a dependency of a dependency also
   needs an entry in `[tool.uv] constraint-dependencies`.
+- **Duplicate modules.** A companion (a package that extends a public one, marked by
+  `[tool.em-companion] public = "<import name>"` in `pyproject.toml`) runs
+  `check-duplicate-modules` in `test`: it fails on a module at the same relative path as a
+  public module, or a public class or function the companion defines again. `allow` lists
+  the intentional exceptions of a quarterly move (`path:...`, `name:...`).
 - **Floor.** The `floor` job runs the tests with each direct dependency at the
   lowest version its range allows, so a floor that is not true fails. Delete
   it where there is no floor worth holding.

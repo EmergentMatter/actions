@@ -46,6 +46,7 @@ def test_the_workflow_itself_grants_no_token():
 def test_test_job_checks_lock_sources_and_floor_leaves_the_lock_alone():
     jobs = _jobs(CI)
     assert "check-lock-sources@v1" in jobs["test"]
+    assert "check-duplicate-modules@v1" in jobs["test"]
     floor = jobs["floor"]
     assert "uv sync --resolution lowest-direct" in floor
     # the resolution happens in a copy: the real lock file is never rewritten
