@@ -1,0 +1,1 @@
+New `check-lock-sources` action and `scripts/check_lock_sources.py`: fail when a package with the org prefix was locked from an index the project does not declare, which is what happens when a transitive org package has a source but no constraint.

@@ -95,6 +95,7 @@ python3 scripts/em-dev.py            # build/refresh .venv-local from local sibl
 python3 scripts/em-dev.py run pytest # run a command inside .venv-local (never re-syncs it)
 python3 scripts/em-dev.py status     # local vs published, per package
 python3 scripts/em-dev.py off        # back to published
+eval "$(python3 scripts/em-dev.py token)"  # sign uv in to a private index (below)
 ```
 
 `python3 scripts/em-dev.py` (not `uv run`) is the documented, portable
@@ -110,6 +111,19 @@ that, when it is a member of a sibling's uv workspace: with
 installed editable from `emergent-matter-sdm-engine/packages/sdm-tools`.
 A folder of the package's own name always wins, and `em-dev status` names the
 workspace a member came from.
+
+`em-dev token` prints the assignments that sign uv in to a private package
+index (`UV_INDEX_<NAME>_USERNAME` and `_PASSWORD`, with the index name
+upper-cased), from an AWS SSO profile; evaluate its output in your shell,
+since a child process cannot set its parent's environment. It signs in to the
+profile once if the session has lapsed, and writes the token to stdout only.
+The domain, its owner and the region come from a flag, then an
+`EM_CODEARTIFACT_DOMAIN`, `EM_CODEARTIFACT_DOMAIN_OWNER` or
+`EM_CODEARTIFACT_REGION` environment variable, then an organization variable
+of the same name read with `gh`; the profile comes from `--profile` or
+`EM_CODEARTIFACT_PROFILE`; `--index-name` (default `em-codeartifact`) names
+the `[[tool.uv.index]]` entry, and `--format powershell|cmd|json` suits other
+shells. Nothing is built into the script.
 
 A repo opts into also reinstalling its own console script from local code
 (an app's own CLI command) with a `[tool.em-dev]` table in its
@@ -142,8 +156,10 @@ EmergentMatter/actions (this repo: shared, passive, no secrets)
  ├── .github/workflows/build-release.yml     ─┘ reusable workflow_call workflows
  ├── changelog-check/action.yml              composite action, the PR gate
  ├── verify-wheel/action.yml                 composite action, installs and imports the built wheel
+ ├── check-lock-sources/action.yml           composite action, org packages must come from a declared index
  ├── scripts/{compute_bump,sync_version,check_publish_tier,
- │            publish_static_index,generate_index_page,workspace_packages}.py
+ │            publish_static_index,generate_index_page,workspace_packages,
+ │            check_lock_sources,declared_indexes}.py
  │                                           stdlib-only, called by the above
  └── templates/                              what a consumer's copy starts from
         ▲                                        (templates/manifest.toml: dest + policy)

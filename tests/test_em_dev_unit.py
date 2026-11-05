@@ -557,3 +557,22 @@ def test_make_local_raises_without_uv_lock(em_dev, tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "solo-repo"\nversion = "1.0.0"\n')
     with pytest.raises(em_dev.EmDevError, match="no uv.lock"):
         em_dev.make_local(tmp_path)
+
+
+def test_index_args_keep_the_index_name_so_credentials_follow_it(em_dev):
+    pyproject = {
+        "tool": {
+            "uv": {
+                "index": [
+                    {"name": "em", "url": "https://example.test/simple", "explicit": True},
+                    {"url": "https://unnamed.test/simple"},
+                ]
+            }
+        }
+    }
+    assert em_dev.index_args(pyproject) == [
+        "--index",
+        "em=https://example.test/simple",
+        "--index",
+        "https://unnamed.test/simple",
+    ]

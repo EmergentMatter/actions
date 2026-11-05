@@ -1,0 +1,30 @@
+name: Check lock sources
+description: >-
+  Fail when a package named with the org prefix in uv.lock was resolved from
+  an index the project does not declare under [[tool.uv.index]]. A source
+  routes only a direct requirement, so a transitive org package without a
+  constraint can silently come from the default index.
+inputs:
+  lock-file:
+    description: Path to the lock file.
+    default: uv.lock
+  pyproject:
+    description: Path to the project's pyproject.toml.
+    default: pyproject.toml
+  prefix:
+    description: Package-name prefix that marks a package as the org's own.
+    default: emergent-matter-
+
+runs:
+  using: composite
+  steps:
+    - name: Check lock sources
+      shell: bash
+      env:
+        SCRIPT: ${{ github.action_path }}/../scripts/check_lock_sources.py
+        LOCK_FILE: ${{ inputs.lock-file }}
+        PYPROJECT: ${{ inputs.pyproject }}
+        PREFIX: ${{ inputs.prefix }}
+      run: |
+        set -euo pipefail
+        python3 "${SCRIPT}" --lock "${LOCK_FILE}" --pyproject "${PYPROJECT}" --prefix "${PREFIX}"

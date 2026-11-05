@@ -20,6 +20,8 @@ on macOS is older than that, so use `uv run python`).
 | [`fleet_status.py`](#fleet_statuspy) | routinely, to catch drift |
 | [`lint_gate.py`](#lint_gatepy) | turning a repo's lint gate on or off |
 | [`verify_wheel.py`](#verify_wheelpy) | never directly; the `verify-wheel` action calls it |
+| [`check_lock_sources.py`](#check_lock_sourcespy) | run by the `check-lock-sources` action, or by hand on a lock |
+| `declared_indexes.py` | never directly; the `verify-wheel` action calls it |
 | `workspace_packages.py` | never directly; `version.yml` calls it when `all-packages` is on |
 | [`publish_static_index.py --root`](../CONTRACT.md#rebuilding-the-root-index) | manual fallback, for an empty bucket or after a failed automatic rebuild -- the downloads infrastructure rebuilds the root index automatically otherwise |
 
@@ -297,6 +299,34 @@ Consumers get it via `templates/ci.yml`:
 
 A repo onboarded before v1.3.0 has its own copy of `ci.yml` and will not have
 this step. `fleet_status.py` flags that as `verify`.
+
+The clean environment sees none of the project's uv configuration, so the
+action passes every index the project declares under `[[tool.uv.index]]` as
+`--index name=url`. A wheel whose dependencies live on a declared index (an
+`explicit = true` index serves only names a source pins to it) installs there
+exactly as it does in the project, and credentials set for an index by name
+(`UV_INDEX_<NAME>_USERNAME`/`_PASSWORD`) still apply.
+
+---
+
+## `check_lock_sources.py`
+
+```bash
+python3 scripts/check_lock_sources.py [--lock uv.lock] [--pyproject pyproject.toml] [--prefix emergent-matter-]
+```
+
+Fails if a package whose name starts with the prefix was locked from an index
+the project does not declare under `[[tool.uv.index]]`. A `[tool.uv.sources]`
+entry routes only a direct requirement, so a package that is only a
+dependency of a dependency resolves from the default index unless a
+constraint in `[tool.uv] constraint-dependencies` also names it; when the
+default index carries a package of that name, the lock records it silently.
+Editable, path, workspace and git entries are not judged. Use it in CI as the
+composite action:
+
+```yaml
+      - uses: EmergentMatter/actions/check-lock-sources@v1
+```
 
 A uv workspace built with `uv build --all-packages` passes
 `all-packages: "true"` to the action. It then installs every wheel together,
