@@ -735,3 +735,126 @@ def test_npm_sees_a_minimal_environment_in_a_directory_that_is_not_the_checkout(
     assert names <= {"PATH", "HOME", pn.TOKEN_VAR, "PWD", "SHLVL", "_", "OLDPWD"}, names
     assert "must-not-reach-npm" not in log
     assert "--globalconfig" in log and "--prefix" in log
+
+
+# ------------------------------------------------ publishConfig: only access and tag
+
+
+def refused(manifest: dict[str, object]) -> str:
+    with pytest.raises(pn.PublishError) as caught:
+        pn.check_manifest(manifest, "1.4.0")
+    return str(caught.value)
+
+
+def with_config(config: object) -> dict[str, object]:
+    return {"name": "@emergentmatter/contract", "version": "1.4.0", "publishConfig": config}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "https-proxy",
+        "proxy",
+        "strict-ssl",
+        "ca",
+        "cafile",
+        "cert",
+        "key",
+        "registry",
+        "@emergentmatter:registry",
+        "//attacker.example/x/:_authToken",
+        "some-unknown-key",
+    ],
+)
+def test_a_publish_config_key_other_than_access_and_tag_is_refused(key):
+    assert key in refused(with_config({key: "x"}))
+
+
+@pytest.mark.parametrize("config", ["https-proxy=x", ["access"], 1, True])
+def test_a_publish_config_that_is_not_an_object_is_refused(config):
+    assert "not an object" in refused(with_config(config))
+
+
+def test_access_must_be_restricted_and_tag_a_plain_dist_tag():
+    assert "access" in refused(with_config({"access": "public"}))
+    for tag in ("^1.0.0", "1.2.3", "Latest", "", "-x", 5):
+        assert "tag" in refused(with_config({"tag": tag}))
+    for good in (
+        {},
+        {"access": "restricted"},
+        {"tag": "next"},
+        {"access": "restricted", "tag": "rc-1.x"},
+    ):
+        assert pn.check_manifest(with_config(good), "1.4.0") == "@emergentmatter"
+
+
+def test_the_proxy_config_that_sent_the_token_to_another_host_is_refused(env, capsys):
+    """A built manifest naming an attacker's proxy and turning off certificate checks.
+
+    npm applies publishConfig keys the command line did not set, so this tunnelled the publish,
+    token included, through the proxy.
+    """
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    hostile = manifest_text(
+        publishConfig={"https-proxy": "http://attacker:8080", "strict-ssl": False}
+    )
+    raw_tarball(artifacts, {"package/package.json": hostile, "package/data.json": "{}"})
+    assert run_verify(env, artifacts) == 1
+    assert "https-proxy" in capsys.readouterr().err
+    assert publish(env, artifacts / "x.tgz") == 1
+    assert not env["log"].exists()
+
+
+# ------------------------------------- member names: ASCII, and one name per case-folded name
+
+
+def verify_members(env: dict[str, Path], members: dict[str, str | None]) -> int:
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    raw_tarball(artifacts, members)
+    return run_verify(env, artifacts)
+
+
+KELVIN = "package/pac\N{KELVIN SIGN}age.json"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [KELVIN, "package/dist/caf\N{LATIN SMALL LETTER E WITH ACUTE}.js", "package/a b.js"],
+    ids=["kelvin-sign", "non-ascii", "space"],
+)
+def test_verify_refuses_member_names_outside_ascii(env, capsys, extra):
+    members = {"package/package.json": manifest_text(), "package/data.json": "{}", extra: "x"}
+    assert verify_members(env, members) == 1
+    assert "limited to ASCII" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("package/README.md", "package/readme.md"),
+        ("package/package.json", "package/Package.json"),
+        ("package/dist/A.js", "package/dist/a.js"),
+    ],
+    ids=["readme", "package-json", "directory-file"],
+)
+def test_verify_refuses_two_names_that_differ_only_in_case(env, capsys, first, second):
+    members = {"package/data.json": "{}", first: manifest_text(), second: "x"}
+    if "package/package.json" not in members:
+        members["package/package.json"] = manifest_text()
+    assert verify_members(env, members) == 1
+    assert "differs only in case" in capsys.readouterr().err
+
+
+def test_a_name_with_letters_digits_and_the_allowed_punctuation_still_passes(env):
+    members = {
+        "package/package.json": manifest_text(name="@emergentmatter/ui-kit", files=["dist"]),
+        "package/dist/index.js": "export {}",
+        "package/dist/@scope+x/a_b-1.0.min.js": "export {}",
+        "package/dist/Button/Button.d.ts": "export {}",
+    }
+    package(env["work"], name="@emergentmatter/ui-kit", files=["dist"])
+    artifacts = env["work"] / "built"
+    raw_tarball(artifacts, members)
+    assert run_verify(env, artifacts) == 0

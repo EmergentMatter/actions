@@ -14,7 +14,7 @@ stdlib only, shelling out to `npm`.
 is uploaded, so everything that can be wrong with a package is found while nothing is
 published yet:
 
-1. The manifest is checked: a scoped name, not private, no `publishConfig.registry`, no
+1. The manifest is checked: a scoped name, not private, `publishConfig` limited to `access` and `tag`, no
    install-time script (`preinstall`, `install`, `postinstall`, `prepare`), a plain
    `MAJOR.MINOR.PATCH` version. A `prepack` script is allowed; it is how a package copies in
    files that live elsewhere in its repository, and it is not run by a consumer.
@@ -67,6 +67,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -75,6 +76,12 @@ TOKEN_VAR = "CODEARTIFACT_AUTH_TOKEN"
 SCOPED_NAME = re.compile(r"^(@[a-z0-9][a-z0-9._-]*)/[a-z0-9][a-z0-9._-]*$")
 RELEASE_VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 INSTALL_SCRIPTS = ("preinstall", "install", "postinstall", "prepare")
+# `publishConfig` can hold any npm config key (proxy, strict-ssl, ca, ...), and npm applies the
+# ones not given on its command line, so only these two are allowed.
+PUBLISH_CONFIG_KEYS = ("access", "tag")
+# Starts with a letter: npm refuses a tag that is a valid semver range ("1", "1.x", "1.2.3").
+DIST_TAG = re.compile(r"^[a-z][a-z0-9._-]*$")
+SEGMENT = re.compile(r"^[A-Za-z0-9._@+-]+$")
 
 
 class PublishError(Exception):
@@ -103,12 +110,21 @@ def check_manifest(manifest: dict[str, object], version: str) -> str:
     if manifest.get("private") is True:
         raise PublishError(f"{name} is marked private; npm would refuse to publish it")
     publish_config = manifest.get("publishConfig")
-    if isinstance(publish_config, dict) and any(
-        key == "registry" or key.endswith(":registry") for key in publish_config
-    ):
-        raise PublishError(
-            f"{name} sets a registry in publishConfig; the endpoint is not the package's to pick"
-        )
+    if publish_config is not None:
+        if not isinstance(publish_config, dict):
+            raise PublishError(f"{name} has a publishConfig that is not an object")
+        extra = sorted(key for key in publish_config if key not in PUBLISH_CONFIG_KEYS)
+        if extra:
+            raise PublishError(
+                f"{name} sets publishConfig keys other than access and tag ({', '.join(extra)}); "
+                "npm applies them, so the registry, proxy and TLS settings are not the package's"
+            )
+        access = publish_config.get("access")
+        if access is not None and access != "restricted":
+            raise PublishError(f"{name} sets publishConfig.access to {access!r}, not 'restricted'")
+        tag = publish_config.get("tag")
+        if tag is not None and not (isinstance(tag, str) and DIST_TAG.match(tag)):
+            raise PublishError(f"{name} sets publishConfig.tag to {tag!r}, not a plain dist-tag")
     scripts = manifest.get("scripts")
     if isinstance(scripts, dict):
         found = [s for s in INSTALL_SCRIPTS if s in scripts]
@@ -214,6 +230,7 @@ def check_members(tarball: Path) -> None:
     manifest was checked. Such names, backslashes and repeated names are refused outright.
     """
     seen: set[str] = set()
+    folded: set[str] = set()
     with tarfile.open(tarball) as archive:
         for member in archive.getmembers():
             name = member.name
@@ -228,9 +245,21 @@ def check_members(tarball: Path) -> None:
                 raise PublishError(f"{tarball.name} holds {name!r}, outside package/")
             if not (member.isfile() or member.isdir()):
                 raise PublishError(f"{tarball.name} holds {name!r}, which is not a plain file")
+            if not all(SEGMENT.match(part) for part in parts):
+                raise PublishError(
+                    f"{tarball.name} holds {name!r}; names are limited to ASCII letters, digits "
+                    "and . _ @ + -"
+                )
             if name in seen:
                 raise PublishError(f"{tarball.name} holds {name!r} more than once")
             seen.add(name)
+            # A case-folding filesystem extracts these to one file, so they are one name.
+            key = unicodedata.normalize("NFC", name).casefold()
+            if key in folded:
+                raise PublishError(
+                    f"{tarball.name} holds {name!r} and a name that differs only in case"
+                )
+            folded.add(key)
             if parts[-1] == ".npmrc":
                 raise PublishError(f"{tarball.name} holds {name!r}; a package never ships .npmrc")
 
