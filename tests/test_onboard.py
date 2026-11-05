@@ -835,3 +835,21 @@ def test_dependabot_with_unreadable_variables_names_them():
 def test_dependabot_with_no_indexes_has_no_registries_block():
     out = _dependabot([])
     assert "registries" not in out and "@@" not in out
+
+
+def test_no_github_writes_files_and_never_calls_gh(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / ".git").mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "1.0.0"\n')
+
+    def _no_gh(*args, **kwargs):
+        raise AssertionError("gh must not be called with --no-github")
+
+    monkeypatch.setattr(onboard, "_gh", _no_gh)
+    monkeypatch.setattr(onboard, "detect_slug", _no_gh)
+    code = onboard.main(
+        ["--repo-path", str(repo), "--tier", "closed", "--no-version-files", "--no-github"]
+    )
+    assert code == 0
+    assert (repo / ".github" / "workflows" / "version.yml").is_file()
+    assert "--no-github" in capsys.readouterr().out
