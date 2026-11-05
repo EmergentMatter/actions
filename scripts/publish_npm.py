@@ -6,6 +6,8 @@ Called from the publish job in version.yml / build-release.yml (see CONTRACT.md,
 stdlib only, shelling out to `npm`.
 
     publish_npm.py prepare --package-dir DIR --version X.Y.Z --out-dir DIR [--wheel-dir dist]
+    publish_npm.py verify --package-dir DIR --artifact-dir DIR --version X.Y.Z --out-dir DIR
+                          [--wheel-dir dist]
     publish_npm.py publish --tarball FILE --endpoint URL [--temp-dir DIR]
 
 `prepare` needs no network and no credential, and runs for every package BEFORE any wheel
@@ -26,6 +28,15 @@ published yet:
    file in the tarball other than `package.json` must exist, byte-identical, under that
    directory in a built wheel in `--wheel-dir`. A package that is a second publication of
    files a wheel already carries is held to that here, not just in the repository's own tests.
+
+`verify` is `prepare` for a package the caller built itself, in its own job with no
+credential, and handed over as an artifact (CONTRACT.md, "A tarball built by the caller"). It
+never runs `npm`, `bun` or any package script: it only reads the tarball. It finds the one
+tarball in `--artifact-dir` whose `package.json` names the package that `--package-dir` holds,
+and refuses it unless the same manifest rules as `prepare` hold, its version is exactly
+`--version`, every plain `files` path is in it, and its members are plain files under
+`package/` (no symlink, no absolute or `..` path, no `.npmrc`). It copies the tarball to
+`--out-dir` for `publish`. It checks the shape of what was built, not what the build did.
 
 `publish` is the only step that touches the network. The token is only ever an environment
 variable (`CODEARTIFACT_AUTH_TOKEN`), read by npm through a `${CODEARTIFACT_AUTH_TOKEN}`
@@ -189,6 +200,60 @@ def check_files_present(manifest: dict[str, object], files: dict[str, bytes]) ->
         )
 
 
+def check_members(tarball: Path) -> None:
+    """The tarball holds only plain files and directories, all under `package/`."""
+    with tarfile.open(tarball) as archive:
+        for member in archive.getmembers():
+            name = member.name
+            parts = name.split("/")
+            if parts[0] != "package" or ".." in parts or name.startswith("/"):
+                raise PublishError(f"{tarball.name} holds {name!r}, outside package/")
+            if not (member.isfile() or member.isdir()):
+                raise PublishError(f"{tarball.name} holds {name!r}, which is not a plain file")
+            if parts[-1] == ".npmrc":
+                raise PublishError(f"{tarball.name} holds {name!r}; a package never ships .npmrc")
+
+
+def verify(
+    package_dir: Path, artifact_dir: Path, version: str, out_dir: Path, wheel_dir: Path
+) -> Path:
+    if not inside(package_dir, Path.cwd()):
+        raise PublishError(f"{package_dir} is outside the workspace")
+    expected = read_manifest(package_dir).get("name")
+    candidates = sorted(artifact_dir.glob("*.tgz"))
+    if not candidates:
+        raise PublishError(f"{artifact_dir} holds no .tgz")
+    matching: list[tuple[Path, dict[str, object], dict[str, bytes]]] = []
+    for candidate in candidates:
+        check_members(candidate)
+        files = tarball_files(candidate)
+        if "package.json" not in files:
+            raise PublishError(f"{candidate.name} has no package.json")
+        manifest = json.loads(files["package.json"])
+        if isinstance(manifest, dict) and manifest.get("name") == expected:
+            matching.append((candidate, manifest, files))
+    if len(matching) != 1:
+        raise PublishError(
+            f"expected exactly one tarball for {expected} in {artifact_dir}, found {len(matching)}"
+        )
+    tarball, manifest, files = matching[0]
+    check_manifest(manifest, version)
+    if manifest.get("version") != version:
+        raise PublishError(
+            f"{tarball.name} is version {manifest.get('version')}, not the release {version}"
+        )
+    check_files_present(manifest, files)
+    release_config = manifest.get("em-release")
+    mirror = release_config.get("mirrors-wheel-dir") if isinstance(release_config, dict) else None
+    if mirror is not None:
+        check_mirrors_wheel(files, str(mirror), wheel_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    destination = out_dir / tarball.name
+    shutil.copyfile(tarball, destination)
+    print(f"Verified {expected}@{version}: {destination}")
+    return destination
+
+
 def prepare(package_dir: Path, version: str, out_dir: Path, wheel_dir: Path) -> Path:
     if not inside(package_dir, Path.cwd()):
         raise PublishError(f"{package_dir} is outside the workspace")
@@ -291,6 +356,12 @@ def main(argv: list[str] | None = None) -> int:
     prep.add_argument("--version", required=True, help="the release version, no leading v")
     prep.add_argument("--out-dir", required=True, type=Path)
     prep.add_argument("--wheel-dir", type=Path, default=Path("dist"))
+    ver = sub.add_parser("verify", help="check a tarball the caller built; no npm, no network")
+    ver.add_argument("--package-dir", required=True, type=Path)
+    ver.add_argument("--artifact-dir", required=True, type=Path)
+    ver.add_argument("--version", required=True, help="the release version, no leading v")
+    ver.add_argument("--out-dir", required=True, type=Path)
+    ver.add_argument("--wheel-dir", type=Path, default=Path("dist"))
     pub = sub.add_parser("publish", help="publish a packed tarball; the only networked step")
     pub.add_argument("--tarball", required=True, type=Path)
     pub.add_argument("--endpoint", required=True, help="the CodeArtifact npm repository endpoint")
@@ -299,6 +370,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "prepare":
             prepare(args.package_dir, args.version, args.out_dir, args.wheel_dir)
+        elif args.command == "verify":
+            verify(args.package_dir, args.artifact_dir, args.version, args.out_dir, args.wheel_dir)
         else:
             publish(args.tarball, args.endpoint, args.temp_dir)
     except PublishError as err:
