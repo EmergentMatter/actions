@@ -422,7 +422,9 @@ def build_plan(
     for entry in manifest:
         # A rendered file that cannot be rendered stops the plan, before anything is written.
         if entry.render == "dependabot" and not (repo / entry.dest).exists():
-            render_dependabot((TEMPLATES / entry.source).read_text(encoding="utf-8"), data, lookup)
+            render_dependabot(
+                (TEMPLATES / entry.source).read_text(encoding="utf-8"), data, lookup or org_variable
+            )
 
     ci = repo / CI_DEST
     if ci.exists():
