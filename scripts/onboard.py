@@ -895,6 +895,14 @@ def main(argv: list[str]) -> int:
             "only read the index."
         ),
     )
+    ap.add_argument(
+        "--no-github",
+        action="store_true",
+        help=(
+            "Write files only: do not create the changelog label or turn on private "
+            "vulnerability reporting. For a rehearsal, or a repo you may not change settings on."
+        ),
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     if args.publish and args.tier != "closed":
@@ -963,9 +971,11 @@ def main(argv: list[str]) -> int:
     for w in written:
         print(f"  wrote {w}")
 
-    slug = detect_slug(repo)
+    slug = None if args.no_github else detect_slug(repo)
     visibility = None
-    if slug:
+    if args.no_github:
+        print(f"  skipped the `{LABEL}` label and {PVR_NAME} (--no-github)")
+    elif slug:
         visibility = repo_visibility(slug)
         print(f"  {ensure_label(slug, dry_run=False)}")
         print(f"  {ensure_pvr(slug, visibility, dry_run=False)}")
@@ -973,7 +983,9 @@ def main(argv: list[str]) -> int:
         print(f"  could not detect owner/name -- create the `{LABEL}` label by hand")
         print(f"  could not detect owner/name -- enable {PVR_NAME} by hand")
 
-    print_next_steps(plan, args.version_file, private_repo=(visibility == "private"))
+    print_next_steps(
+        plan, args.version_file, private_repo=(visibility == "private") or args.no_github
+    )
     return 0
 
 
