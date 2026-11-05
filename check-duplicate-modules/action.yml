@@ -8,6 +8,11 @@ inputs:
   project:
     description: The project directory.
     default: .
+  require:
+    description: >-
+      "true" makes a missing [tool.em-companion] table a failure instead of a warning and a
+      skip. The closed-tier CI template sets it for a repository whose name ends in -private.
+    default: "false"
 
 runs:
   using: composite
@@ -17,7 +22,10 @@ runs:
       env:
         SCRIPT: ${{ github.action_path }}/../scripts/check_duplicate_modules.py
         PROJECT: ${{ inputs.project }}
+        REQUIRE: ${{ inputs.require }}
       run: |
         set -euo pipefail
         cd "${PROJECT}"
-        uv run --no-sync python "${SCRIPT}"
+        flags=()
+        if [ "${REQUIRE}" = "true" ]; then flags+=(--require); fi
+        uv run --no-sync python "${SCRIPT}" ${flags[@]+"${flags[@]}"}

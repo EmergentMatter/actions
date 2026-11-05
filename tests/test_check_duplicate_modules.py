@@ -68,10 +68,26 @@ def test_allow_excuses_a_path_or_a_name(packages):
     assert check.duplicates(companion, public, allow) == []
 
 
-def test_main_does_nothing_without_the_table(tmp_path, capsys):
+def test_main_warns_and_skips_without_the_table(tmp_path, capsys):
     write(tmp_path / "pyproject.toml", '[project]\nname = "x"\n')
     assert check.main(["--project", str(tmp_path)]) == 0
-    assert "nothing to check" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "nothing to check" in captured.out
+    assert "::warning::[tool.em-companion] is absent" in captured.err
+
+
+def test_require_makes_a_missing_table_a_failure(tmp_path, capsys):
+    write(tmp_path / "pyproject.toml", '[project]\nname = "x"\n')
+    assert check.main(["--project", str(tmp_path), "--require"]) == 1
+    assert "::error::this project must declare the public package" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("key", ["em_companion", "EM-Companion", "em_Companion"])
+def test_a_misspelled_table_is_refused_with_or_without_require(tmp_path, capsys, key):
+    write(tmp_path / "pyproject.toml", f'[tool.{key}]\npublic = "pubpkg"\n')
+    for extra in ([], ["--require"]):
+        assert check.main(["--project", str(tmp_path), *extra]) == 1
+        assert f"[tool.{key}] is not the table this check reads" in capsys.readouterr().err
 
 
 def test_main_reports_and_fails(tmp_path, monkeypatch, capsys):
@@ -100,3 +116,4 @@ def test_a_missing_public_package_is_an_error(tmp_path):
 def test_the_action_runs_the_script_with_the_projects_interpreter():
     text = (ROOT / "check-duplicate-modules" / "action.yml").read_text(encoding="utf-8")
     assert "uv run --no-sync python" in text and "check_duplicate_modules.py" in text
+    assert "--require" in text and 'default: "false"' in text

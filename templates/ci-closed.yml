@@ -288,10 +288,15 @@ jobs:
       # Neither is a default. On a suite that already finishes in 15s, worker
       # startup costs more than it saves.
       - uses: EmergentMatter/actions/check-lock-sources@v1
+        with:
+          private-index: em-codeartifact
 
-      # A companion adds to its public package and never copies it (a no-op without
-      # [tool.em-companion] in pyproject.toml).
+      # A companion adds to its public package and never copies it. A repository whose
+      # name ends in -private must declare which ([tool.em-companion] in pyproject.toml);
+      # any other closed repository gets a warning when it has no such table.
       - uses: EmergentMatter/actions/check-duplicate-modules@v1
+        with:
+          require: ${{ endsWith(github.repository, '-private') }}
 
       - name: Run tests
         run: |

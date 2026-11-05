@@ -814,7 +814,7 @@ the same file). Everything below is in the files; nothing is edited by hand.
   `[tool.em-companion] public = "<import name>"` in `pyproject.toml`) runs
   `check-duplicate-modules` in `test`: it fails on a module at the same relative path as a
   public module, or a public class or function the companion defines again. `allow` lists
-  the intentional exceptions of a quarterly move (`path:...`, `name:...`).
+  the intentional exceptions of a quarterly move (`path:...`, `name:...`). A repository whose name ends in `-private` must declare the table (the CI template passes `require: true` for it); any other closed repository gets a warning when the table is absent. A table spelled `[tool.em_companion]` is refused either way.
 - **Floor.** The `floor` job runs the tests with each direct dependency at the
   lowest version its range allows, so a floor that is not true fails. Delete
   it where there is no floor worth holding.
