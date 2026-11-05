@@ -26,6 +26,11 @@ inputs:
   python-version:
     description: Interpreter for the clean environment.
     default: "3.13"
+  private-index:
+    description: >-
+      The `name` of the declared index that closed packages must come from (see
+      check-lock-sources). Not declared: a closed package in the wheel's dependencies fails.
+    default: em-codeartifact
   all-packages:
     description: >-
       Set to "true" for a uv workspace built with `uv build --all-packages`.
@@ -48,6 +53,8 @@ runs:
         ALL_PACKAGES: ${{ inputs.all-packages }}
         VERIFY_SCRIPT: ${{ github.action_path }}/../scripts/verify_wheel.py
         INDEXES_SCRIPT: ${{ github.action_path }}/../scripts/declared_indexes.py
+        SOURCES_SCRIPT: ${{ github.action_path }}/../scripts/check_lock_sources.py
+        PRIVATE_INDEX: ${{ inputs.private-index }}
       run: |
         set -euo pipefail
 
@@ -115,6 +122,18 @@ runs:
 
         workdir="$(mktemp -d)"
         uv venv --python "${PY_VERSION}" "${workdir}/venv"
+
+        # `--index` makes a declared `explicit = true` index an ordinary one, which would let
+        # an organization name that is not on it fall through to the public index. So resolve
+        # first, with the index recorded for each package, and refuse any organization
+        # package that came from somewhere it must not.
+        printf '%s\n' "${install_targets[@]}" > "${workdir}/requirements.in"
+        uv pip compile --python "${workdir}/venv/bin/python" \
+          ${index_args[@]+"${index_args[@]}"} --emit-index-annotation --no-header \
+          -o "${workdir}/resolved.txt" "${workdir}/requirements.in"
+        python3 "${SOURCES_SCRIPT}" --resolved "${workdir}/resolved.txt" \
+          --pyproject pyproject.toml --private-index "${PRIVATE_INDEX}"
+
         uv pip install --python "${workdir}/venv/bin/python" \
           ${index_args[@]+"${index_args[@]}"} "${install_targets[@]}"
 

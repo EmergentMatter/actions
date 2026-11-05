@@ -302,7 +302,11 @@ this step. `fleet_status.py` flags that as `verify`.
 
 The clean environment sees none of the project's uv configuration, so the
 action passes every index the project declares under `[[tool.uv.index]]` as
-`--index name=url`. A wheel whose dependencies live on a declared index (an
+`--index name=url`. That makes an `explicit = true` index an ordinary one, so an organization
+name that is not on it could fall through to the public index; the action therefore resolves
+first (`uv pip compile --emit-index-annotation`) and refuses, through `check_lock_sources.py`,
+an organization package that came from the public index, an undeclared index, or (for a closed
+package) anything but the `private-index`. A wheel whose dependencies live on a declared index (an
 `explicit = true` index serves only names a source pins to it) installs there
 exactly as it does in the project, and credentials set for an index by name
 (`UV_INDEX_<NAME>_USERNAME`/`_PASSWORD`) still apply.
@@ -312,42 +316,30 @@ exactly as it does in the project, and credentials set for an index by name
 ## `check_lock_sources.py`
 
 ```bash
-python3 scripts/check_lock_sources.py [--lock uv.lock] [--pyproject pyproject.toml] [--prefix emergent-matter-]
+python3 scripts/check_lock_sources.py [--lock uv.lock | --resolved FILE] [--pyproject pyproject.toml] \
+    [--private-index NAME] [--private-names PATTERNS] [--org-names NAMES] [--prefix emergent-matter-]
 ```
 
-Fails if a package whose name starts with the prefix was locked from an index
-the project does not declare under `[[tool.uv.index]]`. A `[tool.uv.sources]`
-entry routes only a direct requirement, so a package that is only a
-dependency of a dependency resolves from the default index unless a
-constraint in `[tool.uv] constraint-dependencies` also names it; when the
-default index carries a package of that name, the lock records it silently.
-Editable, path, workspace and git entries are not judged. Use it in CI as the
-composite action:
+Holds every organization package (name starting with the prefix, or one of the extra exact
+`--org-names`, default `sdm-view,em-release-control-test`) to three rules:
+
+- it never comes from the public index (`pypi.org` and its file host), even when the project
+  declares that index;
+- it comes from an index the project declares under `[[tool.uv.index]]`;
+- a closed package (`--private-names`, fnmatch patterns, default `*-private`, `*-cem-kit` and the
+  sidecar, engine and tools packages) comes from the declared index called `--private-index`,
+  and from nowhere else. With no private index declared, a closed package is a failure.
+
+A `[tool.uv.sources]` entry routes only a direct requirement, so a package that is only a
+dependency of a dependency resolves from the default index unless a constraint in `[tool.uv]
+constraint-dependencies` also names it; when the default index carries a package of that name,
+the lock records it silently. `--resolved` reads the annotated output of
+`uv pip compile --emit-index-annotation` instead of a lock, which is how `verify-wheel` judges
+what a wheel's dependencies would install. Editable, path, workspace and git entries are not
+judged. Use it in CI as the composite action:
 
 ```yaml
       - uses: EmergentMatter/actions/check-lock-sources@v1
-```
-
-A uv workspace built with `uv build --all-packages` passes
-`all-packages: "true"` to the action. It then installs every wheel together,
-verifies each under the name its own METADATA gives
-(`verify_wheel.py --identify --lockstep` reads them), and fails unless they
-share one version.
-
-```yaml
-      - run: uv build --all-packages
-      - uses: EmergentMatter/actions/verify-wheel@v1
         with:
-          all-packages: "true"
+          private-index: em-codeartifact
 ```
-
-## `workspace_packages.py`
-
-Called by `version.yml` when `all-packages` is on; you do not run it
-directly. `names` prints the distribution name of the root project and of
-every `[tool.uv.workspace]` member (minus `exclude`), one per line, which is
-the list the bump loops over. `check --version X` exits 1 unless every one of
-them is at `X` and every exact (`==`) pin between them names `X`. `pins
---version X` prints each such pin as `dependent|extra|requirement` for the bump
-to rewrite. It reads `pyproject.toml` files only; the bump itself is
-`uv version`.

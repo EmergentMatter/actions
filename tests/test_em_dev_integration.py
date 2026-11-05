@@ -320,3 +320,61 @@ explicit = true
     python = _venv_python(repo, em_dev)
     assert str(tmp_path / CORE) in _import_file(python, "emergent_matter_toy_core")
     assert str(tmp_path / MATERIALS) not in _import_file(python, "emergent_matter_toy_materials")
+
+
+def test_an_org_name_absent_from_the_declared_index_is_refused_not_taken_from_the_default(
+    em_dev, tmp_path, toy_simple_index, toy_index, toy_sibling_src, monkeypatch
+):
+    """Passing the declared index with `--index` makes it an ordinary one, so a name that is
+    not on it would fall through to the default index. The install is refused instead."""
+    from conftest import _uv_build, _write_leaf, simple_index_from
+
+    ghost = "emergent-matter-toy-ghost"
+    ghost_wheels = tmp_path / "ghost-wheels"
+    ghost_wheels.mkdir()
+    _uv_build(_write_leaf(tmp_path / "ghost-src", ghost, "1.0.0"), ghost_wheels)
+    monkeypatch.setenv("UV_INDEX", simple_index_from(ghost_wheels, tmp_path / "default"))
+
+    repo = tmp_path / "app"
+    (repo / "src" / "emergent_matter_toy_app").mkdir(parents=True)
+    (repo / "src" / "emergent_matter_toy_app" / "__init__.py").write_text("")
+    (repo / "pyproject.toml").write_text(
+        f"""\
+[project]
+name = "emergent-matter-toy-app"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["{CORE}>=1.0,<2", "{ghost}"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/emergent_matter_toy_app"]
+
+[[tool.uv.index]]
+name = "toy"
+url = "{toy_simple_index}"
+explicit = true
+
+[tool.uv]
+constraint-dependencies = ["{MATERIALS}>=1.0,<2"]
+
+[tool.uv.sources]
+{CORE} = {{ index = "toy" }}
+{MATERIALS} = {{ index = "toy" }}
+"""
+    )
+    locked = subprocess.run(["uv", "lock"], cwd=repo, capture_output=True, text=True)
+    assert locked.returncode == 0, locked.stderr
+    _copy_sibling(tmp_path, toy_sibling_src / CORE, CORE)
+
+    # The lock found the ghost on the extra index; the install only sees the declared one, so
+    # the name is refused here rather than taken from wherever else it exists. (That a name
+    # found on the default index is refused is the unit test on `org_source_problems` and
+    # verify-wheel's run against a stand-in default index.)
+    with pytest.raises(em_dev.EmDevError, match=ghost):
+        em_dev.make_local(repo)
+    venv = repo / em_dev.VENV_LOCAL
+    assert not list(venv.glob("lib/*/site-packages/emergent_matter_toy_ghost*"))

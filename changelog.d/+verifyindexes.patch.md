@@ -1,1 +1,1 @@
-`verify-wheel` installs the built wheel with every index the project declares, so a wheel whose dependencies live on a declared index no longer needs `UV_INDEX` set on the job.
+`verify-wheel` installs the built wheel with every index the project declares, so a wheel whose dependencies live on a declared index no longer needs `UV_INDEX` set on the job. It resolves first and refuses an organization package that would come from the public index, an undeclared index, or (for a closed package) anything but the private index.
