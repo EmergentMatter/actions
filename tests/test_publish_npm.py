@@ -858,3 +858,37 @@ def test_a_name_with_letters_digits_and_the_allowed_punctuation_still_passes(env
     artifacts = env["work"] / "built"
     raw_tarball(artifacts, members)
     assert run_verify(env, artifacts) == 0
+
+
+# ----------------------------------- names that do not extract the same on every platform
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "package/package.json.",
+        "package/package.json..",
+        "package/con.js",
+        "package/dist/aux",
+        "package/LPT1.txt",
+        "package/dist/Nul.d.ts",
+    ],
+    ids=["trailing-dot", "two-trailing-dots", "con.js", "dist-aux", "LPT1.txt", "Nul.d.ts"],
+)
+def test_verify_refuses_trailing_dots_and_windows_device_names(env, capsys, extra):
+    members = {"package/package.json": manifest_text(), "package/data.json": "{}", extra: "x"}
+    assert verify_members(env, members) == 1
+    assert "Windows device name" in capsys.readouterr().err
+
+
+def test_a_name_that_only_starts_like_a_device_name_still_passes(env):
+    members = {
+        "package/package.json": manifest_text(name="@emergentmatter/ui-kit", files=["dist"]),
+        "package/dist/console.js": "export {}",
+        "package/dist/auxiliary.js": "export {}",
+        "package/dist/com10.js": "export {}",
+    }
+    package(env["work"], name="@emergentmatter/ui-kit", files=["dist"])
+    artifacts = env["work"] / "built"
+    raw_tarball(artifacts, members)
+    assert run_verify(env, artifacts) == 0
