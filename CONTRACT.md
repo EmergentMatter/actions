@@ -756,7 +756,7 @@ uploaded.
 
 **Before any upload** (`scripts/publish_npm.py prepare`, no network, no credential), for each directory:
 
-- The name must be scoped (`@scope/name`), not private, with no `publishConfig.registry` and no
+- The name must be scoped (`@scope/name`), not private, with a `publishConfig` of only `access: restricted` and a plain `tag` (npm applies every other key it holds, proxies and certificate checks included) and no
   `preinstall`, `install`, `postinstall` or `prepare` script. A `prepack` script is allowed and is
   how a package copies in files that live elsewhere in its repo; it is not run by a consumer.
 - The version in `package.json` is overwritten with the release's version (the tag without its
@@ -801,14 +801,15 @@ runs `npm`, `bun` or a package script; it only reads the tarball. For each packa
 tarball whose `package.json` names the package the checkout's directory holds (none or several is
 a failure) and refuses it unless:
 
-- the manifest rules of `prepare` hold (scoped, not private, no `publishConfig.registry`, no
+- the manifest rules of `prepare` hold (scoped, not private, `publishConfig` limited to `access` and `tag`, no
   install-time script);
 - its version is exactly the release's, so the caller builds at the release commit, whose
   `package.json` already carries the bumped version;
 - every plain path in `files` is in it;
 - every member is a plain file or directory under `package/`, each named once, in normal form
-  (no `.` or empty part, no `..`, no backslash, no trailing slash on a file, no absolute path) and
-  never `.npmrc`. A tarball can otherwise hold `package/package.json` and
+  (no `.` or empty part, no `..`, no backslash, no trailing slash on a file, no absolute path),
+  with every segment ASCII letters, digits and `. _ @ + -`, no two names equal after NFC and case
+  folding (a case-folding filesystem would extract them to one file), and never `.npmrc`. A tarball can otherwise hold `package/package.json` and
   `package/./package.json`, which npm treats as one file (the last wins) and a reader that
   keys on the written name treats as two, so the manifest that was checked would not be the one
   npm publishes.
@@ -849,7 +850,7 @@ a `pyproject.toml`, whether or not it also has a `package.json`: `pyproject.toml
   npm-only repo with any other target, or with an empty `npm-packages`, before any credential is
   assumed.
 - **Manifest rules are unchanged.** `publish_npm.py` still refuses `"private": true` and
-  `publishConfig.registry`, so an npm-only repo carries neither. The endpoint stays the workflow's
+  any other `publishConfig` key, so an npm-only repo carries neither. The endpoint stays the workflow's
   to pick.
 
 ## Where each guarantee lives
