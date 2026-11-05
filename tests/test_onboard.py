@@ -323,14 +323,19 @@ def test_load_manifest_rejects_an_unknown_policy(tmp_path):
         onboard.load_manifest(manifest)
 
 
-def test_real_manifest_declares_only_ci_and_ruff_as_seed_once():
+def test_real_manifest_declares_only_ci_ruff_and_closed_dependabot_as_seed_once():
     """Guards the shape docs/onboarding.md and CONTRACT.md assume: every
     template is kept current by sync.py except ci.yml (a repo owns its CI
-    outright once it exists) and ruff.toml (a repo's local additions on
-    top of the shared ruff-base.toml, per STYLE.md's Python style section)."""
+    outright once it exists), ruff.toml (a repo's local additions on top of
+    the shared ruff-base.toml, per STYLE.md's Python style section) and a
+    closed-tier repo's Dependabot file, which is filled from that repo's own
+    indexes at onboarding."""
     entries = onboard.load_manifest()
     seed_once = [e for e in entries if e.policy == "seed-once"]
-    assert {e.dest for e in seed_once} == {onboard.CI_DEST, "ruff.toml"}
+    assert {e.dest for e in seed_once} == {onboard.CI_DEST, "ruff.toml", ".github/dependabot.yml"}
+    assert {e.dest for e in seed_once if e.dest == ".github/dependabot.yml"} == {
+        e.dest for e in seed_once if e.tier == "closed" and e.render == "dependabot"
+    }
 
 
 def test_real_manifest_entries_have_source_files_on_disk_or_are_new_health_files():
@@ -719,3 +724,114 @@ def test_print_next_steps_is_silent_about_pvr_by_default(capsys):
     onboard.print_next_steps(_blank_plan(), [])
     out = capsys.readouterr().out
     assert onboard.PVR_NAME not in out
+
+
+# ------------------------------------------------- closed-tier replacements
+
+
+def _dests(entries):
+    return {e.dest: e.source for e in entries}
+
+
+def test_a_tiered_entry_replaces_the_untiered_entry_for_the_same_dest():
+    manifest = onboard.load_manifest()
+    closed = _dests(onboard.entries_for_tier(manifest, "closed"))
+    open_ = _dests(onboard.entries_for_tier(manifest, "open"))
+    none = _dests(onboard.entries_for_tier(manifest, None))
+    for dest, closed_source in {
+        ".github/workflows/version.yml": "stub-version-closed.yml",
+        ".github/workflows/build-release.yml": "stub-build-release-closed.yml",
+        ".github/workflows/ci.yml": "ci-closed.yml",
+        ".github/dependabot.yml": "dependabot-closed.yml",
+    }.items():
+        assert closed[dest] == closed_source
+        assert open_[dest] != closed_source
+        assert none[dest] == open_[dest]
+
+
+def test_each_dest_appears_once_for_every_tier():
+    manifest = onboard.load_manifest()
+    for tier in ("open", "closed", None):
+        dests = [e.dest for e in onboard.entries_for_tier(manifest, tier)]
+        licences = {"LICENSE", "NOTICE"}
+        assert len(dests) == len(set(dests)), tier
+        assert licences <= set(dests) or tier is None
+
+
+def test_activate_publish_uncomments_publisher_lines_and_drops_reader_lines():
+    text = (onboard.TEMPLATES / "stub-version-closed.yml").read_text()
+    assert "publish: false  #reader" in text
+    out = onboard.activate_publish(text)
+    assert "publish: false" not in out
+    assert "      publish: true\n" in out
+    assert "      publish-target: codeartifact\n" in out
+    assert "      environment: production\n" in out
+    assert "role/${{ vars.EM_PUBLISH_ROLE_NAME }}" in out
+    assert not any(ln.strip().startswith("#publisher#") for ln in out.splitlines())
+
+
+def test_the_reader_form_publishes_nothing():
+    for name in ("stub-version-closed.yml", "stub-build-release-closed.yml"):
+        text = (onboard.TEMPLATES / name).read_text()
+        live = [ln for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+        assert "      publish: false  #reader" in live
+        assert not any("publish-target" in ln or "aws-role-arn" in ln for ln in live)
+
+
+def test_closed_version_stub_grants_the_ci_caller_an_id_token():
+    text = (onboard.TEMPLATES / "stub-version-closed.yml").read_text()
+    assert "permissions: { contents: read, id-token: write }" in text
+    assert "codeartifact-read-role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}" in text
+
+
+ARN = "arn:aws:iam::111122223333:role/some/path/reader-role"
+VARS = {
+    "EM_CODEARTIFACT_READ_ROLE_ARN": ARN,
+    "EM_CODEARTIFACT_REGION": "region-1",
+    "EM_CODEARTIFACT_DOMAIN": "dom",
+    "EM_CODEARTIFACT_DOMAIN_OWNER": "444455556666",
+}
+
+
+def _dependabot(indexes, lookup=VARS.get):
+    template = (onboard.TEMPLATES / "dependabot-closed.yml").read_text()
+    return onboard.render_dependabot(template, {"tool": {"uv": {"index": indexes}}}, lookup)
+
+
+def test_dependabot_registries_come_from_the_repos_own_indexes():
+    out = _dependabot(
+        [
+            {"name": "pub", "url": "https://pub.test/simple", "explicit": True},
+            {
+                "name": "priv",
+                "url": "https://x.d.codeartifact.region-1.amazonaws.com/pypi/r/simple/",
+            },
+        ]
+    )
+    assert "  pub:\n    type: python-index\n    url: https://pub.test/simple\n" in out
+    assert "  priv:\n    type: python-index\n" in out
+    assert "    account-id: '111122223333'\n" in out
+    assert "    role-name: reader-role\n" in out
+    assert "    domain-owner: '444455556666'\n" in out
+    assert out.index("  priv:") < out.index("  pub:")  # private first, as in the precedent
+    assert "    registries:\n      - priv\n      - pub\n" in out
+    assert out.count("registries:") == 2  # the top-level map and the uv ecosystem only
+    assert "@@" not in out
+
+
+def test_dependabot_without_a_private_index_needs_no_variables():
+    out = _dependabot([{"name": "pub", "url": "https://pub.test/simple"}], lookup=lambda n: None)
+    assert "aws-region" not in out and "@@" not in out
+
+
+def test_dependabot_with_unreadable_variables_names_them():
+    with pytest.raises(onboard.OnboardError, match="EM_CODEARTIFACT_DOMAIN_OWNER"):
+        _dependabot(
+            [{"name": "priv", "url": "https://x.d.codeartifact.r.amazonaws.com/pypi/r/simple/"}],
+            lookup={k: v for k, v in VARS.items() if k != "EM_CODEARTIFACT_DOMAIN_OWNER"}.get,
+        )
+
+
+def test_dependabot_with_no_indexes_has_no_registries_block():
+    out = _dependabot([])
+    assert "registries" not in out and "@@" not in out

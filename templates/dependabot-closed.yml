@@ -1,0 +1,21 @@
+# Copy to `.github/dependabot.yml` in a closed-tier repo. Onboarding fills the
+# two double-at markers below: the package sources come from the indexes this
+# repo's pyproject.toml declares, and the private one takes the values of the
+# organization variables the CI sign-in uses.
+#
+# Two ecosystems: `uv` for the package's own dependencies (uv.lock), reading
+# those sources, and `github-actions` for the pinned SHAs in
+# .github/workflows/. Weekly, not daily.
+
+version: 2
+@@REGISTRIES@@
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+@@REGISTRY_REFS@@
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

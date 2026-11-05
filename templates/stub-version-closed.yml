@@ -1,0 +1,49 @@
+# .github/workflows/version.yml
+#
+# The closed-tier form of the version stub: the repo's checks and the release
+# computation both read the org's private package index, so both jobs may
+# request an OIDC token. A reusable workflow's `permissions:` is a ceiling
+# for every job inside it, checked when the workflow is parsed, so the
+# `id-token: write` on `ci:` is what lets a CI job sign in on a push to main
+# (pull requests would pass without it and main would not).
+#
+# Lines marked `#reader` are removed, and lines marked `#publisher#` are
+# uncommented, when onboarding is run with --publish for a repo that
+# publishes its own releases to the private index.
+name: Version
+on:
+  push:
+    branches: [main]
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml      # the repo's OWN checks (C4)
+    permissions: { contents: read, id-token: write }
+  version:
+    needs: ci
+    uses: EmergentMatter/actions/.github/workflows/version.yml@v1
+    with:
+      # MUST match the @ref above -- see stub-changelog-check.yml for why.
+      actions-ref: v1
+
+      # Sign in to the private index before the release step relocks uv.lock.
+      codeartifact-read-role-arn: ${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}
+
+      publish: false  #reader
+      #publisher# publish: true
+      #publisher# publish-target: codeartifact
+      # The GitHub Environment the publish role's trust policy names.
+      #publisher# environment: production
+      # Per-repo repository variable: the publish role's name.
+      #publisher# aws-role-arn: arn:aws:iam::${{ vars.EM_PUBLISH_ACCOUNT_ID }}:role/${{ vars.EM_PUBLISH_ROLE_NAME }}
+
+      # ── Several packages from one uv workspace: DELETE unless this repo's
+      # root pyproject.toml has a `[tool.uv.workspace]` table and every
+      # member is released together, at one version, from one tag. Keep it
+      # the same in version.yml and build-release.yml. See
+      # docs/onboarding.md, "Releasing several packages together".
+      # all-packages: true
+    permissions: { contents: write, pull-requests: write, id-token: write }
+
+    # NO `secrets: inherit` here, deliberately: the shared workflows read no
+    # secret, and inheriting would hand a repo behind a movable `v1` tag the
+    # whole org secret store.

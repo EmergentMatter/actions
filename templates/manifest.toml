@@ -10,6 +10,9 @@
 #                            resolves or reports accordingly.
 #           "seed-once"  -- written once, at onboarding, if absent. Never
 #                            touched again, by onboard.py or sync.py.
+#   render  optional. Absent means the file is copied byte for byte. "dependabot"
+#           means onboard.py fills the file's @@ markers from the repo's own
+#           declared indexes and the organization variables (seed-once only).
 #   tier    optional. Absent (the common case) means the entry applies to
 #           every repo regardless of licence tier. "open" or "closed" scopes
 #           the entry to repos declaring that `[tool.em-release] tier` in
@@ -144,3 +147,28 @@ policy = "managed"
 source = "ruff.toml"
 dest   = "ruff.toml"
 policy = "seed-once"
+
+[[template]]
+source = "stub-version-closed.yml"
+dest   = ".github/workflows/version.yml"
+policy = "managed"
+tier   = "closed"
+
+[[template]]
+source = "stub-build-release-closed.yml"
+dest   = ".github/workflows/build-release.yml"
+policy = "managed"
+tier   = "closed"
+
+[[template]]
+source = "ci-closed.yml"
+dest   = ".github/workflows/ci.yml"
+policy = "seed-once"
+tier   = "closed"
+
+[[template]]
+source = "dependabot-closed.yml"
+dest   = ".github/dependabot.yml"
+policy = "seed-once"
+tier   = "closed"
+render = "dependabot"
