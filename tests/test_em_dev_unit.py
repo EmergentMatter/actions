@@ -591,3 +591,41 @@ def test_org_source_problems_name_public_and_undeclared_indexes(em_dev):
         "emergent-matter-b 2.0 came from https://elsewhere.test/simple/, "
         "an index this project does not declare",
     ]
+
+
+def test_org_names_follow_the_same_rule_as_check_lock_sources(em_dev):
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "check_lock_sources_for_em_dev",
+        Path(__file__).resolve().parents[1] / "scripts" / "check_lock_sources.py",
+    )
+    check = importlib.util.module_from_spec(spec)
+    sys.modules["check_lock_sources_for_em_dev"] = check
+    spec.loader.exec_module(check)
+    assert set(em_dev.EXTRA_ORG_NAMES) == set(check.DEFAULT_ORG_NAMES)
+    assert em_dev.OURS_PREFIX == check.DEFAULT_PREFIX
+    for name in (
+        "emergent-matter-x",
+        "Emergent_Matter.Y",
+        "sdm-view",
+        "SDM_View",
+        "em-release-control-test",
+        "requests",
+        "sdm-viewer",
+    ):
+        assert em_dev.is_org_name(name) == check.Policy(declared=set()).is_org(name), name
+
+
+def test_org_source_problems_judge_extra_names_and_a_mixed_case_public_host(em_dev):
+    compiled = (
+        "SDM_View==1.0\n    # from https://PyPI.org/simple\n"
+        "Em-Release-Control-Test==2.0\n    # from HTTPS://Elsewhere.test/simple\n"
+        "sdm-viewer==3.0\n    # from https://pypi.org/simple\n"
+    )
+    assert em_dev.org_source_problems(compiled, {"https://mine.test/simple"}) == [
+        "SDM_View 1.0 came from https://PyPI.org/simple, the public index",
+        "Em-Release-Control-Test 2.0 came from HTTPS://Elsewhere.test/simple, "
+        "an index this project does not declare",
+    ]

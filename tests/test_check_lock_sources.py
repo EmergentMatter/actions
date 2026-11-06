@@ -181,3 +181,9 @@ def test_an_org_package_with_no_recorded_index_cannot_be_placed(tmp_path, capsys
         ["--resolved", str(resolved), "--pyproject", str(tmp_path / "pyproject.toml")]
     )
     assert code == 1 and "no recorded index" in capsys.readouterr().err
+
+
+def test_a_mixed_case_public_host_is_still_the_public_index(tmp_path, capsys):
+    lock = lock_text(("emergent-matter-x", registry("https://PyPI.org/simple")))
+    code, err = run(tmp_path, capsys, lock, PYPROJECT_WITH_PYPI)
+    assert code == 1 and "the public index" in err
