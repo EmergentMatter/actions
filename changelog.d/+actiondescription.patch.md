@@ -1,1 +1,0 @@
-The `codeartifact-read` action no longer fails every job that uses it: an input description held a `${{ vars.* }}` expression, which GitHub evaluates and rejects at set-up. A test now refuses an expression in any composite action description.
