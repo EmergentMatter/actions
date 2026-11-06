@@ -6,6 +6,13 @@ Later releases are recorded here.
 
 <!-- towncrier release notes start -->
 
+## 1.20.2 (2026-11-06)
+
+### Patch
+
+- The release workflow signs in to the private package index only when the project declares it, as the codeartifact-read action already does. A repository that uses only the public index is not trusted by the read role, so its release failed at "Assume the read-only CodeArtifact role". The index check also no longer depends on grep exiting after the pipe has closed.
+
+
 ## 1.20.1 (2026-11-06)
 
 ### Patch
