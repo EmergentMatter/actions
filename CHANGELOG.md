@@ -6,6 +6,21 @@ Later releases are recorded here.
 
 <!-- towncrier release notes start -->
 
+## 1.20.0 (2026-11-06)
+
+### Minor
+
+- Closed-tier repos get their own `version.yml`, `build-release.yml`, `ci.yml` and `dependabot.yml`: they sign in to the private package index (new `codeartifact-read` action), grant `id-token: write` where the sign-in needs it, check lock sources, run a `floor` job, and onboard with `--publish` when they release to the private index. A tiered manifest entry now replaces the untiered entry for the same destination.
+- New `check-duplicate-modules` action and `scripts/check_duplicate_modules.py`: a companion package fails when a module duplicates the public package it extends, by relative path or by a class or function name, with an allowlist for a quarterly move. The closed-tier CI template runs it in `test`.
+- New `check-lock-sources` action and `scripts/check_lock_sources.py`: fail when an organization package was locked from the public index (even if declared), from an index the project does not declare, or, for a closed package, from anything but the private index. Names outside the prefix can be listed. It also judges `uv pip compile` output.
+- `em-dev token` prints the shell lines that sign uv in to a private package index from an AWS SSO profile. The domain, its owner and the region come from a flag, an environment variable or an organization variable; nothing is built in.
+
+### Patch
+
+- `em-dev` passes every index the project declares on its `uv pip install` command line, so a published package that lives only on an `explicit = true` index is found even though `--no-sources` ignores the source that pins it. Because that makes the index an ordinary one, it first resolves the install and refuses an organization package that would come from the public index or an undeclared one. A named index is passed as `name=url`, so credentials keyed on the name keep working in tool mode too.
+- `verify-wheel` installs the built wheel with every index the project declares, so a wheel whose dependencies live on a declared index no longer needs `UV_INDEX` set on the job. It resolves first and refuses an organization package that would come from the public index, an undeclared index, or (for a closed package) anything but the private index.
+
+
 ## 1.19.0 (2026-11-05)
 
 ### Minor
