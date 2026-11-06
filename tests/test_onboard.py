@@ -869,3 +869,22 @@ def test_an_unrenderable_file_stops_the_plan_before_anything_is_written(tmp_path
 def test_an_environment_variable_stands_in_for_the_organization_variable(monkeypatch):
     monkeypatch.setenv("EM_CODEARTIFACT_DOMAIN", "from-env")
     assert onboard.org_variable("EM_CODEARTIFACT_DOMAIN") == "from-env"
+
+
+@pytest.mark.parametrize(
+    "arn",
+    [
+        "not-an-arn",
+        "arn:aws:iam::123:role/x",
+        "arn:aws:s3:::bucket",
+        "arn:aws:iam::111122223333:user/x",
+    ],
+)
+def test_a_role_variable_that_is_not_an_iam_role_arn_is_refused_and_named(arn):
+    values = {**VARS, "EM_CODEARTIFACT_READ_ROLE_ARN": arn}
+    with pytest.raises(onboard.OnboardError, match=r"is .* not an IAM role ARN") as caught:
+        _dependabot(
+            [{"name": "priv", "url": "https://x.d.codeartifact.r.amazonaws.com/pypi/r/simple/"}],
+            lookup=values.get,
+        )
+    assert repr(arn) in str(caught.value)
