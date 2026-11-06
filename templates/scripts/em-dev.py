@@ -943,8 +943,21 @@ def export_constraints(repo: Path, out_path: Path, *, skip_names: list[str]) -> 
 
 
 PUBLIC_INDEX_HOSTS = ("pypi.org", "files.pythonhosted.org", "test.pypi.org")
+#: Names outside the prefix that are still the organization's. Kept equal to
+#: `DEFAULT_ORG_NAMES` in scripts/check_lock_sources.py (this file travels alone to each repo,
+#: so it cannot import it); a test pins the two together.
+EXTRA_ORG_NAMES = ("sdm-view", "em-release-control-test")
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)")
 _FROM = re.compile(r"^\s*#\s*from\s+(\S+)")
+
+
+def pep503_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def is_org_name(name: str) -> bool:
+    n = pep503_name(name)
+    return n.startswith(pep503_name(OURS_PREFIX)) or n in {pep503_name(x) for x in EXTRA_ORG_NAMES}
 
 
 def org_source_problems(compiled: str, declared_urls: set[str]) -> list[str]:
@@ -958,15 +971,16 @@ def org_source_problems(compiled: str, declared_urls: set[str]) -> list[str]:
     found: list[str] = []
     name = version = None
     index = None
+    declared = {u.rstrip("/") for u in declared_urls}
 
     def close() -> None:
-        if name is None or index is None or not name.lower().startswith(OURS_PREFIX):
+        if name is None or index is None or not is_org_name(name):
             return
         url = index.rstrip("/")
-        host = re.sub(r"^[a-z]+://([^/:]+).*$", r"\1", url)
+        host = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://([^/:]+).*$", r"\1", url).lower()
         if host in PUBLIC_INDEX_HOSTS:
             found.append(f"{name} {version} came from {index}, the public index")
-        elif url not in declared_urls:
+        elif url not in declared:
             found.append(
                 f"{name} {version} came from {index}, an index this project does not declare"
             )
