@@ -9,7 +9,7 @@ description: >-
 inputs:
   role-arn:
     description: >-
-      Read-only role to assume. Pass `${{ vars.EM_CODEARTIFACT_READ_ROLE_ARN }}`.
+      Read-only role to assume: the value of the EM_CODEARTIFACT_READ_ROLE_ARN variable.
       Required when the project declares the index.
     default: ""
   index-name:
