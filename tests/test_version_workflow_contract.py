@@ -291,17 +291,113 @@ def test_codeartifact_read_inputs_exist_with_off_by_default_values():
     assert _string_input_default(text, "codeartifact-read-index-name") == "em-codeartifact"
 
 
-def test_codeartifact_read_steps_are_gated_on_the_role_arn():
+def test_codeartifact_read_steps_are_gated_on_the_role_arn_and_the_declared_index():
+    """A repository that never uses the private index is not trusted by the read role, so
+    assuming it fails the release; both steps need the project to declare the index."""
     text = _text(VERSION_WORKFLOW)
+    gate = (
+        "if: inputs.codeartifact-read-role-arn != '' "
+        "&& steps.private_index.outputs.declared == 'true'"
+    )
     for step_name in (
         "Assume the read-only CodeArtifact role",
         "Authenticate uv to CodeArtifact",
     ):
         idx = text.index(f"- name: {step_name}")
         following = text[idx : idx + 300]
-        assert "if: inputs.codeartifact-read-role-arn != ''" in following, (
-            f"step {step_name!r} must be gated on inputs.codeartifact-read-role-arn"
-        )
+        assert gate in following, f"step {step_name!r} must be gated on the role and the index"
+    idx = text.index("- name: Does this project use the private index?")
+    assert "if: inputs.codeartifact-read-role-arn != ''" in text[idx : idx + 300]
+    assert idx < text.index("- name: Assume the read-only CodeArtifact role")
+
+
+def _detection_script() -> str:
+    text = _text(VERSION_WORKFLOW)
+    idx = text.index("- name: Does this project use the private index?")
+    block = text[text.index("run: |\n", idx) + len("run: |\n") :]
+    lines = []
+    for line in block.splitlines():
+        if line.strip() and not line.startswith("          "):
+            break
+        lines.append(line[10:])
+    return "\n".join(lines)
+
+
+def _run_detection(tmp_path, pyproject: str | None, index_name: str = "em-codeartifact"):
+    import os
+    import subprocess
+    import sys
+
+    scripts = tmp_path / "temp" / "em-actions" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "declared_indexes.py").write_text(
+        (REPO_ROOT / "scripts" / "declared_indexes.py").read_text(encoding="utf-8")
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    if pyproject is not None:
+        (project / "pyproject.toml").write_text(pyproject)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    out = tmp_path / "output"
+    out.write_text("")
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(tmp_path / "temp"),
+        "GITHUB_OUTPUT": str(out),
+        "INDEX_NAME": index_name,
+    }
+    done = subprocess.run(
+        ["bash", "-c", _detection_script()],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done, out.read_text()
+
+
+PRIVATE = '[[tool.uv.index]]\nname = "em-codeartifact"\nurl = "https://x.test/simple"\n'
+PUBLIC_ONLY = '[[tool.uv.index]]\nname = "em"\nurl = "https://y.test/simple"\nexplicit = true\n'
+
+
+def test_the_release_signs_in_only_when_the_project_declares_the_private_index(tmp_path):
+    done, output = _run_detection(tmp_path / "a", PRIVATE + PUBLIC_ONLY)
+    assert done.returncode == 0, done.stderr
+    assert output.strip() == "declared=true"
+
+
+def test_a_project_that_uses_only_the_public_index_skips_the_sign_in(tmp_path):
+    done, output = _run_detection(tmp_path / "b", PUBLIC_ONLY)
+    assert done.returncode == 0, done.stderr
+    assert output.strip() == "declared=false"
+    assert "skipping the CodeArtifact sign-in" in done.stdout
+
+
+def test_a_project_with_no_index_at_all_skips_the_sign_in(tmp_path):
+    done, output = _run_detection(tmp_path / "c", '[project]\nname = "x"\n')
+    assert done.returncode == 0 and output.strip() == "declared=false"
+
+
+def test_the_index_name_is_the_one_the_stub_passes(tmp_path):
+    done, output = _run_detection(tmp_path / "d", PRIVATE, index_name="other-name")
+    assert output.strip() == "declared=false"
+    done, output = _run_detection(
+        tmp_path / "e", PRIVATE.replace("em-codeartifact", "other-name"), "other-name"
+    )
+    assert output.strip() == "declared=true"
+
+
+def test_a_long_index_list_is_not_cut_short_by_the_early_exit_of_grep(tmp_path):
+    many = "".join(
+        f'[[tool.uv.index]]\nname = "idx{i}"\nurl = "https://h{i}.test/simple"\n'
+        for i in range(400)
+    )
+    done, output = _run_detection(tmp_path / "f", PRIVATE + many)
+    assert done.returncode == 0 and output.strip() == "declared=true"
 
 
 def test_codeartifact_read_sign_in_runs_after_setup_uv_and_before_release_detection():

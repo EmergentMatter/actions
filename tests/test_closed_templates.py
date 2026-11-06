@@ -74,3 +74,38 @@ def test_sign_in_defaults_match_the_release_workflow():
             rf"(?m)^  {key}:\n(?:    .*\n)*?    default: {re.escape(default)}\n", ACTION
         )
     assert "codeartifact-domain-owner" in version and "967228661072" in version
+
+
+def test_the_action_finds_the_index_even_when_the_list_is_long(tmp_path):
+    """`grep -q` exits at the first match; with pipefail that must not turn into "not found"."""
+    import os
+    import subprocess
+    import sys
+
+    start = ACTION.index("- name: Does this project use the private index?")
+    block = ACTION[ACTION.index("run: |\n", start) + len("run: |\n") :]
+    script = "\n".join(
+        line[8:] for line in block.split("\n    - name:")[0].splitlines() if line.strip()
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    pyproject = '[[tool.uv.index]]\nname = "em-codeartifact"\nurl = "https://x.test/simple"\n'
+    pyproject += "".join(
+        f'[[tool.uv.index]]\nname = "i{n}"\nurl = "https://h{n}.test/simple"\n' for n in range(400)
+    )
+    (tmp_path / "pyproject.toml").write_text(pyproject)
+    out = tmp_path / "out"
+    out.write_text("")
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "INDEX_NAME": "em-codeartifact",
+        "SCRIPT": str(ROOT / "scripts" / "declared_indexes.py"),
+        "GITHUB_OUTPUT": str(out),
+    }
+    done = subprocess.run(
+        ["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+    assert out.read_text().strip() == "needed=true"
