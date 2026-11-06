@@ -6,6 +6,13 @@ Later releases are recorded here.
 
 <!-- towncrier release notes start -->
 
+## 1.20.1 (2026-11-06)
+
+### Patch
+
+- The `codeartifact-read` action no longer fails every job that uses it: an input description held a `${{ vars.* }}` expression, which GitHub evaluates and rejects at set-up. A test now refuses an expression in any composite action description.
+
+
 ## 1.20.0 (2026-11-06)
 
 ### Minor
