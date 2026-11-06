@@ -1,1 +1,0 @@
-New `check-lock-sources` action and `scripts/check_lock_sources.py`: fail when an organization package was locked from the public index (even if declared), from an index the project does not declare, or, for a closed package, from anything but the private index. Names outside the prefix can be listed. It also judges `uv pip compile` output.

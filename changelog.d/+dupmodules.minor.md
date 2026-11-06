@@ -1,1 +1,0 @@
-New `check-duplicate-modules` action and `scripts/check_duplicate_modules.py`: a companion package fails when a module duplicates the public package it extends, by relative path or by a class or function name, with an allowlist for a quarterly move. The closed-tier CI template runs it in `test`.
