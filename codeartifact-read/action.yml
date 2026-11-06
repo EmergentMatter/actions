@@ -36,7 +36,8 @@ runs:
         SCRIPT: ${{ github.action_path }}/../scripts/declared_indexes.py
       run: |
         set -euo pipefail
-        if python3 "${SCRIPT}" pyproject.toml | cut -d= -f1 | grep -qx "${INDEX_NAME}"; then
+        names="$(python3 "${SCRIPT}" pyproject.toml | cut -d= -f1)"
+        if grep -qx -- "${INDEX_NAME}" <<< "${names}"; then
           echo "needed=true" >> "$GITHUB_OUTPUT"
         else
           echo "needed=false" >> "$GITHUB_OUTPUT"

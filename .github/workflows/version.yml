@@ -765,9 +765,30 @@ jobs:
       # public one. The caller's job must grant `id-token: write` for
       # the assume-role call to succeed -- this job declares no
       # `permissions:` of its own, so that grant comes through unchanged.
+      #
+      # It also needs the project to declare that index: a repository whose
+      # packages all come from the public index has nothing to sign in to,
+      # and the read role does not trust it (it is not meant to), so assuming
+      # it would fail the release for no reason. Same rule as the
+      # codeartifact-read action.
       # ---------------------------------------------------------------
-      - name: Assume the read-only CodeArtifact role
+      - name: Does this project use the private index?
+        id: private_index
         if: inputs.codeartifact-read-role-arn != ''
+        env:
+          INDEX_NAME: ${{ inputs.codeartifact-read-index-name }}
+        run: |
+          set -euo pipefail
+          names="$(python3 "${RUNNER_TEMP}/em-actions/scripts/declared_indexes.py" pyproject.toml | cut -d= -f1)"
+          if grep -qx -- "${INDEX_NAME}" <<< "${names}"; then
+            echo "declared=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "declared=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::pyproject.toml declares no index named ${INDEX_NAME}; skipping the CodeArtifact sign-in."
+          fi
+
+      - name: Assume the read-only CodeArtifact role
+        if: inputs.codeartifact-read-role-arn != '' && steps.private_index.outputs.declared == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ inputs.codeartifact-read-role-arn }}
@@ -775,7 +796,7 @@ jobs:
           mask-aws-account-id: true
 
       - name: Authenticate uv to CodeArtifact
-        if: inputs.codeartifact-read-role-arn != ''
+        if: inputs.codeartifact-read-role-arn != '' && steps.private_index.outputs.declared == 'true'
         env:
           DOMAIN: ${{ inputs.codeartifact-domain }}
           DOMAIN_OWNER: ${{ inputs.codeartifact-domain-owner }}
