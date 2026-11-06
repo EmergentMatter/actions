@@ -550,6 +550,7 @@ def render_dependabot(
 
     private = [e for e in named if "codeartifact" in e["url"]]
     values: dict[str, str] = {}
+    private_lines: list[str] = []
     if private:
         missing = []
         for var in DEPENDABOT_VARIABLES:
@@ -564,23 +565,28 @@ def render_dependabot(
                 f"variable(s) not readable: {', '.join(missing)}. Set them, sign in with `gh`, "
                 "and run again."
             )
-        arn = _ROLE_ARN_RE.match(values["EM_CODEARTIFACT_READ_ROLE_ARN"])
+        role_arn = values["EM_CODEARTIFACT_READ_ROLE_ARN"]
+        arn = _ROLE_ARN_RE.match(role_arn)
         if arn is None:
-            raise OnboardError("EM_CODEARTIFACT_READ_ROLE_ARN is not an IAM role ARN")
+            raise OnboardError(
+                f"EM_CODEARTIFACT_READ_ROLE_ARN is {role_arn!r}, not an IAM role ARN "
+                "(expected arn:aws:iam::<12-digit account>:role/<name>)"
+            )
+        private_lines = [
+            f"    aws-region: {values['EM_CODEARTIFACT_REGION']}",
+            f"    account-id: '{arn.group(1)}'",
+            f"    role-name: {arn.group(2)}",
+            f"    domain: {values['EM_CODEARTIFACT_DOMAIN']}",
+            f"    domain-owner: '{values['EM_CODEARTIFACT_DOMAIN_OWNER']}'",
+            "    audience: sts.amazonaws.com",
+        ]
 
     ordered = sorted(named, key=lambda e: "codeartifact" not in e["url"])
     blocks = []
     for entry in ordered:
         lines = [f"  {entry['name']}:", "    type: python-index", f"    url: {entry['url']}"]
         if entry in private:
-            lines += [
-                f"    aws-region: {values['EM_CODEARTIFACT_REGION']}",
-                f"    account-id: '{arn.group(1)}'",
-                f"    role-name: {arn.group(2)}",
-                f"    domain: {values['EM_CODEARTIFACT_DOMAIN']}",
-                f"    domain-owner: '{values['EM_CODEARTIFACT_DOMAIN_OWNER']}'",
-                "    audience: sts.amazonaws.com",
-            ]
+            lines += private_lines
         blocks.append("\n".join(lines))
     registries = ("\nregistries:\n" + "\n".join(blocks) + "\n") if blocks else ""
     refs = (
