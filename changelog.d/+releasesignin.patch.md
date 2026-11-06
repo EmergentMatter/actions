@@ -1,1 +1,0 @@
-The release workflow signs in to the private package index only when the project declares it, as the codeartifact-read action already does. A repository that uses only the public index is not trusted by the read role, so its release failed at "Assume the read-only CodeArtifact role". The index check also no longer depends on grep exiting after the pipe has closed.
