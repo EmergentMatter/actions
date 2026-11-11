@@ -530,6 +530,37 @@ the Actions UI or `gh run rerun --failed`), which keeps the run's original `main
 satisfies the branch policy. `build-release.yml`'s non-automatic triggers remain useful for a
 tag-only rebuild with `publish: false`, which never touches the environment gate.
 
+### Outputs, and a job that runs after a release
+
+`version.yml` declares two `workflow_call` outputs, mapped from its `version` job:
+
+| Output | Value |
+|---|---|
+| `is-release-commit` | `"true"` when this run tagged a release, otherwise `"false"` |
+| `tag` | the tag pushed (`v1.2.3`); empty on a run that made no release |
+
+A caller runs something only after a release with a job in its own stub:
+
+```yaml
+  release-manifest:
+    needs: version
+    if: needs.version.outputs.is-release-commit == 'true'
+    runs-on: ubuntu-latest
+    permissions: { contents: read }
+    steps:
+      - run: echo "released ${{ needs.version.outputs.tag }}"
+```
+
+Notes:
+
+- The workflow declares no `permissions:` and the outputs add none; the downstream job asks for
+  its own.
+- The release PR must be merged by a person. A PR merged with `GITHUB_TOKEN` creates no push
+  event, so no run exists to carry these outputs (see the known limitation below).
+- If the downstream job fails, recover it with `gh run rerun --failed <run-id>` on the same run.
+  The release is already tagged, so the `version` job is not repeated and the outputs stay the
+  same; a new run would see a non-release commit.
+
 ## Why the release is not tag-triggered
 
 **An event created with `GITHUB_TOKEN` does not trigger further workflow runs.** GitHub suppresses
