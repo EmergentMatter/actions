@@ -6,6 +6,13 @@ Later releases are recorded here.
 
 <!-- towncrier release notes start -->
 
+## 1.21.0 (2026-11-11)
+
+### Minor
+
+- `version.yml` now declares `is-release-commit` and `tag` as `workflow_call` outputs, so a job in the calling repository can run only after a release and know which tag it made. `tag` is empty on a run that made no release.
+
+
 ## 1.20.2 (2026-11-06)
 
 ### Patch
