@@ -81,7 +81,7 @@ wheels = [
 
 [[package]]
 name = "emergent-matter-actions"
-version = "1.20.2"
+version = "1.21.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
