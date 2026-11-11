@@ -442,3 +442,29 @@ def test_version_job_declares_no_permissions_block():
     text = _text(VERSION_WORKFLOW)
     version_job = text[text.index("\n  version:") : text.index("\n  publish:")]
     assert not re.search(r"^    permissions:", version_job, re.MULTILINE)
+
+
+def test_workflow_call_outputs_map_to_job_outputs():
+    """Callers gate a downstream job on these; the names and mapping are a contract.
+
+    Text-level like the rest of this file (the repo's scripts and tests are
+    stdlib-only, so there is no YAML parser to use).
+    """
+    text = _text(VERSION_WORKFLOW)
+    head = text.split("\njobs:\n", 1)[0]
+    block = re.search(r"^    outputs:\n((?:      .*\n|\n)+)", head, re.MULTILINE)
+    assert block, "on.workflow_call.outputs is missing"
+    declared = dict(
+        re.findall(
+            r"^      ([a-z-]+):\n(?:        .*\n)*?        value: (.+)$",
+            block.group(1),
+            re.MULTILINE,
+        )
+    )
+    assert declared == {
+        "is-release-commit": "${{ jobs.version.outputs.is-release-commit }}",
+        "tag": "${{ jobs.version.outputs.tag }}",
+    }
+    for name in declared:
+        assert re.search(rf"^      {name}: \$\{{\{{ steps\.", text, re.MULTILINE)
+    assert not re.search(r"^permissions:", text, re.MULTILINE)

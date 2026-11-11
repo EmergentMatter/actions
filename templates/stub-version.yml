@@ -94,3 +94,15 @@ jobs:
     # everything else uses the auto-injected `github.token`. Inheriting would
     # hand a public repo behind a movable `v1` tag your whole org secret
     # store. Map the one secret you need; never inherit.
+
+  # ── Downstream of a release: DELETE unless something must happen only when
+  # this run made a release (for example writing a release manifest). The
+  # shared workflow outputs `is-release-commit` and `tag`; `tag` is empty on
+  # every other run. Request only the permissions this job needs.
+  # release-manifest:
+  #   needs: version
+  #   if: needs.version.outputs.is-release-commit == 'true'
+  #   runs-on: ubuntu-latest
+  #   permissions: { contents: read }
+  #   steps:
+  #     - run: echo "released ${{ needs.version.outputs.tag }}"

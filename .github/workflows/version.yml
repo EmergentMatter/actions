@@ -396,6 +396,17 @@ on:
           repo, mapped by name, never via `secrets: inherit`. Optional; a
           public sibling3 falls back to `github.token`.
         required: false
+    outputs:
+      is-release-commit:
+        description: >-
+          "true" when this run tagged a release (HEAD was the merged release
+          commit), otherwise "false". A caller's downstream job gates on it.
+        value: ${{ jobs.version.outputs.is-release-commit }}
+      tag:
+        description: >-
+          The tag this run pushed, for example v1.2.3. Empty on a run that
+          did not make a release.
+        value: ${{ jobs.version.outputs.tag }}
 
 # NO top-level `permissions:` key here, ever, empty or not -- see the
 # `publish:` job's own comment below and ADR 0003 for why.

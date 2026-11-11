@@ -178,7 +178,7 @@ def test_version_workflow_has_no_top_level_permissions_key():
 
 def test_version_job_exposes_tag_and_actions_ref_for_the_publish_job():
     text = _text(VERSION_WORKFLOW)
-    outputs_idx = text.index("outputs:")
+    outputs_idx = text.index("outputs:", text.index("\njobs:\n"))
     following = text[outputs_idx : outputs_idx + 400]
     assert "tag: ${{ steps.tag.outputs.tag }}" in following
     assert "actions-ref: ${{ steps.shared.outputs.ref }}" in following
