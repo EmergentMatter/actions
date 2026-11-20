@@ -35,6 +35,11 @@ dest   = "scripts/em-dev.cmd"
 policy = "managed"
 
 [[template]]
+source = "scripts/lint-limits.py"
+dest   = "scripts/lint-limits.py"
+policy = "managed"
+
+[[template]]
 source = "stub-changelog-check.yml"
 dest   = ".github/workflows/changelog-check.yml"
 policy = "managed"
