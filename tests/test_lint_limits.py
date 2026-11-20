@@ -38,7 +38,10 @@ def run(root: Path, *args: str) -> int:
 
 
 def test_blank_lines_comments_and_docstrings_are_not_code():
-    source = '"""Module doc.\n\nOver two lines.\n"""\n\n# a comment\nx = 1\n\n\ndef f():\n    """Doc."""\n    return 2\n'
+    source = (
+        '"""Module doc.\n\nOver two lines.\n"""\n\n# a comment\nx = 1\n\n\n'
+        'def f():\n    """Doc."""\n    return 2\n'
+    )
     assert limits.code_lines(source) == 3
 
 
