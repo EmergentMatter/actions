@@ -142,7 +142,8 @@ template exists for repos starting from nothing.
 | `CONTRIBUTING.md` | The contributor-facing instructions: how to add a note, what the levels mean, the release-PR checks caveat. Points at STYLE.md before anything else. |
 | `.github/workflows/ci.yml` | Your repo's own checks, now including staged `format` and `typecheck` jobs alongside `lint`. **Only copy this if you don't already have CI.** See "Before you start". Unlike the workflow stubs above, this is a full file, not a stub, and it stops tracking `templates/ci.yml` the moment it lands. |
 | `STYLE.md` | The org's style guide -- Python conventions, naming, docstrings, typing, testing, TypeScript, documentation, open-source hygiene. Read it before writing code in an onboarded repo. |
-| `ruff-base.toml` | The shared lint + format ruleset. Kept current by `sync.py`; don't edit it locally. |
+| `ruff-base.toml` | The shared lint + format ruleset, including the complexity and function-size limits (`C90`, `PLR0912`, `PLR0915`). Kept current by `sync.py`; don't edit it locally. |
+| `scripts/lint-limits.py` | Holds every Python file to 400 code lines. Files already over the limit are listed in `lint-baseline.json` at the repo root; they may not grow, and the list may not grow. Run `python3 scripts/lint-limits.py --update --allow-growth` once to create the baseline. The `lint` job in the CI templates runs it. |
 | `ruff.toml` | `extend = "ruff-base.toml"` plus room for this repo's own additions. Yours from the moment it's written. |
 
 The workflow stubs (`changelog-check.yml`, `version.yml`, `build-release.yml`)

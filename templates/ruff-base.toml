@@ -7,7 +7,12 @@ line-length = 100
 target-version = "py313"
 
 [lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PTH"]
+# C90 and PLR0912/PLR0915 hold functions to the size limits: complexity 10, at most
+# 12 branches and 50 statements. File length is checked by scripts/lint-limits.py.
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET", "PTH", "C90", "PLR0912", "PLR0915"]
+
+[lint.mccabe]
+max-complexity = 10
 
 [format]
 # Opt a catalog/data module out per-file with `# fmt: off` / `# fmt: on`.
