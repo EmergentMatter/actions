@@ -61,7 +61,7 @@ import shutil
 import socket
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +137,9 @@ class TomlError(EmDevError):
 _BARE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 _NUMBER_STOP_CHARS = frozenset(",]}\r\n#") | frozenset(" \t")
 _ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+
+# `\uXXXX` and `\UXXXXXXXX`: the escape letter and how many hex digits follow it.
+_UNICODE_ESCAPE_DIGITS = {"u": 4, "U": 8}
 
 
 class _TomlParser:
@@ -302,32 +305,33 @@ class _TomlParser:
                 return "".join(out)
             if self.i >= self.n:
                 raise TomlError("unterminated string")
-            ch = self.s[self.i]
-            if not literal and ch == "\\":
-                self.i += 1
-                if self.i >= self.n:
-                    raise TomlError("unterminated escape sequence")
-                esc = self.s[self.i]
-                if triple and esc in "\r\n":
-                    self.i += 1
-                    while self.i < self.n and self.s[self.i] in " \t\r\n":
-                        self.i += 1
-                    continue
-                if esc in _ESCAPES:
-                    out.append(_ESCAPES[esc])
-                    self.i += 1
-                elif esc == "u":
-                    out.append(chr(int(self.s[self.i + 1 : self.i + 5], 16)))
-                    self.i += 5
-                elif esc == "U":
-                    out.append(chr(int(self.s[self.i + 1 : self.i + 9], 16)))
-                    self.i += 9
-                else:
-                    out.append(esc)
-                    self.i += 1
+            if not literal and self.s[self.i] == "\\":
+                self._parse_escape(triple, out)
             else:
-                out.append(ch)
+                out.append(self.s[self.i])
                 self.i += 1
+
+    def _parse_escape(self, triple: bool, out: list[str]) -> None:
+        """Consume one backslash escape (the backslash is at `self.i`) into `out`."""
+        self.i += 1
+        if self.i >= self.n:
+            raise TomlError("unterminated escape sequence")
+        esc = self.s[self.i]
+        if triple and esc in "\r\n":
+            # A line-ending backslash in a multi-line string swallows the whitespace after it.
+            self.i += 1
+            while self.i < self.n and self.s[self.i] in " \t\r\n":
+                self.i += 1
+        elif esc in _ESCAPES:
+            out.append(_ESCAPES[esc])
+            self.i += 1
+        elif esc in _UNICODE_ESCAPE_DIGITS:
+            width = _UNICODE_ESCAPE_DIGITS[esc]
+            out.append(chr(int(self.s[self.i + 1 : self.i + 1 + width], 16)))
+            self.i += 1 + width
+        else:
+            out.append(esc)
+            self.i += 1
 
     def _parse_array(self) -> list:
         self._expect("[")
@@ -1083,32 +1087,16 @@ def pip_check(repo: Path, venv_dir: Path) -> str:
 # ============================================================================
 
 
-def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False) -> int:
-    """`em-dev`: build or refresh `.venv-local`. Returns an exit code."""
-
+def _printer(quiet: bool) -> Callable[[str], None]:
     def out(msg: str = "") -> None:
         if not quiet:
             print(msg)
 
-    lock_path = repo / "uv.lock"
-    if not lock_path.is_file():
-        raise EmDevError(f"no uv.lock in {repo} -- run `uv lock` first")
-    pyproject = toml_load(repo / "pyproject.toml")
-    own_name = own_project_name(pyproject)
-    lock = toml_load(lock_path)
+    return out
 
-    ours = discover_ours(lock, own_name)
-    if not ours:
-        out("nothing here to make local (no emergent-matter-* dependency)")
-        return 0
 
-    config = load_config(repo)
-    root = resolve_root(repo, config)
-    resolutions = resolve_siblings(ours, root)
-    resolutions = filter_only(resolutions, only)
-
-    ensure_local_gitignore(repo)
-
+def _report_resolutions(out: Callable[[str], None], root: Path, resolutions: list) -> None:
+    """Print where each sibling was found, or why the published version is used instead."""
     out(f"sibling root: {root}")
     for r in resolutions:
         if r.status == "local":
@@ -1122,10 +1110,66 @@ def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False
                 f"(declares {r.found_name!r}, not {r.name!r} -- using published version)"
             )
 
+
+def _install_args(
+    constraints_path: Path, groups: list, package: bool, siblings: list[str]
+) -> list[str]:
+    """`uv pip install` arguments: the constraints, each sibling editable, then this project."""
+    args = ["-c", str(constraints_path)]
+    for path in siblings:
+        args += ["-e", path]
+    if package:
+        args += ["-e", "."]
+    if "dev" in groups:
+        args += ["--group", "dev"]
+    return args
+
+
+def _warn_unlocked(out: Callable[[str], None], venv_dir: Path, lock: dict, own_name: str) -> None:
+    unlocked = unlocked_installs(venv_dir, lock, own_name)
+    if unlocked:
+        out(
+            "\nwarning: installed with no uv.lock pin at all (a sibling's new "
+            f"dependency?): {', '.join(unlocked)}"
+        )
+
+
+def _install_siblings_without_deps(
+    repo: Path, venv_dir: Path, out: Callable[[str], None], args: list[str], siblings: list[str]
+) -> None:
+    """The fallback pass: this project first, then each sibling with `--no-deps`."""
+    pip_install(repo, venv_dir, args)
+    for path in siblings:
+        pip_install(repo, venv_dir, ["--no-deps", "-e", path])
+    check_output = pip_check(repo, venv_dir)
+    if check_output:
+        out("\nuv pip check:")
+        out(check_output)
+
+
+def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False) -> int:
+    """`em-dev`: build or refresh `.venv-local`. Returns an exit code."""
+    out = _printer(quiet)
+    lock_path = repo / "uv.lock"
+    if not lock_path.is_file():
+        raise EmDevError(f"no uv.lock in {repo} -- run `uv lock` first")
+    pyproject = toml_load(repo / "pyproject.toml")
+    own_name = own_project_name(pyproject)
+    lock = toml_load(lock_path)
+
+    ours = discover_ours(lock, own_name)
+    if not ours:
+        out("nothing here to make local (no emergent-matter-* dependency)")
+        return 0
+
+    root = resolve_root(repo, load_config(repo))
+    resolutions = filter_only(resolve_siblings(ours, root), only)
+    ensure_local_gitignore(repo)
+    _report_resolutions(out, root, resolutions)
+
     locals_used = [r for r in resolutions if r.status == "local"]
     venv_dir = repo / VENV_LOCAL
     current_hash = lock_hash(lock_path)
-
     if not needs_rebuild(venv_dir, current_hash, locals_used) and only is None:
         out(f"\n{VENV_LOCAL} is already up to date")
         return 0
@@ -1137,34 +1181,15 @@ def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False
     groups = dependency_group_names(pyproject)
     package = is_real_package(pyproject)
     editable_paths = [str(r.folder) for r in locals_used]
-    editable_names = [r.name for r in locals_used]
-
     constraints_path = venv_dir / "constraints.txt"
-    export_constraints(repo, constraints_path, skip_names=editable_names)
+    export_constraints(repo, constraints_path, skip_names=[r.name for r in locals_used])
     check_org_sources(repo, venv_dir, constraints_path, editable_paths, package, groups)
 
-    def install_args(*, siblings: list[str]) -> list[str]:
-        a = ["-c", str(constraints_path)]
-        for path in siblings:
-            a += ["-e", path]
-        if package:
-            a += ["-e", "."]
-        if "dev" in groups:
-            a += ["--group", "dev"]
-        return a
-
-    def warn_unlocked() -> None:
-        unlocked = unlocked_installs(venv_dir, lock, own_name)
-        if unlocked:
-            out(
-                "\nwarning: installed with no uv.lock pin at all (a sibling's new "
-                f"dependency?): {', '.join(unlocked)}"
-            )
-
     out("\ninstalling into " + str(venv_dir) + " ...")
-    proc = pip_install(repo, venv_dir, install_args(siblings=editable_paths), check=False)
+    args = _install_args(constraints_path, groups, package, editable_paths)
+    proc = pip_install(repo, venv_dir, args, check=False)
     if proc.returncode == 0:
-        warn_unlocked()
+        _warn_unlocked(out, venv_dir, lock, own_name)
         write_state(venv_dir, build_state(current_hash, locals_used))
         out("done")
         return 0
@@ -1176,23 +1201,9 @@ def make_local(repo: Path, *, only: list[str] | None = None, quiet: bool = False
 
     out("\nfull install failed; retrying with siblings installed --no-deps ...")
     out(proc.stderr.strip())
-
-    base_args = ["-c", str(constraints_path)]
-    if package:
-        base_args += ["-e", "."]
-    if "dev" in groups:
-        base_args += ["--group", "dev"]
-    pip_install(repo, venv_dir, base_args)
-
-    for path in editable_paths:
-        pip_install(repo, venv_dir, ["--no-deps", "-e", path])
-
-    check_output = pip_check(repo, venv_dir)
-    if check_output:
-        out("\nuv pip check:")
-        out(check_output)
-    warn_unlocked()
-
+    base_args = _install_args(constraints_path, groups, package, [])
+    _install_siblings_without_deps(repo, venv_dir, out, base_args, editable_paths)
+    _warn_unlocked(out, venv_dir, lock, own_name)
     write_state(venv_dir, build_state(current_hash, locals_used))
     out("done (with the warning above)")
     return 0

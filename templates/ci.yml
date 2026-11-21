@@ -110,6 +110,25 @@ jobs:
 
       - run: uv run ruff check .
 
+      # File length has no ruff rule. The baseline in lint-baseline.json lists files
+      # already over the limit; they may not grow and the list may not grow.
+      - name: Fetch the base branch for the baseline check
+        if: github.event_name == 'pull_request'
+        run: git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+
+      - name: File length
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            python3 scripts/lint-limits.py --base "origin/$GITHUB_BASE_REF"
+          else
+            python3 scripts/lint-limits.py
+          fi
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+
   format:
     name: format
     runs-on: ubuntu-latest
