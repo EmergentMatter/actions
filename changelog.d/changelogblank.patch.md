@@ -1,1 +1,0 @@
-The release PR's CHANGELOG.md now passes the repo's Markdown formatter: towncrier leaves two blank lines between releases, which Prettier and mdformat reject, so the version step collapses them with the new `scripts/normalize_changelog.py` before committing. A repo that runs no formatter sees no change.
