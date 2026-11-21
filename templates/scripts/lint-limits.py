@@ -115,7 +115,9 @@ def compare(baseline: dict[str, int], actual: dict[str, int], limit: int) -> lis
     for file, allowed in sorted(baseline.items()):
         n = actual.get(file)
         if n is None:
-            problems.append(f"{file}: no longer over {limit}. Run `scripts/lint-limits.py --update`.")
+            problems.append(
+                f"{file}: no longer over {limit}. Run `scripts/lint-limits.py --update`."
+            )
         elif n < allowed:
             problems.append(
                 f"{file}: now {n}, baseline says {allowed}. Run `scripts/lint-limits.py --update`."
